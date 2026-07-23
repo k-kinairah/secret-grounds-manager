@@ -9,6 +9,7 @@ export type SessionStatus =
 export type PaymentStatus = "completed" | "voided";
 export type PaymentMethod = "cash" | "gcash" | "maya" | "other";
 export type BillingPaymentStatus = "unpaid" | "partially_paid" | "paid" | "overpaid";
+export type SessionMode = "prepaid" | "open_time";
 
 export interface PcSummary {
   pc_name: string;
@@ -26,6 +27,11 @@ export interface PcSummary {
   total_paid: string;
   balance_due: string;
   payment_status: BillingPaymentStatus;
+  session_mode: SessionMode;
+  actual_elapsed_seconds: number | null;
+  billed_seconds: number | null;
+  final_computed_amount: string | null;
+  settlement_pending: boolean;
 }
 
 export interface SessionRecord {
@@ -49,6 +55,11 @@ export interface SessionRecord {
   total_paid: string;
   balance_due: string;
   payment_status: BillingPaymentStatus;
+  session_mode: SessionMode;
+  actual_elapsed_seconds: number | null;
+  billed_seconds: number | null;
+  final_computed_amount: string | null;
+  settlement_pending: boolean;
 }
 
 export interface SessionCommandResponse {
@@ -114,6 +125,13 @@ export interface PaymentInput {
   cash_received?: string;
   reference_number?: string;
   notes?: string;
+}
+
+export interface PrepaidSessionSelection {
+  amount?: string;
+  durationSeconds?: number;
+  rateId?: string;
+  payment: PaymentInput;
 }
 
 export interface BillingSummary {

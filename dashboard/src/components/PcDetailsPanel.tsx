@@ -38,8 +38,14 @@ export function PcDetailsPanel({ pc, onClose }: PcDetailsPanelProps) {
             <strong>{formatDateTime(pc.scheduled_end_at)}</strong>
           </div>
           <div className={styles.detailRow}>
-            <span>Remaining</span>
-            <strong>{formatTimer(pc.remaining_seconds)}</strong>
+            <span>{pc.session_mode === "open_time" ? "Elapsed" : "Remaining"}</span>
+            <strong>
+              {formatTimer(
+                pc.session_mode === "open_time"
+                  ? pc.actual_elapsed_seconds
+                  : pc.remaining_seconds
+              )}
+            </strong>
           </div>
           {pc.active_session_id ? (
             <>
@@ -71,6 +77,22 @@ export function PcDetailsPanel({ pc, onClose }: PcDetailsPanelProps) {
                 <span>Payment status</span>
                 <strong>{pc.payment_status}</strong>
               </div>
+              <div className={styles.detailRow}>
+                <span>Session mode</span>
+                <strong>{pc.session_mode}</strong>
+              </div>
+              {pc.session_mode === "open_time" ? (
+                <>
+                  <div className={styles.detailRow}>
+                    <span>Billed time</span>
+                    <strong>{formatTimer(pc.billed_seconds)}</strong>
+                  </div>
+                  <div className={styles.detailRow}>
+                    <span>Final amount</span>
+                    <strong>{formatMoney(pc.final_computed_amount)}</strong>
+                  </div>
+                </>
+              ) : null}
             </>
           ) : null}
         </dl>

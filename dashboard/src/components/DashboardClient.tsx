@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "@/app/page.module.css";
 import {
-  addTime,
   endSession,
   fetchPcs,
   fetchRates,
   getPollingIntervalMs,
   recordPayment,
-  startSession
+  startOpenTimeSession,
+  startPrepaidSession,
+  addPrepaidTime
 } from "@/lib/api";
 import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
 import { secondsFromScheduledEnd } from "@/lib/time";
@@ -121,6 +122,38 @@ export function DashboardClient() {
     }
   }
 
+  async function endSessionAction(pc: PcSummary) {
+    setIsMutating(true);
+    try {
+      const response = await endSession(pc.active_session_id as string);
+      if (pc.session_mode === "open_time") {
+        const settlementPc: PcSummary = {
+          ...pc,
+          active_session_id: response.session.session_id,
+          session_status: "active",
+          total_amount: response.session.total_amount,
+          total_paid: response.session.total_paid,
+          balance_due: response.session.balance_due,
+          payment_status: response.session.payment_status,
+          billed_seconds: response.session.billed_seconds,
+          final_computed_amount: response.session.final_computed_amount,
+          actual_elapsed_seconds: response.session.actual_elapsed_seconds,
+          settlement_pending: response.session.settlement_pending
+        };
+        setMessage(`${pc.pc_name} open-time session ended. Settlement is pending.`);
+        setDialog({ type: "payment", pc: settlementPc });
+      } else {
+        setMessage(`${pc.pc_name} session ended.`);
+        setDialog(null);
+      }
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Action failed. Please try again.");
+    } finally {
+      setIsMutating(false);
+    }
+  }
+
   function findCurrentPc(pc: PcSummary): PcSummary {
     return livePcs.find((item) => item.pc_name === pc.pc_name) ?? pc;
   }
@@ -181,7 +214,10 @@ export function DashboardClient() {
           onCancel={() => setDialog(null)}
           onConfirm={(selection) =>
             void runAction(
-              () => startSession(dialog.pc.pc_name, selection),
+              () =>
+                "sessionMode" in selection
+                  ? startOpenTimeSession(dialog.pc.pc_name)
+                  : startPrepaidSession(dialog.pc.pc_name, selection),
               `${dialog.pc.pc_name} session started.`
             )
           }
@@ -204,7 +240,10 @@ export function DashboardClient() {
               return;
             }
             void runAction(
-              () => addTime(currentPc.active_session_id as string, selection),
+              () =>
+                "sessionMode" in selection
+                  ? Promise.reject(new Error("Open-time sessions do not support add time."))
+                  : addPrepaidTime(currentPc.active_session_id as string, selection),
               `${currentPc.pc_name} time updated.`
             );
           }}
@@ -226,10 +265,7 @@ export function DashboardClient() {
               setDialog(null);
               return;
             }
-            void runAction(
-              () => endSession(currentPc.active_session_id as string),
-              `${currentPc.pc_name} session ended.`
-            );
+            void endSessionAction(currentPc);
           }}
           pc={findCurrentPc(dialog.pc)}
         />

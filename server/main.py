@@ -23,6 +23,9 @@ from server.schemas import (
     PCRegistrationResponse,
     PCSessionStateResponse,
     PaymentCreateRequest,
+    PrepaidAddTimeRequest,
+    PrepaidStartSessionRequest,
+    OpenTimeStartRequest,
     RateProfile,
     RateProfileCreate,
     RateProfileUpdate,
@@ -56,6 +59,7 @@ session_service = SessionService(
     connection_manager=connection_manager,
     pc_registry=pc_registry,
     command_timeout_seconds=5,
+    billing_service=billing_service,
 )
 OFFLINE_AFTER_SECONDS = 15
 MONITOR_INTERVAL_SECONDS = 5
@@ -279,6 +283,31 @@ def get_registered_pcs() -> list[PCDashboardRecord]:
                 payment_status=(
                     billing.payment_status if billing is not None else "unpaid"
                 ),
+                session_mode=(
+                    active_session.session_mode if active_session is not None else "prepaid"
+                ),
+                actual_elapsed_seconds=(
+                    max(0, int((now - active_session.started_at).total_seconds()))
+                    if active_session is not None and active_session.session_mode == "open_time"
+                    else (
+                        active_session.actual_elapsed_seconds
+                        if active_session is not None
+                        else None
+                    )
+                ),
+                billed_seconds=(
+                    active_session.billed_seconds if active_session is not None else None
+                ),
+                final_computed_amount=(
+                    active_session.final_computed_amount
+                    if active_session is not None
+                    else None
+                ),
+                settlement_pending=(
+                    active_session.settlement_pending
+                    if active_session is not None
+                    else False
+                ),
             )
         )
 
@@ -299,6 +328,7 @@ def get_pc_session_state(pc_name: str) -> PCSessionStateResponse:
                 status=active_session.status,
                 scheduled_end_at=active_session.scheduled_end_at,
                 total_seconds=active_session.total_seconds,
+                session_mode=active_session.session_mode,
             )
             if active_session is not None
             else None
@@ -365,6 +395,28 @@ async def start_session(request: StartSessionRequest) -> SessionCommandResponse:
     )
 
 
+@app.post("/sessions/start-prepaid", response_model=SessionCommandResponse)
+async def start_prepaid_session(
+    request: PrepaidStartSessionRequest,
+) -> SessionCommandResponse:
+    mark_stale_pcs_offline()
+    return await session_service.start_prepaid_session(
+        request.pc_name,
+        request.payment,
+        request.duration_seconds,
+        request.rate_id,
+        request.amount,
+    )
+
+
+@app.post("/sessions/start-open-time", response_model=SessionCommandResponse)
+async def start_open_time_session(
+    request: OpenTimeStartRequest,
+) -> SessionCommandResponse:
+    mark_stale_pcs_offline()
+    return await session_service.start_open_time_session(request.pc_name)
+
+
 @app.post("/sessions/{session_id}/add-time", response_model=SessionCommandResponse)
 async def add_time_to_session(
     session_id: str,
@@ -373,6 +425,21 @@ async def add_time_to_session(
     mark_stale_pcs_offline()
     return await session_service.add_time(
         session_id,
+        request.seconds,
+        request.rate_id,
+        request.amount,
+    )
+
+
+@app.post("/sessions/{session_id}/add-time-prepaid", response_model=SessionCommandResponse)
+async def add_prepaid_time_to_session(
+    session_id: str,
+    request: PrepaidAddTimeRequest,
+) -> SessionCommandResponse:
+    mark_stale_pcs_offline()
+    return await session_service.add_prepaid_time(
+        session_id,
+        request.payment,
         request.seconds,
         request.rate_id,
         request.amount,

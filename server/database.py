@@ -52,7 +52,7 @@ def ensure_session_events_accept_payment_events(connection: sqlite3.Connection) 
     row = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'session_events'"
     ).fetchone()
-    if row is None or "payment_recorded" in (row["sql"] or ""):
+    if row is None or "payment_action_review_required" in (row["sql"] or ""):
         return
 
     connection.execute("ALTER TABLE session_events RENAME TO session_events_old")
@@ -70,7 +70,13 @@ def ensure_session_events_accept_payment_events(connection: sqlite3.Connection) 
                     'session_cancelled',
                     'command_failed',
                     'payment_recorded',
-                    'payment_voided'
+                    'payment_voided',
+                    'prepaid_start_paid',
+                    'prepaid_add_time_paid',
+                    'open_time_started',
+                    'open_time_ended',
+                    'open_time_settled',
+                    'payment_action_review_required'
                 )
             ),
             seconds INTEGER,
@@ -243,7 +249,12 @@ def initialize_database() -> None:
                 rate_name_snapshot TEXT,
                 base_amount TEXT NOT NULL DEFAULT '0.00',
                 additional_amount TEXT NOT NULL DEFAULT '0.00',
-                total_amount TEXT NOT NULL DEFAULT '0.00'
+                total_amount TEXT NOT NULL DEFAULT '0.00',
+                session_mode TEXT NOT NULL DEFAULT 'prepaid',
+                actual_elapsed_seconds INTEGER,
+                billed_seconds INTEGER,
+                final_computed_amount TEXT,
+                settlement_pending INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -267,6 +278,21 @@ def initialize_database() -> None:
             "total_amount",
             "TEXT NOT NULL DEFAULT '0.00'",
         )
+        add_column_if_missing(
+            connection,
+            "sessions",
+            "session_mode",
+            "TEXT NOT NULL DEFAULT 'prepaid'",
+        )
+        add_column_if_missing(connection, "sessions", "actual_elapsed_seconds", "INTEGER")
+        add_column_if_missing(connection, "sessions", "billed_seconds", "INTEGER")
+        add_column_if_missing(connection, "sessions", "final_computed_amount", "TEXT")
+        add_column_if_missing(
+            connection,
+            "sessions",
+            "settlement_pending",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS session_events (
@@ -281,7 +307,13 @@ def initialize_database() -> None:
                     'session_cancelled',
                     'command_failed',
                     'payment_recorded',
-                    'payment_voided'
+                    'payment_voided',
+                    'prepaid_start_paid',
+                    'prepaid_add_time_paid',
+                    'open_time_started',
+                    'open_time_ended',
+                    'open_time_settled',
+                    'payment_action_review_required'
                     )
                 ),
                 seconds INTEGER,
@@ -315,11 +347,27 @@ def initialize_database() -> None:
                 change_given TEXT,
                 reference_number TEXT,
                 notes TEXT,
+                action_type TEXT NOT NULL DEFAULT 'manual',
+                related_command_id TEXT,
+                review_required INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL CHECK (status IN ('completed', 'voided')),
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
             """
+        )
+        add_column_if_missing(
+            connection,
+            "payments",
+            "action_type",
+            "TEXT NOT NULL DEFAULT 'manual'",
+        )
+        add_column_if_missing(connection, "payments", "related_command_id", "TEXT")
+        add_column_if_missing(
+            connection,
+            "payments",
+            "review_required",
+            "INTEGER NOT NULL DEFAULT 0",
         )
         connection.execute(
             """

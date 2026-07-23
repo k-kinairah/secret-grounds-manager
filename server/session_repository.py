@@ -43,6 +43,15 @@ def row_to_session(row: Any) -> SessionRecord:
         base_amount=Decimal(row["base_amount"]),
         additional_amount=Decimal(row["additional_amount"]),
         total_amount=Decimal(row["total_amount"]),
+        session_mode=row["session_mode"],
+        actual_elapsed_seconds=row["actual_elapsed_seconds"],
+        billed_seconds=row["billed_seconds"],
+        final_computed_amount=(
+            Decimal(row["final_computed_amount"])
+            if row["final_computed_amount"] is not None
+            else None
+        ),
+        settlement_pending=bool(row["settlement_pending"]),
     )
 
 
@@ -86,9 +95,14 @@ class SessionRepository:
                     rate_name_snapshot,
                     base_amount,
                     additional_amount,
-                    total_amount
+                    total_amount,
+                    session_mode,
+                    actual_elapsed_seconds,
+                    billed_seconds,
+                    final_computed_amount,
+                    settlement_pending
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.session_id,
@@ -108,6 +122,11 @@ class SessionRepository:
                     decimal_to_storage(session.base_amount),
                     decimal_to_storage(session.additional_amount),
                     decimal_to_storage(session.total_amount),
+                    session.session_mode,
+                    session.actual_elapsed_seconds,
+                    session.billed_seconds,
+                    decimal_to_storage(session.final_computed_amount),
+                    1 if session.settlement_pending else 0,
                 ),
             )
 
@@ -219,7 +238,12 @@ class SessionRepository:
                     rate_name_snapshot = ?,
                     base_amount = ?,
                     additional_amount = ?,
-                    total_amount = ?
+                    total_amount = ?,
+                    session_mode = ?,
+                    actual_elapsed_seconds = ?,
+                    billed_seconds = ?,
+                    final_computed_amount = ?,
+                    settlement_pending = ?
                 WHERE session_id = ?
                 """,
                 (
@@ -239,6 +263,11 @@ class SessionRepository:
                     decimal_to_storage(session.base_amount),
                     decimal_to_storage(session.additional_amount),
                     decimal_to_storage(session.total_amount),
+                    session.session_mode,
+                    session.actual_elapsed_seconds,
+                    session.billed_seconds,
+                    decimal_to_storage(session.final_computed_amount),
+                    1 if session.settlement_pending else 0,
                     session.session_id,
                 ),
             )

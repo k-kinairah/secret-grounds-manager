@@ -43,6 +43,11 @@ function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
     total_paid: "0.00",
     balance_due: "0.00",
     payment_status: "unpaid",
+    session_mode: "prepaid",
+    actual_elapsed_seconds: null,
+    billed_seconds: null,
+    final_computed_amount: null,
+    settlement_pending: false,
     ...overrides
   };
 }

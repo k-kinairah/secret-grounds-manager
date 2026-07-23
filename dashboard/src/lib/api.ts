@@ -3,6 +3,7 @@ import type {
   PcSummary,
   CalculatedTimeResponse,
   PaymentInput,
+  PrepaidSessionSelection,
   RateProfile,
   RateProfileInput,
   SessionCommandResponse,
@@ -161,6 +162,31 @@ export async function startSession(
   );
 }
 
+export async function startPrepaidSession(
+  pcName: string,
+  payload: PrepaidSessionSelection
+): Promise<SessionCommandResponse> {
+  return requestJson<SessionCommandResponse>(`${getApiBaseUrl()}/sessions/start-prepaid`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      pc_name: pcName,
+      amount: payload.amount,
+      duration_seconds: payload.durationSeconds,
+      rate_id: payload.rateId,
+      payment: payload.payment
+    })
+  });
+}
+
+export async function startOpenTimeSession(pcName: string): Promise<SessionCommandResponse> {
+  return requestJson<SessionCommandResponse>(`${getApiBaseUrl()}/sessions/start-open-time`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pc_name: pcName })
+  });
+}
+
 export async function addTime(
   sessionId: string,
   payload: { amount?: string; seconds?: number; rateId?: string }
@@ -174,6 +200,25 @@ export async function addTime(
         amount: payload.amount,
         seconds: payload.seconds,
         rate_id: payload.rateId
+      })
+    }
+  );
+}
+
+export async function addPrepaidTime(
+  sessionId: string,
+  payload: PrepaidSessionSelection
+): Promise<SessionCommandResponse> {
+  return requestJson<SessionCommandResponse>(
+    `${getApiBaseUrl()}/sessions/${sessionId}/add-time-prepaid`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount: payload.amount,
+        seconds: payload.durationSeconds,
+        rate_id: payload.rateId,
+        payment: payload.payment
       })
     }
   );

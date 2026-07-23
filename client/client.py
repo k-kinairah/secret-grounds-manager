@@ -28,7 +28,8 @@ class LocalSession:
     deadline_monotonic: float
     scheduled_end_at: str
     stop_event: Event
-    timer_thread: Thread
+    timer_thread: Thread | None
+    session_mode: str = "prepaid"
 
 
 class SecretGroundsClient:
@@ -224,36 +225,44 @@ class SecretGroundsClient:
     def initialize_local_session(
         self,
         session_id: str,
-        duration_seconds: int,
+        duration_seconds: int | None,
         scheduled_end_at: str,
+        session_mode: str = "prepaid",
     ) -> bool:
         with self.active_session_lock:
             if self.active_session is not None:
                 return False
 
             stop_event = Event()
-            deadline_monotonic = time.monotonic() + duration_seconds
-            timer_thread = Thread(
-                target=self.run_session_timer,
-                args=(session_id, deadline_monotonic, stop_event),
-                daemon=True,
-            )
+            deadline_monotonic = time.monotonic() + (duration_seconds or 0)
+            timer_thread = None
+            if session_mode != "open_time":
+                if duration_seconds is None or duration_seconds <= 0:
+                    return False
+                timer_thread = Thread(
+                    target=self.run_session_timer,
+                    args=(session_id, deadline_monotonic, stop_event),
+                    daemon=True,
+                )
             self.active_session = LocalSession(
                 session_id=session_id,
                 deadline_monotonic=deadline_monotonic,
                 scheduled_end_at=scheduled_end_at,
                 stop_event=stop_event,
                 timer_thread=timer_thread,
+                session_mode=session_mode,
             )
             self.lock_screen.hide_for_session()
-            self.recovery_store.save(
-                session_id=session_id,
-                pc_name=self.pc_name,
-                scheduled_end_at=scheduled_end_at,
-                state="active",
-            )
+            if session_mode != "open_time":
+                self.recovery_store.save(
+                    session_id=session_id,
+                    pc_name=self.pc_name,
+                    scheduled_end_at=scheduled_end_at,
+                    state="active",
+                )
             print(f"Session {session_id} unlocked.")
-            timer_thread.start()
+            if timer_thread is not None:
+                timer_thread.start()
 
         return True
 
@@ -269,8 +278,31 @@ class SecretGroundsClient:
             return self.build_acknowledgement(command_id, "failed", "Invalid payload")
 
         session_id = payload.get("session_id")
+        session_mode = payload.get("session_mode", "prepaid")
         duration_seconds = payload.get("duration_seconds")
         scheduled_end_at = payload.get("scheduled_end_at")
+
+        if session_mode == "open_time":
+            if not isinstance(session_id, str):
+                return self.build_acknowledgement(command_id, "failed", "Invalid payload")
+            initialized = self.initialize_local_session(
+                session_id=session_id,
+                duration_seconds=None,
+                scheduled_end_at="",
+                session_mode="open_time",
+            )
+            if not initialized:
+                return self.build_acknowledgement(
+                    command_id,
+                    "failed",
+                    "Client already has an active session",
+                )
+            print(f"Open-time session {session_id} started.")
+            return self.build_acknowledgement(
+                command_id,
+                "completed",
+                "Open-time session initialized",
+            )
 
         if (
             not isinstance(session_id, str)
@@ -285,6 +317,7 @@ class SecretGroundsClient:
             session_id=session_id,
             duration_seconds=duration_seconds,
             scheduled_end_at=scheduled_end_at,
+            session_mode="prepaid",
         )
         if not initialized:
             return self.build_acknowledgement(
@@ -322,6 +355,12 @@ class SecretGroundsClient:
                     command_id,
                     "failed",
                     "Session ID does not match active timer",
+                )
+            if self.active_session.session_mode == "open_time":
+                return self.build_acknowledgement(
+                    command_id,
+                    "failed",
+                    "Open-time sessions do not support add time",
                 )
             if not isinstance(seconds, int) or seconds <= 0:
                 return self.build_acknowledgement(command_id, "failed", "Invalid seconds")

@@ -24,6 +24,7 @@ RateType = Literal["metered", "package"]
 PaymentMethod = Literal["cash", "gcash", "maya", "other"]
 PaymentStatus = Literal["completed", "voided"]
 BillingPaymentStatus = Literal["unpaid", "partially_paid", "paid", "overpaid"]
+SessionMode = Literal["prepaid", "open_time"]
 
 
 class PCRegistration(BaseModel):
@@ -59,6 +60,11 @@ class PCDashboardRecord(BaseModel):
     total_paid: Decimal = Decimal("0.00")
     balance_due: Decimal = Decimal("0.00")
     payment_status: BillingPaymentStatus = "unpaid"
+    session_mode: SessionMode = "prepaid"
+    actual_elapsed_seconds: int | None = None
+    billed_seconds: int | None = None
+    final_computed_amount: Decimal | None = None
+    settlement_pending: bool = False
 
 
 class PCRegistrationResponse(PCRecord):
@@ -103,6 +109,12 @@ SessionEventType = Literal[
     "command_failed",
     "payment_recorded",
     "payment_voided",
+    "prepaid_start_paid",
+    "prepaid_add_time_paid",
+    "open_time_started",
+    "open_time_ended",
+    "open_time_settled",
+    "payment_action_review_required",
 ]
 
 
@@ -127,6 +139,11 @@ class SessionRecord(BaseModel):
     total_paid: Decimal = Decimal("0.00")
     balance_due: Decimal = Decimal("0.00")
     payment_status: BillingPaymentStatus = "unpaid"
+    session_mode: SessionMode = "prepaid"
+    actual_elapsed_seconds: int | None = None
+    billed_seconds: int | None = None
+    final_computed_amount: Decimal | None = None
+    settlement_pending: bool = False
 
 
 class SessionEventRecord(BaseModel):
@@ -155,6 +172,10 @@ class StartSessionRequest(BaseModel):
         return normalize_positive_money(value) if value is not None else None
 
 
+class PrepaidStartSessionRequest(StartSessionRequest):
+    payment: "PaymentCreateRequest"
+
+
 class AddTimeRequest(BaseModel):
     seconds: int | None = Field(default=None, gt=0)
     rate_id: str | None = None
@@ -164,6 +185,21 @@ class AddTimeRequest(BaseModel):
     @classmethod
     def validate_amount(cls, value: Decimal | None) -> Decimal | None:
         return normalize_positive_money(value) if value is not None else None
+
+
+class PrepaidAddTimeRequest(AddTimeRequest):
+    payment: "PaymentCreateRequest"
+
+
+class OpenTimeStartRequest(BaseModel):
+    pc_name: str = Field(..., min_length=1)
+
+
+class OpenTimeEndResponse(BaseModel):
+    session: SessionRecord
+    command: ClientCommand
+    acknowledgements: list[CommandAcknowledgement]
+    billing: "BillingSummary"
 
 
 class SessionCommandResponse(BaseModel):
@@ -183,6 +219,7 @@ class SessionStateSummary(BaseModel):
     status: SessionStatus
     scheduled_end_at: datetime
     total_seconds: int
+    session_mode: SessionMode = "prepaid"
 
 
 class PCSessionStateResponse(BaseModel):
@@ -260,6 +297,9 @@ class PaymentRecord(BaseModel):
     change_given: Decimal | None = None
     reference_number: str | None = None
     notes: str | None = None
+    action_type: Literal["session_start", "add_time", "settlement", "manual"] = "manual"
+    related_command_id: str | None = None
+    review_required: bool = False
     status: PaymentStatus
     created_at: datetime
 

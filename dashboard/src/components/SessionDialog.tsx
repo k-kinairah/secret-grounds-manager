@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import styles from "@/app/page.module.css";
+import { calculateCashChange } from "@/lib/paymentSelection";
 import { calculatePreviewSeconds } from "@/lib/sessionSelection";
 import { formatMoney, formatRateDuration, minutesToSeconds } from "@/lib/time";
-import type { PcSummary, RateProfile } from "@/lib/types";
+import type { PaymentMethod, PcSummary, PrepaidSessionSelection, RateProfile } from "@/lib/types";
 
 type DialogMode = "start" | "add";
-type SessionSelection = { amount?: string; seconds?: number; rateId?: string };
-type SelectionTab = "amount" | "packages";
+type SelectionTab = "amount" | "packages" | "open_time";
+type SessionSelection = PrepaidSessionSelection | { sessionMode: "open_time" };
 
 interface SessionDialogProps {
   mode: DialogMode;
@@ -35,24 +36,57 @@ export function SessionDialog({
     packageRates[0]?.rate_id ?? "custom"
   );
   const [customMinutes, setCustomMinutes] = useState("30");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
+  const [cashReceived, setCashReceived] = useState("");
+  const [referenceNumber, setReferenceNumber] = useState("");
+  const [notes, setNotes] = useState("");
   const title = mode === "start" ? `Start ${pc.pc_name}` : `Add time to ${pc.pc_name}`;
   const previewSeconds = useMemo(
     () => calculatePreviewSeconds(amount, meteredRate),
     [amount, meteredRate]
   );
+  const selectedPackage = packageRates.find((rate) => rate.rate_id === selectedRateId);
+  const selectedPaymentAmount =
+    activeTab === "amount"
+      ? amount
+      : selectedRateId === "custom"
+        ? "0.00"
+        : selectedPackage?.price ?? "0.00";
+  const change = calculateCashChange(
+    selectedPaymentAmount,
+    cashReceived || selectedPaymentAmount
+  );
+
+  function buildPayment(paymentAmount: string) {
+    return {
+      payment_method: paymentMethod,
+      amount: paymentAmount,
+      cash_received: paymentMethod === "cash" ? cashReceived || paymentAmount : undefined,
+      reference_number: paymentMethod !== "cash" ? referenceNumber : undefined,
+      notes: notes || undefined
+    };
+  }
 
   function confirm() {
+    if (activeTab === "open_time") {
+      onConfirm({ sessionMode: "open_time" });
+      return;
+    }
+
     if (activeTab === "amount") {
-      onConfirm({ amount });
+      onConfirm({ amount, payment: buildPayment(amount) });
       return;
     }
 
     if (selectedRateId === "custom") {
-      onConfirm({ seconds: minutesToSeconds(Number(customMinutes)) });
+      onConfirm({
+        durationSeconds: minutesToSeconds(Number(customMinutes)),
+        payment: buildPayment("0.00")
+      });
       return;
     }
 
-    onConfirm({ rateId: selectedRateId });
+    onConfirm({ rateId: selectedRateId, payment: buildPayment(selectedPackage?.price ?? "0.00") });
   }
 
   return (
@@ -78,9 +112,33 @@ export function SessionDialog({
           >
             Packages
           </button>
+          {mode === "start" ? (
+            <button
+              aria-selected={activeTab === "open_time"}
+              className={`${styles.tabButton} ${activeTab === "open_time" ? styles.tabActive : ""}`}
+              onClick={() => setActiveTab("open_time")}
+              role="tab"
+              type="button"
+            >
+              Open Time
+            </button>
+          ) : null}
         </div>
 
-        {activeTab === "amount" ? (
+        {activeTab === "open_time" ? (
+          <div className={styles.amountPreview} role="tabpanel">
+            <span>Open Time</span>
+            <strong>Charges are calculated from actual usage when the session ends.</strong>
+            <span>Current regular rate</span>
+            <strong>
+              {meteredRate
+                ? `${formatMoney(meteredRate.price)} = ${formatRateDuration(
+                    meteredRate.duration_seconds
+                  )}`
+                : "No active metered rate"}
+            </strong>
+          </div>
+        ) : activeTab === "amount" ? (
           <div className={styles.amountPanel} role="tabpanel">
             <label className={styles.moneyField}>
               Amount
@@ -96,11 +154,7 @@ export function SessionDialog({
             </label>
             <div className={styles.quickAmountRow}>
               {quickAmounts.map((quickAmount) => (
-                <button
-                  key={quickAmount}
-                  onClick={() => setAmount(quickAmount)}
-                  type="button"
-                >
+                <button key={quickAmount} onClick={() => setAmount(quickAmount)} type="button">
                   {formatMoney(quickAmount)}
                 </button>
               ))}
@@ -140,32 +194,60 @@ export function SessionDialog({
                   <span className={styles.ratePrice}>{formatMoney(rate.price)}</span>
                 </button>
               ))}
-              <button
-                className={`${styles.rateOption} ${
-                  selectedRateId === "custom" ? styles.rateOptionSelected : ""
-                }`}
-                onClick={() => setSelectedRateId("custom")}
-                type="button"
-              >
-                <span className={styles.rateTitle}>Custom Time</span>
-                <span className={styles.rateDuration}>Enter minutes</span>
-                <span className={styles.ratePrice}>{formatMoney(0)}</span>
-              </button>
             </div>
-            {selectedRateId === "custom" ? (
-              <label className={styles.field}>
-                Custom minutes
-                <input
-                  min="0.5"
-                  onChange={(event) => setCustomMinutes(event.target.value)}
-                  step="0.5"
-                  type="number"
-                  value={customMinutes}
-                />
-              </label>
-            ) : null}
           </div>
         )}
+
+        {activeTab !== "open_time" ? (
+          <div className={styles.paymentBox}>
+            <label className={styles.field}>
+              Payment method
+              <select
+                onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}
+                value={paymentMethod}
+              >
+                <option value="cash">Cash</option>
+                <option value="gcash">GCash</option>
+                <option value="maya">Maya</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            {paymentMethod === "cash" ? (
+              <>
+                <label className={styles.field}>
+                  Cash received
+                  <input
+                    inputMode="decimal"
+                    onChange={(event) => setCashReceived(event.target.value)}
+                    placeholder={selectedPaymentAmount}
+                    value={cashReceived}
+                  />
+                </label>
+                <div className={styles.paymentSummary}>
+                  <span>Change</span>
+                  <strong>{change === null ? "Invalid cash" : formatMoney(Math.max(change, 0))}</strong>
+                </div>
+              </>
+            ) : (
+              <label className={styles.field}>
+                Reference number
+                <input
+                  onChange={(event) => setReferenceNumber(event.target.value)}
+                  placeholder="Optional"
+                  value={referenceNumber}
+                />
+              </label>
+            )}
+            <label className={styles.field}>
+              Notes
+              <input
+                onChange={(event) => setNotes(event.target.value)}
+                placeholder="Optional"
+                value={notes}
+              />
+            </label>
+          </div>
+        ) : null}
 
         <div className={styles.dialogActions}>
           <button className={styles.secondaryButton} disabled={isLoading} onClick={onCancel}>

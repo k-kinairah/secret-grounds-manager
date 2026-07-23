@@ -87,14 +87,18 @@ class BillingService:
         self,
         session_id: str,
         request: PaymentCreateRequest,
+        action_type: str = "manual",
+        related_command_id: str | None = None,
+        max_amount: Decimal | None = None,
     ) -> BillingSummary:
         billing = self.get_billing(session_id)
         amount = money(request.amount)
+        limit = money(max_amount) if max_amount is not None else billing.balance_due
 
-        if amount > billing.balance_due:
+        if amount > limit:
             raise HTTPException(
                 status_code=400,
-                detail="Payment amount cannot exceed the balance due",
+                detail="Payment amount cannot exceed the amount due",
             )
 
         cash_received = money(request.cash_received) if request.cash_received is not None else None
@@ -124,6 +128,9 @@ class BillingService:
             change_given=change_given,
             reference_number=request.reference_number,
             notes=request.notes,
+            action_type=action_type,  # type: ignore[arg-type]
+            related_command_id=related_command_id,
+            review_required=False,
             status="completed",
             created_at=current_utc_time(),
         )
@@ -140,8 +147,65 @@ class BillingService:
                 payment_method=payment.payment_method,
             )
         )
+        updated_billing = self.get_billing(session_id)
+        if (
+            updated_billing.session.session_mode == "open_time"
+            and updated_billing.session.settlement_pending
+            and updated_billing.balance_due == Decimal("0.00")
+        ):
+            settled_session = updated_billing.session.model_copy(
+                update={"settlement_pending": False}
+            )
+            self.session_repository.update_session(settled_session)
+            self.session_repository.add_event(
+                SessionEventRecord(
+                    event_id=str(uuid4()),
+                    session_id=session_id,
+                    event_type="open_time_settled",
+                    amount=amount,
+                    message="Open-time settlement paid",
+                    created_at=current_utc_time(),
+                    payment_id=payment.payment_id,
+                    payment_method=payment.payment_method,
+                )
+            )
+            return self.get_billing(session_id)
 
-        return self.get_billing(session_id)
+        return updated_billing
+
+    def validate_payment_for_amount(
+        self,
+        request: PaymentCreateRequest,
+        amount_due: Decimal,
+    ) -> None:
+        amount = money(request.amount)
+        limit = money(amount_due)
+        if amount <= Decimal("0.00"):
+            raise HTTPException(status_code=400, detail="Payment amount must be positive")
+        if amount > limit:
+            raise HTTPException(
+                status_code=400,
+                detail="Payment amount cannot exceed the amount due",
+            )
+        if request.payment_method == "cash":
+            cash_received = money(request.cash_received or amount)
+            if cash_received < amount:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cash received cannot be lower than payment amount",
+                )
+        elif request.cash_received is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Cash received is only valid for cash payments",
+            )
+
+    def mark_payment_review_required(
+        self,
+        payment_id: str,
+        related_command_id: str | None = None,
+    ) -> None:
+        self.payment_repository.mark_review_required(payment_id, related_command_id)
 
     def void_payment(self, payment_id: str, reason: str) -> BillingSummary:
         cleaned_reason = reason.strip()

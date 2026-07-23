@@ -40,6 +40,7 @@ export function PcCard({ pc, onStart, onAddTime, onEnd, onDetails, onPayment }: 
       : pc.session_status === "unknown"
         ? styles.badgeWarning
         : styles.badgeIdle;
+  const isOpenTime = pc.session_mode === "open_time";
 
   return (
     <article className={`${styles.pcCard} ${toneClassName[tone]}`}>
@@ -65,8 +66,10 @@ export function PcCard({ pc, onStart, onAddTime, onEnd, onDetails, onPayment }: 
         </div>
         {pc.session_status === "active" ? (
           <div className={styles.timerBlock}>
-            <div className={styles.timerLabel}>Remaining</div>
-            <div className={styles.timerValue}>{formatTimer(pc.remaining_seconds)}</div>
+            <div className={styles.timerLabel}>{isOpenTime ? "Elapsed" : "Remaining"}</div>
+            <div className={styles.timerValue}>
+              {formatTimer(isOpenTime ? pc.actual_elapsed_seconds : pc.remaining_seconds)}
+            </div>
           </div>
         ) : (
           <div className={styles.availableBlock}>
@@ -108,7 +111,7 @@ export function PcCard({ pc, onStart, onAddTime, onEnd, onDetails, onPayment }: 
         </button>
         <button
           className={styles.secondaryButton}
-          disabled={!actions.canAddTime}
+          disabled={!actions.canAddTime || isOpenTime}
           onClick={() => onAddTime(pc)}
         >
           Add Time
@@ -118,7 +121,7 @@ export function PcCard({ pc, onStart, onAddTime, onEnd, onDetails, onPayment }: 
           disabled={!actions.canAddTime}
           onClick={() => onPayment(pc)}
         >
-          Payment
+          {isOpenTime && pc.settlement_pending ? "Settle" : "Payment"}
         </button>
         <button
           className={styles.dangerButton}
