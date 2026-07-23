@@ -6,6 +6,9 @@ export type SessionStatus =
   | "ended_manually"
   | "cancelled"
   | "failed";
+export type PaymentStatus = "completed" | "voided";
+export type PaymentMethod = "cash" | "gcash" | "maya" | "other";
+export type BillingPaymentStatus = "unpaid" | "partially_paid" | "paid" | "overpaid";
 
 export interface PcSummary {
   pc_name: string;
@@ -16,6 +19,13 @@ export interface PcSummary {
   active_session_id: string | null;
   scheduled_end_at: string | null;
   remaining_seconds: number | null;
+  rate_name_snapshot: string | null;
+  base_amount: string;
+  additional_amount: string;
+  total_amount: string;
+  total_paid: string;
+  balance_due: string;
+  payment_status: BillingPaymentStatus;
 }
 
 export interface SessionRecord {
@@ -36,6 +46,9 @@ export interface SessionRecord {
   base_amount: string;
   additional_amount: string;
   total_amount: string;
+  total_paid: string;
+  balance_due: string;
+  payment_status: BillingPaymentStatus;
 }
 
 export interface SessionCommandResponse {
@@ -59,6 +72,7 @@ export interface RateProfile {
   name: string;
   duration_seconds: number;
   price: string;
+  rate_type: "metered" | "package";
   is_active: boolean;
   sort_order: number;
   created_at: string;
@@ -69,6 +83,46 @@ export interface RateProfileInput {
   name: string;
   duration_seconds: number;
   price: string;
+  rate_type?: "metered" | "package";
   sort_order: number;
   is_active?: boolean;
+}
+
+export interface CalculatedTimeResponse {
+  amount: string;
+  duration_seconds: number;
+  rate_name: string;
+  rate_snapshot: string;
+}
+
+export interface PaymentRecord {
+  payment_id: string;
+  session_id: string;
+  amount: string;
+  payment_method: PaymentMethod;
+  cash_received: string | null;
+  change_given: string | null;
+  reference_number: string | null;
+  notes: string | null;
+  status: PaymentStatus;
+  created_at: string;
+}
+
+export interface PaymentInput {
+  payment_method: PaymentMethod;
+  amount: string;
+  cash_received?: string;
+  reference_number?: string;
+  notes?: string;
+}
+
+export interface BillingSummary {
+  session: SessionRecord;
+  base_amount: string;
+  additional_amount: string;
+  total_amount: string;
+  total_paid: string;
+  balance_due: string;
+  payment_status: BillingPaymentStatus;
+  payments: PaymentRecord[];
 }

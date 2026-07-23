@@ -8,6 +8,7 @@ import {
   fetchPcs,
   fetchRates,
   getPollingIntervalMs,
+  recordPayment,
   startSession
 } from "@/lib/api";
 import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
@@ -17,6 +18,7 @@ import { DashboardSummary } from "./DashboardSummary";
 import { EndSessionDialog } from "./EndSessionDialog";
 import { PcCard } from "./PcCard";
 import { PcDetailsPanel } from "./PcDetailsPanel";
+import { PaymentDialog } from "./PaymentDialog";
 import { SessionDialog } from "./SessionDialog";
 
 type DialogState =
@@ -24,12 +26,14 @@ type DialogState =
   | { type: "add"; pc: PcSummary }
   | { type: "end"; pc: PcSummary }
   | { type: "details"; pc: PcSummary }
+  | { type: "payment"; pc: PcSummary }
   | null;
 
 export function DashboardClient() {
   const [pcs, setPcs] = useState<PcSummary[]>([]);
   const [rates, setRates] = useState<RateProfile[]>([]);
   const [isConnected, setIsConnected] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [isMutating, setIsMutating] = useState(false);
@@ -48,9 +52,11 @@ export function DashboardClient() {
       setPcs(nextPcs);
       setRates(nextRates);
       setIsConnected(true);
+      setHasLoadedOnce(true);
       setMessage(null);
     } catch (error) {
       setIsConnected(false);
+      setHasLoadedOnce(true);
       setMessage(
         error instanceof Error
           ? error.message
@@ -92,6 +98,14 @@ export function DashboardClient() {
     [pcs, now]
   );
   const summary = summarizePcs(livePcs);
+  const meteredRate = useMemo(
+    () => rates.find((rate) => rate.rate_type === "metered" && rate.is_active) ?? null,
+    [rates]
+  );
+  const packageRates = useMemo(
+    () => rates.filter((rate) => rate.rate_type === "package" && rate.is_active),
+    [rates]
+  );
 
   async function runAction(action: () => Promise<unknown>, successMessage: string) {
     setIsMutating(true);
@@ -137,6 +151,16 @@ export function DashboardClient() {
       {message ? <div className={styles.statusMessage}>{message}</div> : null}
 
       <section className={styles.pcGrid} aria-label="PC grid">
+        {!hasLoadedOnce
+          ? Array.from({ length: 4 }, (_, index) => (
+              <div className={styles.loadingCard} key={index}>
+                Loading PC status...
+              </div>
+            ))
+          : null}
+        {hasLoadedOnce && livePcs.length === 0 ? (
+          <div className={styles.emptyState}>No registered PCs.</div>
+        ) : null}
         {livePcs.map((pc) => (
           <PcCard
             key={pc.pc_name}
@@ -145,6 +169,7 @@ export function DashboardClient() {
             onDetails={(selectedPc) => setDialog({ type: "details", pc: selectedPc })}
             onEnd={(selectedPc) => setDialog({ type: "end", pc: selectedPc })}
             onStart={(selectedPc) => setDialog({ type: "start", pc: selectedPc })}
+            onPayment={(selectedPc) => setDialog({ type: "payment", pc: selectedPc })}
           />
         ))}
       </section>
@@ -161,7 +186,8 @@ export function DashboardClient() {
             )
           }
           pc={dialog.pc}
-          rates={rates}
+          meteredRate={meteredRate}
+          packageRates={packageRates}
         />
       ) : null}
 
@@ -183,7 +209,8 @@ export function DashboardClient() {
             );
           }}
           pc={dialog.pc}
-          rates={rates}
+          meteredRate={meteredRate}
+          packageRates={packageRates}
         />
       ) : null}
 
@@ -210,6 +237,26 @@ export function DashboardClient() {
 
       {dialog?.type === "details" ? (
         <PcDetailsPanel pc={findCurrentPc(dialog.pc)} onClose={() => setDialog(null)} />
+      ) : null}
+
+      {dialog?.type === "payment" ? (
+        <PaymentDialog
+          isLoading={isMutating}
+          onCancel={() => setDialog(null)}
+          onConfirm={(input) => {
+            const currentPc = findCurrentPc(dialog.pc);
+            if (!currentPc.active_session_id) {
+              setMessage("This PC no longer has an active session.");
+              setDialog(null);
+              return;
+            }
+            void runAction(
+              () => recordPayment(currentPc.active_session_id as string, input),
+              `${currentPc.pc_name} payment recorded.`
+            );
+          }}
+          pc={findCurrentPc(dialog.pc)}
+        />
       ) : null}
     </main>
   );

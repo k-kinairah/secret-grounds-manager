@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from server.connection_manager import ClientConnectionManager
+from server.rate_calculator import calculate_metered_time
 from server.rate_repository import RateRepository
 from server.schemas import (
     ClientCommand,
@@ -76,19 +77,40 @@ class SessionService:
         self,
         rate_id: str | None,
         custom_seconds: int | None,
+        amount: Decimal | None,
         custom_field_name: str,
     ) -> tuple[int, str | None, str | None, Decimal]:
-        if rate_id and custom_seconds is not None:
+        selected_inputs = [
+            rate_id is not None,
+            custom_seconds is not None,
+            amount is not None,
+        ]
+        if sum(1 for is_selected in selected_inputs if is_selected) != 1:
             raise HTTPException(
                 status_code=400,
-                detail=f"Use either rate_id or {custom_field_name}, not both",
+                detail=f"Use exactly one of rate_id, amount, or {custom_field_name}",
             )
 
         if rate_id:
             rate = self.rate_repository.get_rate(rate_id)
             if rate is None or not rate.is_active:
                 raise HTTPException(status_code=409, detail="Rate is inactive or missing")
+            if rate.rate_type != "package":
+                raise HTTPException(status_code=400, detail="rate_id must reference a package")
             return rate.duration_seconds, rate.rate_id, rate.name, rate.price
+
+        if amount is not None:
+            metered_rate = self.rate_repository.get_active_metered_rate()
+            if metered_rate is None:
+                raise HTTPException(status_code=409, detail="Active metered rate is missing")
+
+            calculated = calculate_metered_time(amount, metered_rate)
+            return (
+                calculated.duration_seconds,
+                metered_rate.rate_id,
+                f"{calculated.rate_name} ({calculated.rate_snapshot})",
+                calculated.amount,
+            )
 
         if custom_seconds is None or custom_seconds <= 0:
             raise HTTPException(
@@ -137,9 +159,10 @@ class SessionService:
         pc_name: str,
         duration_seconds: int | None = None,
         rate_id: str | None = None,
+        amount: Decimal | None = None,
     ) -> SessionCommandResponse:
         duration_seconds, resolved_rate_id, rate_name_snapshot, base_amount = (
-            self.resolve_session_package(rate_id, duration_seconds, "duration_seconds")
+            self.resolve_session_package(rate_id, duration_seconds, amount, "duration_seconds")
         )
 
         cleaned_pc_name = pc_name.strip()
@@ -229,9 +252,10 @@ class SessionService:
         session_id: str,
         seconds: int | None = None,
         rate_id: str | None = None,
+        amount: Decimal | None = None,
     ) -> SessionCommandResponse:
         seconds, resolved_rate_id, rate_name_snapshot, amount = (
-            self.resolve_session_package(rate_id, seconds, "seconds")
+            self.resolve_session_package(rate_id, seconds, amount, "seconds")
         )
 
         session = self.repository.get_session(session_id)

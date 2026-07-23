@@ -57,6 +57,8 @@ def row_to_event(row: Any) -> SessionEventRecord:
         rate_id=row["rate_id"],
         rate_name_snapshot=row["rate_name_snapshot"],
         amount=Decimal(row["amount"]) if row["amount"] is not None else None,
+        payment_id=row["payment_id"],
+        payment_method=row["payment_method"],
     )
 
 
@@ -124,9 +126,11 @@ class SessionRepository:
                     created_at,
                     rate_id,
                     rate_name_snapshot,
-                    amount
+                    amount,
+                    payment_id,
+                    payment_method
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.event_id,
@@ -138,6 +142,8 @@ class SessionRepository:
                     event.rate_id,
                     event.rate_name_snapshot,
                     decimal_to_storage(event.amount),
+                    event.payment_id,
+                    event.payment_method,
                 ),
             )
 

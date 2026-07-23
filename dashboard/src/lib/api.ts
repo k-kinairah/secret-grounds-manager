@@ -1,5 +1,8 @@
 import type {
+  BillingSummary,
   PcSummary,
+  CalculatedTimeResponse,
+  PaymentInput,
   RateProfile,
   RateProfileInput,
   SessionCommandResponse,
@@ -28,10 +31,34 @@ async function parseResponse<T>(response: Response): Promise<T> {
     } catch {
       // Keep the generic status message when the server does not return JSON.
     }
+    console.error("Secret Grounds API request failed", {
+      status: response.status,
+      statusText: response.statusText,
+      url: response.url,
+      message
+    });
     throw new Error(toCashierMessage(message));
   }
 
   return response.json() as Promise<T>;
+}
+
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  try {
+    return await parseResponse<T>(await fetch(url, init));
+  } catch (error) {
+    if (error instanceof TypeError || (error instanceof Error && error.message === "Failed to fetch")) {
+      console.error("Secret Grounds API network failure", {
+        url,
+        method: init?.method ?? "GET",
+        error
+      });
+      throw new Error(
+        "Could not reach the Secret Grounds server. Check that FastAPI is running and CORS allows this dashboard."
+      );
+    }
+    throw error;
+  }
 }
 
 export function toCashierMessage(message: string): string {
@@ -57,67 +84,118 @@ export function toCashierMessage(message: string): string {
 }
 
 export async function fetchPcs(): Promise<PcSummary[]> {
-  return parseResponse<PcSummary[]>(await fetch(`${getApiBaseUrl()}/pcs`, { cache: "no-store" }));
+  return requestJson<PcSummary[]>(`${getApiBaseUrl()}/pcs`, { cache: "no-store" });
 }
 
 export async function fetchHistory(): Promise<SessionRecord[]> {
-  return parseResponse<SessionRecord[]>(
-    await fetch(`${getApiBaseUrl()}/sessions/history`, { cache: "no-store" })
-  );
+  return requestJson<SessionRecord[]>(`${getApiBaseUrl()}/sessions/history`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchBilling(sessionId: string): Promise<BillingSummary> {
+  return requestJson<BillingSummary>(`${getApiBaseUrl()}/sessions/${sessionId}/billing`, {
+    cache: "no-store"
+  });
+}
+
+export async function recordPayment(
+  sessionId: string,
+  input: PaymentInput
+): Promise<BillingSummary> {
+  return requestJson<BillingSummary>(`${getApiBaseUrl()}/sessions/${sessionId}/payments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function voidPayment(
+  paymentId: string,
+  reason: string
+): Promise<BillingSummary> {
+  return requestJson<BillingSummary>(`${getApiBaseUrl()}/payments/${paymentId}/void`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  });
 }
 
 export async function fetchRates(includeInactive = false): Promise<RateProfile[]> {
   const query = includeInactive ? "?include_inactive=true" : "";
-  return parseResponse<RateProfile[]>(
-    await fetch(`${getApiBaseUrl()}/rates${query}`, { cache: "no-store" })
-  );
+  return requestJson<RateProfile[]>(`${getApiBaseUrl()}/rates${query}`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchMeteredRate(): Promise<RateProfile> {
+  return requestJson<RateProfile>(`${getApiBaseUrl()}/rates/metered`, {
+    cache: "no-store"
+  });
+}
+
+export async function calculateTime(amount: string): Promise<CalculatedTimeResponse> {
+  return requestJson<CalculatedTimeResponse>(`${getApiBaseUrl()}/rates/calculate-time`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ amount })
+  });
 }
 
 export async function startSession(
   pcName: string,
-  payload: { durationSeconds?: number; rateId?: string }
+  payload: { amount?: string; durationSeconds?: number; rateId?: string }
 ): Promise<SessionCommandResponse> {
-  return parseResponse<SessionCommandResponse>(
-    await fetch(`${getApiBaseUrl()}/sessions/start`, {
+  return requestJson<SessionCommandResponse>(
+    `${getApiBaseUrl()}/sessions/start`,
+    {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         pc_name: pcName,
+        amount: payload.amount,
         duration_seconds: payload.durationSeconds,
         rate_id: payload.rateId
       })
-    })
+    }
   );
 }
 
 export async function addTime(
   sessionId: string,
-  payload: { seconds?: number; rateId?: string }
+  payload: { amount?: string; seconds?: number; rateId?: string }
 ): Promise<SessionCommandResponse> {
-  return parseResponse<SessionCommandResponse>(
-    await fetch(`${getApiBaseUrl()}/sessions/${sessionId}/add-time`, {
+  return requestJson<SessionCommandResponse>(
+    `${getApiBaseUrl()}/sessions/${sessionId}/add-time`,
+    {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ seconds: payload.seconds, rate_id: payload.rateId })
-    })
+      body: JSON.stringify({
+        amount: payload.amount,
+        seconds: payload.seconds,
+        rate_id: payload.rateId
+      })
+    }
   );
 }
 
 export async function endSession(sessionId: string): Promise<SessionCommandResponse> {
-  return parseResponse<SessionCommandResponse>(
-    await fetch(`${getApiBaseUrl()}/sessions/${sessionId}/end`, {
+  return requestJson<SessionCommandResponse>(
+    `${getApiBaseUrl()}/sessions/${sessionId}/end`,
+    {
       method: "POST"
-    })
+    }
   );
 }
 
 export async function createRate(input: RateProfileInput): Promise<RateProfile> {
-  return parseResponse<RateProfile>(
-    await fetch(`${getApiBaseUrl()}/rates`, {
+  return requestJson<RateProfile>(
+    `${getApiBaseUrl()}/rates`,
+    {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input)
-    })
+    }
   );
 }
 
@@ -125,12 +203,13 @@ export async function updateRate(
   rateId: string,
   input: RateProfileInput
 ): Promise<RateProfile> {
-  return parseResponse<RateProfile>(
-    await fetch(`${getApiBaseUrl()}/rates/${rateId}`, {
+  return requestJson<RateProfile>(
+    `${getApiBaseUrl()}/rates/${rateId}`,
+    {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input)
-    })
+    }
   );
 }
 
@@ -138,11 +217,12 @@ export async function updateRateStatus(
   rateId: string,
   isActive: boolean
 ): Promise<RateProfile> {
-  return parseResponse<RateProfile>(
-    await fetch(`${getApiBaseUrl()}/rates/${rateId}/status`, {
+  return requestJson<RateProfile>(
+    `${getApiBaseUrl()}/rates/${rateId}/status`,
+    {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_active: isActive })
-    })
+    }
   );
 }

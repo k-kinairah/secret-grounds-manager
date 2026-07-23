@@ -1,15 +1,20 @@
 :root {
   color-scheme: light;
-  --background: #f5f7fa;
+  --background: #eef2f7;
   --panel: #ffffff;
   --text: #172033;
-  --muted: #667085;
-  --line: #d8dee8;
-  --active: #155eef;
-  --available: #07845f;
-  --warning: #b54708;
-  --offline: #697586;
-  --danger: #c4320a;
+  --muted: #64748b;
+  --line: #d7deea;
+  --active: #2563eb;
+  --available: #059669;
+  --warning: #f97316;
+  --offline: #6b7280;
+  --danger: #dc2626;
+  --nav: #0b1020;
+  --nav-line: #1f2a44;
+  --shadow: 0 16px 40px rgb(15 23 42 / 0.09);
+  --shadow-hover: 0 22px 50px rgb(15 23 42 / 0.14);
+  --focus: #38bdf8;
 }
 
 * {
@@ -18,9 +23,12 @@
 
 body {
   margin: 0;
-  background: var(--background);
+  background:
+    radial-gradient(circle at top left, rgb(37 99 235 / 0.10), transparent 34rem),
+    linear-gradient(180deg, #f8fafc 0%, var(--background) 42%);
   color: var(--text);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+  min-height: 100vh;
 }
 
 button,
@@ -31,25 +39,48 @@ select {
 
 button {
   cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
 }
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.68;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
 }
 
 .appShell {
   align-items: center;
-  background: #111827;
+  background: var(--nav);
+  border-bottom: 1px solid var(--nav-line);
   display: flex;
-  gap: 18px;
-  min-height: 48px;
-  padding: 0 24px;
+  gap: 8px;
+  min-height: 58px;
+  padding: 0 28px;
 }
 
 .appShell a {
-  color: #f9fafb;
+  border-radius: 6px;
+  color: #dbeafe;
   font-size: 14px;
   font-weight: 700;
+  padding: 9px 11px;
   text-decoration: none;
+}
+
+.appShell a:hover {
+  background: rgb(59 130 246 / 0.14);
+  color: #ffffff;
 }

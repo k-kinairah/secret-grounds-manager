@@ -18,6 +18,7 @@ def row_to_rate(row: Any) -> RateProfile:
         name=row["name"],
         duration_seconds=row["duration_seconds"],
         price=Decimal(row["price"]),
+        rate_type=row["rate_type"],
         is_active=bool(row["is_active"]),
         sort_order=row["sort_order"],
         created_at=datetime.fromisoformat(row["created_at"]),
@@ -51,6 +52,34 @@ class RateRepository:
 
         return row_to_rate(row) if row is not None else None
 
+    def get_active_metered_rate(self) -> RateProfile | None:
+        with get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM rate_profiles
+                WHERE rate_type = 'metered' AND is_active = 1
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+
+        return row_to_rate(row) if row is not None else None
+
+    def deactivate_other_metered_rates(
+        self,
+        connection: Any,
+        active_rate_id: str,
+        updated_at: datetime,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE rate_profiles
+            SET is_active = 0, updated_at = ?
+            WHERE rate_type = 'metered' AND rate_id != ? AND is_active = 1
+            """,
+            (updated_at.isoformat(), active_rate_id),
+        )
+
     def create_rate(self, request: RateProfileCreate) -> RateProfile:
         now = current_utc_time()
         rate = RateProfile(
@@ -58,6 +87,7 @@ class RateRepository:
             name=request.name.strip(),
             duration_seconds=request.duration_seconds,
             price=request.price,
+            rate_type=request.rate_type,
             is_active=request.is_active,
             sort_order=request.sort_order,
             created_at=now,
@@ -65,6 +95,12 @@ class RateRepository:
         )
 
         with get_connection() as connection:
+            if rate.rate_type == "metered" and rate.is_active:
+                self.deactivate_other_metered_rates(
+                    connection,
+                    rate.rate_id,
+                    rate.updated_at,
+                )
             connection.execute(
                 """
                 INSERT INTO rate_profiles (
@@ -72,18 +108,20 @@ class RateRepository:
                     name,
                     duration_seconds,
                     price,
+                    rate_type,
                     is_active,
                     sort_order,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     rate.rate_id,
                     rate.name,
                     rate.duration_seconds,
                     decimal_to_storage(rate.price),
+                    rate.rate_type,
                     1 if rate.is_active else 0,
                     rate.sort_order,
                     rate.created_at.isoformat(),
@@ -103,22 +141,30 @@ class RateRepository:
                 "name": request.name.strip(),
                 "duration_seconds": request.duration_seconds,
                 "price": request.price,
+                "rate_type": request.rate_type,
                 "sort_order": request.sort_order,
                 "updated_at": current_utc_time(),
             }
         )
 
         with get_connection() as connection:
+            if updated.rate_type == "metered" and updated.is_active:
+                self.deactivate_other_metered_rates(
+                    connection,
+                    updated.rate_id,
+                    updated.updated_at,
+                )
             connection.execute(
                 """
                 UPDATE rate_profiles
-                SET name = ?, duration_seconds = ?, price = ?, sort_order = ?, updated_at = ?
+                SET name = ?, duration_seconds = ?, price = ?, rate_type = ?, sort_order = ?, updated_at = ?
                 WHERE rate_id = ?
                 """,
                 (
                     updated.name,
                     updated.duration_seconds,
                     decimal_to_storage(updated.price),
+                    updated.rate_type,
                     updated.sort_order,
                     updated.updated_at.isoformat(),
                     updated.rate_id,
@@ -140,6 +186,12 @@ class RateRepository:
         )
 
         with get_connection() as connection:
+            if updated.rate_type == "metered" and updated.is_active:
+                self.deactivate_other_metered_rates(
+                    connection,
+                    updated.rate_id,
+                    updated.updated_at,
+                )
             connection.execute(
                 """
                 UPDATE rate_profiles

@@ -48,6 +48,72 @@ def add_column_if_missing(
         )
 
 
+def ensure_session_events_accept_payment_events(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'session_events'"
+    ).fetchone()
+    if row is None or "payment_recorded" in (row["sql"] or ""):
+        return
+
+    connection.execute("ALTER TABLE session_events RENAME TO session_events_old")
+    connection.execute(
+        """
+        CREATE TABLE session_events (
+            event_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            event_type TEXT NOT NULL CHECK (
+                event_type IN (
+                    'session_started',
+                    'time_added',
+                    'session_completed',
+                    'session_ended_manually',
+                    'session_cancelled',
+                    'command_failed',
+                    'payment_recorded',
+                    'payment_voided'
+                )
+            ),
+            seconds INTEGER,
+            message TEXT,
+            created_at TEXT NOT NULL,
+            rate_id TEXT,
+            rate_name_snapshot TEXT,
+            amount TEXT,
+            payment_id TEXT,
+            payment_method TEXT,
+            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO session_events (
+            event_id,
+            session_id,
+            event_type,
+            seconds,
+            message,
+            created_at,
+            rate_id,
+            rate_name_snapshot,
+            amount
+        )
+        SELECT
+            event_id,
+            session_id,
+            event_type,
+            seconds,
+            message,
+            created_at,
+            rate_id,
+            rate_name_snapshot,
+            amount
+        FROM session_events_old
+        """
+    )
+    connection.execute("DROP TABLE session_events_old")
+
+
 def seed_default_rates(connection: sqlite3.Connection) -> None:
     existing_count = connection.execute(
         "SELECT COUNT(*) FROM rate_profiles"
@@ -59,10 +125,10 @@ def seed_default_rates(connection: sqlite3.Connection) -> None:
         __import__("datetime").timezone.utc
     ).isoformat()
     defaults = [
-        ("rate-30-minutes", "30 Minutes", 30 * 60, "0.00", 1, 10),
-        ("rate-1-hour", "1 Hour", 60 * 60, "0.00", 1, 20),
-        ("rate-2-hours", "2 Hours", 2 * 60 * 60, "0.00", 1, 30),
-        ("rate-overnight", "Overnight", 8 * 60 * 60, "0.00", 1, 40),
+        ("rate-30-minutes", "30 Minutes", 30 * 60, "0.00", 1, 10, "package"),
+        ("rate-1-hour", "1 Hour", 60 * 60, "0.00", 1, 20, "package"),
+        ("rate-2-hours", "2 Hours", 2 * 60 * 60, "0.00", 1, 30, "package"),
+        ("rate-overnight", "Overnight", 8 * 60 * 60, "0.00", 1, 40, "package"),
     ]
     connection.executemany(
         """
@@ -73,15 +139,55 @@ def seed_default_rates(connection: sqlite3.Connection) -> None:
             price,
             is_active,
             sort_order,
+            rate_type,
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (*rate, now, now)
             for rate in defaults
         ],
+    )
+
+
+def seed_default_metered_rate(connection: sqlite3.Connection) -> None:
+    existing_count = connection.execute(
+        "SELECT COUNT(*) FROM rate_profiles WHERE rate_type = 'metered'"
+    ).fetchone()[0]
+    if existing_count:
+        return
+
+    now = __import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc
+    ).isoformat()
+    connection.execute(
+        """
+        INSERT INTO rate_profiles (
+            rate_id,
+            name,
+            duration_seconds,
+            price,
+            is_active,
+            sort_order,
+            rate_type,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "rate-regular-metered",
+            "Regular Rate",
+            5 * 60,
+            "1.00",
+            1,
+            0,
+            "metered",
+            now,
+            now,
+        ),
     )
 
 
@@ -96,10 +202,19 @@ def initialize_database() -> None:
                 price TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 sort_order INTEGER NOT NULL DEFAULT 0,
+                rate_type TEXT NOT NULL DEFAULT 'package' CHECK (
+                    rate_type IN ('metered', 'package')
+                ),
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
+        )
+        add_column_if_missing(
+            connection,
+            "rate_profiles",
+            "rate_type",
+            "TEXT NOT NULL DEFAULT 'package'",
         )
         connection.execute(
             """
@@ -163,8 +278,10 @@ def initialize_database() -> None:
                         'time_added',
                         'session_completed',
                         'session_ended_manually',
-                        'session_cancelled',
-                        'command_failed'
+                    'session_cancelled',
+                    'command_failed',
+                    'payment_recorded',
+                    'payment_voided'
                     )
                 ),
                 seconds INTEGER,
@@ -173,13 +290,37 @@ def initialize_database() -> None:
                 rate_id TEXT,
                 rate_name_snapshot TEXT,
                 amount TEXT,
+                payment_id TEXT,
+                payment_method TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
             """
         )
+        ensure_session_events_accept_payment_events(connection)
         add_column_if_missing(connection, "session_events", "rate_id", "TEXT")
         add_column_if_missing(connection, "session_events", "rate_name_snapshot", "TEXT")
         add_column_if_missing(connection, "session_events", "amount", "TEXT")
+        add_column_if_missing(connection, "session_events", "payment_id", "TEXT")
+        add_column_if_missing(connection, "session_events", "payment_method", "TEXT")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payments (
+                payment_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                payment_method TEXT NOT NULL CHECK (
+                    payment_method IN ('cash', 'gcash', 'maya', 'other')
+                ),
+                cash_received TEXT,
+                change_given TEXT,
+                reference_number TEXT,
+                notes TEXT,
+                status TEXT NOT NULL CHECK (status IN ('completed', 'voided')),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+            """
+        )
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_sessions_pc_status
@@ -194,8 +335,22 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_payments_session_status
+            ON payments (session_id, status)
+            """
+        )
+        connection.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_rate_profiles_active_sort
             ON rate_profiles (is_active, sort_order)
             """
         )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_metered_rate
+            ON rate_profiles (rate_type)
+            WHERE rate_type = 'metered' AND is_active = 1
+            """
+        )
         seed_default_rates(connection)
+        seed_default_metered_rate(connection)

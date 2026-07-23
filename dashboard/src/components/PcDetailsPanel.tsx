@@ -1,5 +1,5 @@
 import styles from "@/app/page.module.css";
-import { formatDateTime, formatDuration } from "@/lib/time";
+import { formatDateTime, formatMoney, formatTimer } from "@/lib/time";
 import type { PcSummary } from "@/lib/types";
 
 interface PcDetailsPanelProps {
@@ -39,8 +39,40 @@ export function PcDetailsPanel({ pc, onClose }: PcDetailsPanelProps) {
           </div>
           <div className={styles.detailRow}>
             <span>Remaining</span>
-            <strong>{formatDuration(pc.remaining_seconds)}</strong>
+            <strong>{formatTimer(pc.remaining_seconds)}</strong>
           </div>
+          {pc.active_session_id ? (
+            <>
+              <div className={styles.detailRow}>
+                <span>Rate</span>
+                <strong>{pc.rate_name_snapshot ?? "Custom Time"}</strong>
+              </div>
+              <div className={styles.detailRow}>
+                <span>Base amount</span>
+                <strong>{formatMoney(pc.base_amount)}</strong>
+              </div>
+              <div className={styles.detailRow}>
+                <span>Additional</span>
+                <strong>{formatMoney(pc.additional_amount)}</strong>
+              </div>
+              <div className={styles.detailRow}>
+                <span>Total</span>
+                <strong>{formatMoney(pc.total_amount)}</strong>
+              </div>
+              <div className={styles.detailRow}>
+                <span>Paid</span>
+                <strong>{formatMoney(pc.total_paid)}</strong>
+              </div>
+              <div className={styles.detailRow}>
+                <span>Balance due</span>
+                <strong>{formatMoney(pc.balance_due)}</strong>
+              </div>
+              <div className={styles.detailRow}>
+                <span>Payment status</span>
+                <strong>{pc.payment_status}</strong>
+              </div>
+            </>
+          ) : null}
         </dl>
         <div className={styles.dialogActions}>
           <button className={styles.secondaryButton} onClick={onClose}>

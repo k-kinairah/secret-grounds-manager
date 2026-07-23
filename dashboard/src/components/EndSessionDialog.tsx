@@ -1,5 +1,5 @@
 import styles from "@/app/page.module.css";
-import { formatDuration } from "@/lib/time";
+import { formatTimer } from "@/lib/time";
 import type { PcSummary } from "@/lib/types";
 
 interface EndSessionDialogProps {
@@ -27,7 +27,7 @@ export function EndSessionDialog({
         <p>
           End the current session on <strong>{pc.pc_name}</strong>?
         </p>
-        <p>Remaining time: {formatDuration(pc.remaining_seconds)}</p>
+        <p>Remaining time: {formatTimer(pc.remaining_seconds)}</p>
         <p>The client will lock immediately after the command completes.</p>
         <div className={styles.dialogActions}>
           <button className={styles.secondaryButton} disabled={isLoading} onClick={onCancel}>

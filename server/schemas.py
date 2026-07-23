@@ -12,6 +12,20 @@ def normalize_money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"))
 
 
+def normalize_positive_money(value: Decimal) -> Decimal:
+    normalized_value = normalize_money(value)
+    if normalized_value <= Decimal("0.00"):
+        raise ValueError("Amount must be greater than zero")
+
+    return normalized_value
+
+
+RateType = Literal["metered", "package"]
+PaymentMethod = Literal["cash", "gcash", "maya", "other"]
+PaymentStatus = Literal["completed", "voided"]
+BillingPaymentStatus = Literal["unpaid", "partially_paid", "paid", "overpaid"]
+
+
 class PCRegistration(BaseModel):
     pc_name: str = Field(..., min_length=1)
     ip_address: str = Field(..., min_length=1)
@@ -38,6 +52,13 @@ class PCDashboardRecord(BaseModel):
     active_session_id: str | None = None
     scheduled_end_at: datetime | None = None
     remaining_seconds: int | None = None
+    rate_name_snapshot: str | None = None
+    base_amount: Decimal = Decimal("0.00")
+    additional_amount: Decimal = Decimal("0.00")
+    total_amount: Decimal = Decimal("0.00")
+    total_paid: Decimal = Decimal("0.00")
+    balance_due: Decimal = Decimal("0.00")
+    payment_status: BillingPaymentStatus = "unpaid"
 
 
 class PCRegistrationResponse(PCRecord):
@@ -80,6 +101,8 @@ SessionEventType = Literal[
     "session_ended_manually",
     "session_cancelled",
     "command_failed",
+    "payment_recorded",
+    "payment_voided",
 ]
 
 
@@ -101,6 +124,9 @@ class SessionRecord(BaseModel):
     base_amount: Decimal = Decimal("0.00")
     additional_amount: Decimal = Decimal("0.00")
     total_amount: Decimal = Decimal("0.00")
+    total_paid: Decimal = Decimal("0.00")
+    balance_due: Decimal = Decimal("0.00")
+    payment_status: BillingPaymentStatus = "unpaid"
 
 
 class SessionEventRecord(BaseModel):
@@ -113,17 +139,31 @@ class SessionEventRecord(BaseModel):
     rate_id: str | None = None
     rate_name_snapshot: str | None = None
     amount: Decimal | None = None
+    payment_id: str | None = None
+    payment_method: PaymentMethod | None = None
 
 
 class StartSessionRequest(BaseModel):
     pc_name: str = Field(..., min_length=1)
     duration_seconds: int | None = Field(default=None, gt=0)
     rate_id: str | None = None
+    amount: Decimal | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal | None) -> Decimal | None:
+        return normalize_positive_money(value) if value is not None else None
 
 
 class AddTimeRequest(BaseModel):
     seconds: int | None = Field(default=None, gt=0)
     rate_id: str | None = None
+    amount: Decimal | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal | None) -> Decimal | None:
+        return normalize_positive_money(value) if value is not None else None
 
 
 class SessionCommandResponse(BaseModel):
@@ -157,6 +197,7 @@ class RateProfile(BaseModel):
     name: str
     duration_seconds: int
     price: Decimal
+    rate_type: RateType = "package"
     is_active: bool
     sort_order: int
     created_at: datetime
@@ -167,6 +208,7 @@ class RateProfileCreate(BaseModel):
     name: str = Field(..., min_length=1)
     duration_seconds: int = Field(..., gt=0)
     price: Decimal
+    rate_type: RateType = "package"
     sort_order: int = 0
     is_active: bool = True
 
@@ -180,6 +222,7 @@ class RateProfileUpdate(BaseModel):
     name: str = Field(..., min_length=1)
     duration_seconds: int = Field(..., gt=0)
     price: Decimal
+    rate_type: RateType = "package"
     sort_order: int = 0
 
     @field_validator("price")
@@ -190,3 +233,65 @@ class RateProfileUpdate(BaseModel):
 
 class RateStatusUpdate(BaseModel):
     is_active: bool
+
+
+class CalculateTimeRequest(BaseModel):
+    amount: Decimal
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+
+class CalculatedTimeResponse(BaseModel):
+    amount: Decimal
+    duration_seconds: int
+    rate_name: str
+    rate_snapshot: str
+
+
+class PaymentRecord(BaseModel):
+    payment_id: str
+    session_id: str
+    amount: Decimal
+    payment_method: PaymentMethod
+    cash_received: Decimal | None = None
+    change_given: Decimal | None = None
+    reference_number: str | None = None
+    notes: str | None = None
+    status: PaymentStatus
+    created_at: datetime
+
+
+class PaymentCreateRequest(BaseModel):
+    payment_method: PaymentMethod
+    amount: Decimal
+    cash_received: Decimal | None = None
+    reference_number: str | None = None
+    notes: str | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+    @field_validator("cash_received")
+    @classmethod
+    def validate_cash_received(cls, value: Decimal | None) -> Decimal | None:
+        return normalize_positive_money(value) if value is not None else None
+
+
+class VoidPaymentRequest(BaseModel):
+    reason: str = Field(..., min_length=1)
+
+
+class BillingSummary(BaseModel):
+    session: SessionRecord
+    base_amount: Decimal
+    additional_amount: Decimal
+    total_amount: Decimal
+    total_paid: Decimal
+    balance_due: Decimal
+    payment_status: BillingPaymentStatus
+    payments: list[PaymentRecord]

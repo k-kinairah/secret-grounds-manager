@@ -11,6 +11,9 @@ from server.connection_manager import ClientConnectionManager
 from server.database import initialize_database
 from server.schemas import (
     AddTimeRequest,
+    BillingSummary,
+    CalculatedTimeResponse,
+    CalculateTimeRequest,
     ClientEvent,
     ClientCommand,
     PCHeartbeat,
@@ -19,6 +22,7 @@ from server.schemas import (
     PCRegistration,
     PCRegistrationResponse,
     PCSessionStateResponse,
+    PaymentCreateRequest,
     RateProfile,
     RateProfileCreate,
     RateProfileUpdate,
@@ -29,7 +33,11 @@ from server.schemas import (
     StartSessionRequest,
     TestCommandRequest,
     TestCommandResponse,
+    VoidPaymentRequest,
 )
+from server.billing_service import BillingService
+from server.payment_repository import PaymentRepository
+from server.rate_calculator import calculate_metered_time
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
 from server.rate_repository import RateRepository
@@ -39,6 +47,8 @@ from server.time_utils import current_utc_time
 pc_registry: dict[str, PCRecord] = {}
 connection_manager = ClientConnectionManager()
 session_repository = SessionRepository()
+payment_repository = PaymentRepository()
+billing_service = BillingService(session_repository, payment_repository)
 rate_repository = RateRepository()
 session_service = SessionService(
     repository=session_repository,
@@ -130,7 +140,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_cors_origins(),
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "PATCH"],
     allow_headers=["Content-Type"],
 )
 
@@ -226,6 +236,9 @@ def get_registered_pcs() -> list[PCDashboardRecord]:
                 0,
                 int((active_session.scheduled_end_at - now).total_seconds()),
             )
+            billing = billing_service.summarize_session(active_session)
+        else:
+            billing = None
 
         dashboard_records.append(
             PCDashboardRecord(
@@ -243,6 +256,29 @@ def get_registered_pcs() -> list[PCDashboardRecord]:
                     else None
                 ),
                 remaining_seconds=remaining_seconds,
+                rate_name_snapshot=(
+                    active_session.rate_name_snapshot if active_session is not None else None
+                ),
+                base_amount=(
+                    active_session.base_amount
+                    if active_session is not None
+                    else 0
+                ),
+                additional_amount=(
+                    active_session.additional_amount
+                    if active_session is not None
+                    else 0
+                ),
+                total_amount=(
+                    active_session.total_amount
+                    if active_session is not None
+                    else 0
+                ),
+                total_paid=(billing.total_paid if billing is not None else 0),
+                balance_due=(billing.balance_due if billing is not None else 0),
+                payment_status=(
+                    billing.payment_status if billing is not None else "unpaid"
+                ),
             )
         )
 
@@ -325,6 +361,7 @@ async def start_session(request: StartSessionRequest) -> SessionCommandResponse:
         request.pc_name,
         request.duration_seconds,
         request.rate_id,
+        request.amount,
     )
 
 
@@ -334,7 +371,12 @@ async def add_time_to_session(
     request: AddTimeRequest,
 ) -> SessionCommandResponse:
     mark_stale_pcs_offline()
-    return await session_service.add_time(session_id, request.seconds, request.rate_id)
+    return await session_service.add_time(
+        session_id,
+        request.seconds,
+        request.rate_id,
+        request.amount,
+    )
 
 
 @app.post("/sessions/{session_id}/end", response_model=SessionCommandResponse)
@@ -345,12 +387,18 @@ async def end_session(session_id: str) -> SessionCommandResponse:
 
 @app.get("/sessions/active", response_model=list[SessionRecord])
 def get_active_sessions() -> list[SessionRecord]:
-    return session_repository.list_active_sessions()
+    return [
+        billing_service.enrich_session(session)
+        for session in session_repository.list_active_sessions()
+    ]
 
 
 @app.get("/sessions/history", response_model=list[SessionRecord])
 def get_session_history() -> list[SessionRecord]:
-    return session_repository.list_history()
+    return [
+        billing_service.enrich_session(session)
+        for session in session_repository.list_history()
+    ]
 
 
 @app.get("/sessions/{session_id}", response_model=SessionRecord)
@@ -359,12 +407,46 @@ def get_session(session_id: str) -> SessionRecord:
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return session
+    return billing_service.enrich_session(session)
+
+
+@app.get("/sessions/{session_id}/billing", response_model=BillingSummary)
+def get_session_billing(session_id: str) -> BillingSummary:
+    return billing_service.get_billing(session_id)
+
+
+@app.post("/sessions/{session_id}/payments", response_model=BillingSummary)
+def record_payment(
+    session_id: str,
+    request: PaymentCreateRequest,
+) -> BillingSummary:
+    return billing_service.record_payment(session_id, request)
+
+
+@app.post("/payments/{payment_id}/void", response_model=BillingSummary)
+def void_payment(payment_id: str, request: VoidPaymentRequest) -> BillingSummary:
+    return billing_service.void_payment(payment_id, request.reason)
 
 
 @app.get("/rates", response_model=list[RateProfile])
 def get_rates(include_inactive: bool = False) -> list[RateProfile]:
     return rate_repository.list_rates(include_inactive=include_inactive)
+
+
+@app.get("/rates/metered", response_model=RateProfile)
+def get_metered_rate() -> RateProfile:
+    rate = rate_repository.get_active_metered_rate()
+    if rate is None:
+        raise HTTPException(status_code=404, detail="Active metered rate is missing")
+    return rate
+
+
+@app.post("/rates/calculate-time", response_model=CalculatedTimeResponse)
+def calculate_time(request: CalculateTimeRequest) -> CalculatedTimeResponse:
+    rate = rate_repository.get_active_metered_rate()
+    if rate is None:
+        raise HTTPException(status_code=409, detail="Active metered rate is missing")
+    return calculate_metered_time(request.amount, rate)
 
 
 @app.post("/rates", response_model=RateProfile)

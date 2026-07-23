@@ -1,78 +1,306 @@
 .page {
-  padding: 24px;
+  display: grid;
+  gap: 22px;
+  margin: 0 auto;
+  max-width: 1440px;
+  padding: 36px 28px 48px;
 }
 
 .topBar {
-  align-items: center;
+  align-items: end;
   display: flex;
+  gap: 18px;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
 }
 
 .topBar h1 {
+  color: #0f172a;
+  font-size: clamp(28px, 3vw, 40px);
+  letter-spacing: 0;
   margin: 0;
 }
 
+.topBar p {
+  color: #64748b;
+  margin: 6px 0 0;
+}
+
 .filters {
-  background: var(--panel);
+  background: linear-gradient(180deg, rgba(24, 31, 48, 0.98), rgba(14, 20, 33, 0.98));
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
   display: grid;
-  gap: 12px;
+  gap: 14px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-bottom: 16px;
-  padding: 14px;
+  padding: 18px;
 }
 
 .field {
+  color: var(--muted);
   display: grid;
-  gap: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 8px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .field input,
 .field select {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 9px 10px;
+  background: #111827;
+  border: 1px solid #2d3a52;
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  letter-spacing: 0;
+  min-height: 42px;
+  padding: 10px 12px;
+  text-transform: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.18);
+  outline: none;
 }
 
 .message {
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
-  border-radius: 8px;
-  color: #9a3412;
-  margin-bottom: 16px;
-  padding: 12px 14px;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.34);
+  border-radius: 10px;
+  color: #fde68a;
+  padding: 13px 15px;
 }
 
 .tableWrap {
-  background: var(--panel);
+  background: linear-gradient(180deg, rgba(24, 31, 48, 0.98), rgba(14, 20, 33, 0.98));
   border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow-x: auto;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  max-height: min(68vh, 760px);
+  overflow: auto;
 }
 
 .table {
-  border-collapse: collapse;
-  min-width: 920px;
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 1180px;
   width: 100%;
 }
 
 .table th,
 .table td {
-  border-bottom: 1px solid var(--line);
-  padding: 11px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  padding: 14px 16px;
   text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 .table th {
+  background: rgba(10, 15, 26, 0.98);
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  position: sticky;
+  text-transform: uppercase;
+  top: 0;
+  z-index: 1;
 }
 
-@media (max-width: 760px) {
+.table tbody tr {
+  transition: background-color 160ms ease;
+}
+
+.table tbody tr:hover {
+  background: rgba(45, 212, 191, 0.07);
+}
+
+.table td {
+  color: #dbe7ff;
+  font-size: 14px;
+}
+
+.statusBadge {
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 900;
+  justify-content: center;
+  min-width: 108px;
+  padding: 6px 10px;
+  text-transform: capitalize;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.statusActive {
+  background: rgba(59, 130, 246, 0.16);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  color: #93c5fd;
+}
+
+.statusCompleted {
+  background: rgba(34, 197, 94, 0.14);
+  border: 1px solid rgba(34, 197, 94, 0.36);
+  color: #86efac;
+}
+
+.statusEnded {
+  background: rgba(251, 146, 60, 0.14);
+  border: 1px solid rgba(251, 146, 60, 0.38);
+  color: #fed7aa;
+}
+
+.statusCancelled,
+.statusFailed {
+  background: rgba(148, 163, 184, 0.13);
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  color: #cbd5e1;
+}
+
+.paymentUnpaid {
+  background: rgba(239, 68, 68, 0.13);
+  border: 1px solid rgba(239, 68, 68, 0.34);
+  color: #fecaca;
+}
+
+.paymentPartial {
+  background: rgba(251, 146, 60, 0.14);
+  border: 1px solid rgba(251, 146, 60, 0.36);
+  color: #fed7aa;
+}
+
+.paymentPaid {
+  background: rgba(34, 197, 94, 0.14);
+  border: 1px solid rgba(34, 197, 94, 0.36);
+  color: #86efac;
+}
+
+.paymentOverpaid {
+  background: rgba(59, 130, 246, 0.16);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  color: #93c5fd;
+}
+
+.emptyState {
+  color: var(--muted);
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  text-align: center;
+}
+
+.tableButton {
+  background: rgba(59, 130, 246, 0.14);
+  border: 1px solid rgba(59, 130, 246, 0.34);
+  border-radius: 8px;
+  color: #bfdbfe;
+  cursor: pointer;
+  font-weight: 900;
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
+.tableButton:hover {
+  background: rgba(59, 130, 246, 0.24);
+}
+
+.overlay {
+  align-items: center;
+  background: rgb(15 23 42 / 0.62);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 30;
+}
+
+.dialog {
+  background: #111827;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 10px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 0.34);
+  max-width: 680px;
+  padding: 22px;
+  width: 100%;
+}
+
+.dialog h2 {
+  color: #f8fafc;
+  margin: 0 0 16px;
+}
+
+.billingList {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 0 18px;
+}
+
+.billingList div {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.billingList span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.billingList strong {
+  color: #f8fafc;
+}
+
+.paymentList {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.paymentRow {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  color: #dbeafe;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr 1fr 1.5fr;
+  padding: 10px 12px;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 860px) {
+  .page {
+    padding: 28px 18px 40px;
+  }
+
+  .topBar {
+    align-items: start;
+    flex-direction: column;
+  }
+
   .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .billingList,
+  .paymentRow {
     grid-template-columns: 1fr;
   }
 }
