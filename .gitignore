@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.vscode/
+node_modules/
+.next/
+dashboard/node_modules/
+dashboard/.next/
+*.tsbuildinfo
+dashboard/dashboard-dev.log
+*.sqlite3
+client_session_recovery.json
+client_session_recovery.json.tmp

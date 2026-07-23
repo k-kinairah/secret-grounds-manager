@@ -1,0 +1,96 @@
+.page {
+  padding: 24px;
+}
+
+.header {
+  margin-bottom: 18px;
+}
+
+.header h1 {
+  margin: 0 0 4px;
+}
+
+.message {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  color: #9a3412;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 360px minmax(0, 1fr);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.form {
+  display: grid;
+  gap: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field input {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 10px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.button,
+.secondaryButton {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.button {
+  background: var(--active);
+  color: #ffffff;
+}
+
+.secondaryButton {
+  background: #eef4ff;
+  border-color: #c7d7fe;
+  color: #1849a9;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.table th,
+.table td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  text-align: left;
+}
+
+.table th {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 860px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

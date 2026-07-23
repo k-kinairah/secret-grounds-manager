@@ -1,0 +1,261 @@
+.page {
+  padding: 24px;
+}
+
+.topBar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.brandBlock h1 {
+  font-size: 28px;
+  margin: 0;
+}
+
+.brandBlock p {
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+
+.serverState {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: right;
+}
+
+.indicator {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 10px;
+}
+
+.connected {
+  color: var(--available);
+}
+
+.disconnected {
+  color: var(--danger);
+}
+
+.summaryGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.summaryCard {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.summaryLabel {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.summaryValue {
+  font-size: 30px;
+  font-weight: 800;
+}
+
+.statusMessage {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  color: #9a3412;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+}
+
+.pcGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.pcCard {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--offline);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: left;
+}
+
+.pcCardActive {
+  border-left-color: var(--active);
+}
+
+.pcCardAvailable {
+  border-left-color: var(--available);
+}
+
+.pcCardOffline {
+  border-left-color: var(--offline);
+  color: var(--offline);
+}
+
+.pcCardWarning {
+  border-left-color: var(--warning);
+}
+
+.pcHeader {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.pcName {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.statusPill {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.detailList {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.detailRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.detailRow span:first-child {
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.primaryButton {
+  background: var(--active);
+  color: #ffffff;
+}
+
+.secondaryButton {
+  background: #eef4ff;
+  border-color: #c7d7fe;
+  color: #1849a9;
+}
+
+.dangerButton {
+  background: #fff1f0;
+  border-color: #fecdca;
+  color: var(--danger);
+}
+
+.overlay {
+  align-items: center;
+  background: rgb(17 24 39 / 0.45);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 18px;
+  position: fixed;
+  z-index: 20;
+}
+
+.dialog,
+.sidePanel {
+  background: var(--panel);
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgb(17 24 39 / 0.25);
+  max-width: 480px;
+  padding: 20px;
+  width: 100%;
+}
+
+.sidePanel {
+  margin-left: auto;
+  max-width: 420px;
+  min-height: 100%;
+}
+
+.dialog h2,
+.sidePanel h2 {
+  margin: 0 0 14px;
+}
+
+.optionGrid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.field input,
+.field select {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 10px;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 16px;
+  }
+
+  .topBar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .serverState {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .summaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

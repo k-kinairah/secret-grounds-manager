@@ -1,0 +1,55 @@
+:root {
+  color-scheme: light;
+  --background: #f5f7fa;
+  --panel: #ffffff;
+  --text: #172033;
+  --muted: #667085;
+  --line: #d8dee8;
+  --active: #155eef;
+  --available: #07845f;
+  --warning: #b54708;
+  --offline: #697586;
+  --danger: #c4320a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.appShell {
+  align-items: center;
+  background: #111827;
+  display: flex;
+  gap: 18px;
+  min-height: 48px;
+  padding: 0 24px;
+}
+
+.appShell a {
+  color: #f9fafb;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
