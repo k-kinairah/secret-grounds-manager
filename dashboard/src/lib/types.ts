@@ -1,7 +1,9 @@
 export type ConnectionStatus = "online" | "offline";
-export type DashboardSessionStatus = "idle" | "active" | "unknown";
+export type DashboardSessionStatus = "idle" | "active" | "ending" | "settlement_pending" | "unknown";
 export type SessionStatus =
   | "active"
+  | "ending"
+  | "settlement_pending"
   | "completed"
   | "ended_manually"
   | "cancelled"
@@ -10,6 +12,7 @@ export type PaymentStatus = "completed" | "voided";
 export type PaymentMethod = "cash" | "gcash" | "maya" | "other";
 export type BillingPaymentStatus = "unpaid" | "partially_paid" | "paid" | "overpaid";
 export type SessionMode = "prepaid" | "open_time";
+export type UserRole = "owner" | "admin" | "cashier";
 
 export interface PcSummary {
   pc_name: string;
@@ -18,6 +21,7 @@ export interface PcSummary {
   last_seen: string;
   session_status: DashboardSessionStatus;
   active_session_id: string | null;
+  started_at: string | null;
   scheduled_end_at: string | null;
   remaining_seconds: number | null;
   rate_name_snapshot: string | null;
@@ -31,7 +35,13 @@ export interface PcSummary {
   actual_elapsed_seconds: number | null;
   billed_seconds: number | null;
   final_computed_amount: string | null;
+  metered_rate_price_snapshot: string | null;
+  metered_rate_duration_seconds_snapshot: number | null;
+  estimated_total_amount: string | null;
+  estimated_balance_due: string | null;
   settlement_pending: boolean;
+  recovery_required: boolean;
+  recovery_reason: string | null;
 }
 
 export interface SessionRecord {
@@ -59,6 +69,10 @@ export interface SessionRecord {
   actual_elapsed_seconds: number | null;
   billed_seconds: number | null;
   final_computed_amount: string | null;
+  metered_rate_price_snapshot: string | null;
+  metered_rate_duration_seconds_snapshot: number | null;
+  estimated_total_amount: string | null;
+  estimated_balance_due: string | null;
   settlement_pending: boolean;
 }
 
@@ -69,6 +83,23 @@ export interface SessionCommandResponse {
     status: "received" | "completed" | "failed";
     message: string | null;
   }>;
+}
+
+export interface ForceEndSessionResponse {
+  session: SessionRecord;
+  command: {
+    command_id: string;
+    type: string;
+    payload: Record<string, unknown>;
+    created_at: string;
+  } | null;
+  acknowledgements: Array<{
+    command_id: string;
+    status: "received" | "completed" | "failed";
+    message: string | null;
+  }>;
+  forced: boolean;
+  reason: string;
 }
 
 export interface DashboardSummary {
@@ -143,4 +174,31 @@ export interface BillingSummary {
   balance_due: string;
   payment_status: BillingPaymentStatus;
   payments: PaymentRecord[];
+}
+
+export interface CurrentUser {
+  user_id: string;
+  username: string;
+  display_name: string;
+  role: UserRole;
+}
+
+export interface UserAdminRecord extends CurrentUser {
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  last_login_at: string | null;
+}
+
+export interface UserCreateInput {
+  username: string;
+  display_name: string;
+  password: string;
+  role: UserRole;
+}
+
+export interface UserUpdateInput {
+  username: string;
+  display_name: string;
+  role: UserRole;
 }

@@ -1,17 +1,19 @@
 import asyncio
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_CEILING
+from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import HTTPException
 
 from server.connection_manager import ClientConnectionManager
 from server.billing_service import BillingService
+from server.billing_service import calculate_open_time_estimate
 from server.rate_calculator import calculate_metered_time
 from server.rate_repository import RateRepository
 from server.schemas import (
     ClientCommand,
     CommandAcknowledgement,
+    ForceEndSessionResponse,
     PCRecord,
     SessionCommandResponse,
     SessionEventRecord,
@@ -65,6 +67,7 @@ class SessionService:
         amount: Decimal | None = None,
         payment_id: str | None = None,
         payment_method: str | None = None,
+        performed_by_user_id: str | None = None,
     ) -> SessionEventRecord:
         event = SessionEventRecord(
             event_id=str(uuid4()),
@@ -78,6 +81,7 @@ class SessionService:
             amount=amount,
             payment_id=payment_id,
             payment_method=payment_method,  # type: ignore[arg-type]
+            performed_by_user_id=performed_by_user_id,
         )
         return self.repository.add_event(event)
 
@@ -145,6 +149,10 @@ class SessionService:
         pc_name: str,
         command: ClientCommand,
     ) -> list[CommandAcknowledgement]:
+        print(
+            "Sending client command payload: "
+            f"pc_name={pc_name}, command={command.model_dump(mode='json')}"
+        )
         acknowledgements = await asyncio.wait_for(
             self.connection_manager.send_command(pc_name, command),
             timeout=self.command_timeout_seconds,
@@ -158,9 +166,56 @@ class SessionService:
 
         final_acknowledgement = acknowledgements[-1]
         if final_acknowledgement.status != "completed":
+            print(
+                "Client rejected command: "
+                f"command_id={final_acknowledgement.command_id}, "
+                f"reason={final_acknowledgement.message}"
+            )
             raise RuntimeError(final_acknowledgement.message or "Command failed")
 
         return acknowledgements
+
+    def finalize_ended_session(
+        self,
+        session: SessionRecord,
+        ended_reason: str,
+        actor_user_id: str | None,
+    ) -> SessionRecord:
+        ended_at = current_utc_time()
+        next_status = (
+            "settlement_pending"
+            if session.session_mode == "open_time"
+            else "completed"
+        )
+        update_values: dict[str, object] = {
+            "status": next_status,
+            "ended_at": ended_at,
+            "ended_reason": ended_reason,
+            "ended_by_user_id": actor_user_id,
+        }
+        if session.session_mode == "open_time":
+            actual_elapsed_seconds, billed_seconds, final_amount = (
+                self.compute_open_time_final_amount(session, ended_at)
+            )
+            update_values.update(
+                {
+                    "actual_elapsed_seconds": actual_elapsed_seconds,
+                    "billed_seconds": billed_seconds,
+                    "final_computed_amount": final_amount,
+                    "base_amount": final_amount,
+                    "total_amount": final_amount,
+                    "total_seconds": actual_elapsed_seconds,
+                    "settlement_pending": True,
+                }
+            )
+
+        updated_session = session.model_copy(update=update_values)
+        self.repository.update_session(updated_session)
+        return (
+            self.billing_service.enrich_session(updated_session)
+            if self.billing_service is not None
+            else updated_session
+        )
 
     async def start_session(
         self,
@@ -168,6 +223,7 @@ class SessionService:
         duration_seconds: int | None = None,
         rate_id: str | None = None,
         amount: Decimal | None = None,
+        actor_user_id: str | None = None,
     ) -> SessionCommandResponse:
         duration_seconds, resolved_rate_id, rate_name_snapshot, base_amount = (
             self.resolve_session_package(rate_id, duration_seconds, amount, "duration_seconds")
@@ -202,6 +258,7 @@ class SessionService:
             additional_amount=Decimal("0.00"),
             total_amount=base_amount,
             session_mode="prepaid",
+            created_by_user_id=actor_user_id,
         )
         self.repository.create_session(session)
         self.create_event(
@@ -211,6 +268,7 @@ class SessionService:
             rate_id=resolved_rate_id,
             rate_name_snapshot=rate_name_snapshot,
             amount=base_amount,
+            performed_by_user_id=actor_user_id,
         )
 
         command = self.create_command(
@@ -240,6 +298,7 @@ class SessionService:
                 session.session_id,
                 "command_failed",
                 message=str(error),
+                performed_by_user_id=actor_user_id,
             )
             raise HTTPException(
                 status_code=502,
@@ -262,6 +321,7 @@ class SessionService:
         seconds: int | None = None,
         rate_id: str | None = None,
         amount: Decimal | None = None,
+        actor_user_id: str | None = None,
     ) -> SessionCommandResponse:
         seconds, resolved_rate_id, rate_name_snapshot, amount = (
             self.resolve_session_package(rate_id, seconds, amount, "seconds")
@@ -270,7 +330,7 @@ class SessionService:
         session = self.repository.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if session.status != "active":
+        if session.status not in {"active", "ending"}:
             raise HTTPException(status_code=409, detail="Session is not active")
         if session.session_mode == "open_time":
             raise HTTPException(status_code=400, detail="Open-time sessions do not support add time")
@@ -290,6 +350,7 @@ class SessionService:
                 session.session_id,
                 "command_failed",
                 message=str(error),
+                performed_by_user_id=actor_user_id,
             )
             raise HTTPException(
                 status_code=502,
@@ -314,10 +375,17 @@ class SessionService:
             rate_id=resolved_rate_id,
             rate_name_snapshot=rate_name_snapshot,
             amount=amount,
+            performed_by_user_id=actor_user_id,
+        )
+
+        response_session = (
+            self.billing_service.enrich_session(updated_session)
+            if self.billing_service is not None
+            else updated_session
         )
 
         return SessionCommandResponse(
-            session=updated_session,
+            session=response_session,
             command=command,
             acknowledgements=acknowledgements,
         )
@@ -329,6 +397,7 @@ class SessionService:
         duration_seconds: int | None = None,
         rate_id: str | None = None,
         amount: Decimal | None = None,
+        actor_user_id: str | None = None,
     ) -> SessionCommandResponse:
         if self.billing_service is None:
             raise HTTPException(status_code=500, detail="Billing service is unavailable")
@@ -366,6 +435,7 @@ class SessionService:
             additional_amount=Decimal("0.00"),
             total_amount=base_amount,
             session_mode="prepaid",
+            created_by_user_id=actor_user_id,
         )
         self.repository.create_session(session)
         billing = self.billing_service.record_payment(
@@ -373,6 +443,7 @@ class SessionService:
             payment,
             action_type="session_start",
             max_amount=base_amount,
+            actor_user_id=actor_user_id,
         )
         recorded_payment = billing.payments[-1]
         self.create_event(
@@ -382,6 +453,7 @@ class SessionService:
             amount=recorded_payment.amount,
             payment_id=recorded_payment.payment_id,
             payment_method=recorded_payment.payment_method,
+            performed_by_user_id=actor_user_id,
         )
 
         command = self.create_command(
@@ -414,6 +486,7 @@ class SessionService:
                 message=str(error),
                 payment_id=recorded_payment.payment_id,
                 payment_method=recorded_payment.payment_method,
+                performed_by_user_id=actor_user_id,
             )
             raise HTTPException(
                 status_code=502,
@@ -437,6 +510,7 @@ class SessionService:
         seconds: int | None = None,
         rate_id: str | None = None,
         amount: Decimal | None = None,
+        actor_user_id: str | None = None,
     ) -> SessionCommandResponse:
         if self.billing_service is None:
             raise HTTPException(status_code=500, detail="Billing service is unavailable")
@@ -470,6 +544,7 @@ class SessionService:
             payment,
             action_type="add_time",
             max_amount=amount_due,
+            actor_user_id=actor_user_id,
         )
         recorded_payment = billing.payments[-1]
         self.create_event(
@@ -479,6 +554,7 @@ class SessionService:
             amount=recorded_payment.amount,
             payment_id=recorded_payment.payment_id,
             payment_method=recorded_payment.payment_method,
+            performed_by_user_id=actor_user_id,
         )
 
         command = self.create_command(
@@ -498,6 +574,7 @@ class SessionService:
                 message=str(error),
                 payment_id=recorded_payment.payment_id,
                 payment_method=recorded_payment.payment_method,
+                performed_by_user_id=actor_user_id,
             )
             raise HTTPException(
                 status_code=502,
@@ -510,7 +587,11 @@ class SessionService:
             acknowledgements=acknowledgements,
         )
 
-    async def start_open_time_session(self, pc_name: str) -> SessionCommandResponse:
+    async def start_open_time_session(
+        self,
+        pc_name: str,
+        actor_user_id: str | None = None,
+    ) -> SessionCommandResponse:
         cleaned_pc_name = pc_name.strip()
         self.require_available_client(cleaned_pc_name)
         if self.repository.get_active_session_for_pc(cleaned_pc_name) is not None:
@@ -518,6 +599,9 @@ class SessionService:
                 status_code=409,
                 detail=f"{cleaned_pc_name} already has an active session",
             )
+        metered_rate = self.rate_repository.get_active_metered_rate()
+        if metered_rate is None:
+            raise HTTPException(status_code=409, detail="Active metered rate is missing")
 
         now = current_utc_time()
         session = SessionRecord(
@@ -538,9 +622,21 @@ class SessionService:
             total_amount=Decimal("0.00"),
             session_mode="open_time",
             settlement_pending=True,
+            rate_id=metered_rate.rate_id,
+            rate_name_snapshot=(
+                f"{metered_rate.name}: {metered_rate.price} per "
+                f"{metered_rate.duration_seconds}s"
+            ),
+            metered_rate_price_snapshot=metered_rate.price,
+            metered_rate_duration_seconds_snapshot=metered_rate.duration_seconds,
+            created_by_user_id=actor_user_id,
         )
         self.repository.create_session(session)
-        self.create_event(session.session_id, "open_time_started")
+        self.create_event(
+            session.session_id,
+            "open_time_started",
+            performed_by_user_id=actor_user_id,
+        )
         command = self.create_command(
             "start_session",
             {
@@ -561,7 +657,12 @@ class SessionService:
                 }
             )
             self.repository.update_session(failed_session)
-            self.create_event(session.session_id, "command_failed", message=str(error))
+            self.create_event(
+                session.session_id,
+                "command_failed",
+                message=str(error),
+                performed_by_user_id=actor_user_id,
+            )
             raise HTTPException(
                 status_code=502,
                 detail=f"Open-time start command failed: {error}",
@@ -578,30 +679,38 @@ class SessionService:
         session: SessionRecord,
         ended_at: datetime,
     ) -> tuple[int, int, Decimal]:
-        metered_rate = self.rate_repository.get_active_metered_rate()
-        if metered_rate is None:
-            raise HTTPException(status_code=409, detail="Active metered rate is missing")
+        metered_price = session.metered_rate_price_snapshot
+        metered_duration_seconds = session.metered_rate_duration_seconds_snapshot
+        if metered_price is None or metered_duration_seconds is None:
+            metered_rate = self.rate_repository.get_active_metered_rate()
+            if metered_rate is None:
+                raise HTTPException(status_code=409, detail="Active metered rate is missing")
+            metered_price = metered_rate.price
+            metered_duration_seconds = metered_rate.duration_seconds
 
-        actual_elapsed_seconds = max(
-            1,
-            int((ended_at - session.started_at).total_seconds()),
+        return calculate_open_time_estimate(
+            session.started_at,
+            ended_at,
+            metered_price,
+            metered_duration_seconds,
         )
-        billable_units = int(
-            (Decimal(actual_elapsed_seconds) / Decimal(metered_rate.duration_seconds))
-            .to_integral_value(rounding=ROUND_CEILING)
-        )
-        billed_seconds = billable_units * metered_rate.duration_seconds
-        final_amount = metered_rate.price * Decimal(billable_units)
-        return actual_elapsed_seconds, billed_seconds, final_amount
 
-    async def end_session(self, session_id: str) -> SessionCommandResponse:
+    async def end_session(
+        self,
+        session_id: str,
+        actor_user_id: str | None = None,
+    ) -> SessionCommandResponse:
         session = self.repository.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if session.status != "active":
+        if session.status == "settlement_pending":
+            raise HTTPException(status_code=409, detail="Session is already awaiting settlement")
+        if session.status not in {"active", "ending"}:
             raise HTTPException(status_code=409, detail="Session is not active")
 
         self.require_available_client(session.pc_name)
+        ending_session = session.model_copy(update={"status": "ending"})
+        self.repository.update_session(ending_session)
         command = self.create_command(
             "end_session",
             {"session_id": session.session_id},
@@ -609,54 +718,128 @@ class SessionService:
         try:
             acknowledgements = await self.send_required_command(session.pc_name, command)
         except Exception as error:
+            self.repository.update_session(session)
             self.create_event(
                 session.session_id,
                 "command_failed",
                 message=str(error),
+                performed_by_user_id=actor_user_id,
             )
             raise HTTPException(
                 status_code=502,
                 detail=f"End session command failed: {error}",
             ) from error
 
-        updated_session = session.model_copy(
-            update={
-                "status": "ended_manually",
-                "ended_at": current_utc_time(),
-                "ended_reason": "manual_end",
-            }
+        updated_session = self.finalize_ended_session(
+            session,
+            "manual_end",
+            actor_user_id,
         )
-        if session.session_mode == "open_time":
-            ended_at = current_utc_time()
-            actual_elapsed_seconds, billed_seconds, final_amount = (
-                self.compute_open_time_final_amount(session, ended_at)
-            )
-            updated_session = session.model_copy(
-                update={
-                    "status": "ended_manually",
-                    "ended_at": ended_at,
-                    "ended_reason": "manual_end",
-                    "actual_elapsed_seconds": actual_elapsed_seconds,
-                    "billed_seconds": billed_seconds,
-                    "final_computed_amount": final_amount,
-                    "base_amount": final_amount,
-                    "total_amount": final_amount,
-                    "total_seconds": actual_elapsed_seconds,
-                    "settlement_pending": True,
-                }
-            )
-        self.repository.update_session(updated_session)
         self.create_event(
             session.session_id,
             "open_time_ended" if session.session_mode == "open_time" else "session_ended_manually",
             seconds=updated_session.actual_elapsed_seconds,
             amount=updated_session.final_computed_amount,
+            performed_by_user_id=actor_user_id,
         )
 
         return SessionCommandResponse(
             session=updated_session,
             command=command,
             acknowledgements=acknowledgements,
+        )
+
+    async def force_end_session(
+        self,
+        session_id: str,
+        actor_user_id: str | None = None,
+    ) -> ForceEndSessionResponse:
+        session = self.repository.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session.status == "settlement_pending":
+            raise HTTPException(status_code=409, detail="Session is already awaiting settlement")
+        if session.status not in {"active", "ending"}:
+            raise HTTPException(status_code=409, detail="Session is not active")
+
+        command: ClientCommand | None = None
+        acknowledgements: list[CommandAcknowledgement] = []
+        force_reason = "client_not_connected"
+        should_force = not self.connection_manager.is_connected(session.pc_name)
+
+        if not should_force:
+            command = self.create_command(
+                "end_session",
+                {"session_id": session.session_id},
+            )
+            if session.status != "ending":
+                ending_session = session.model_copy(update={"status": "ending"})
+                self.repository.update_session(ending_session)
+            try:
+                acknowledgements = await self.send_required_command(session.pc_name, command)
+                updated_session = self.finalize_ended_session(
+                    session,
+                    "manual_end",
+                    actor_user_id,
+                )
+                self.create_event(
+                    session.session_id,
+                    (
+                        "open_time_ended"
+                        if session.session_mode == "open_time"
+                        else "session_ended_manually"
+                    ),
+                    seconds=updated_session.actual_elapsed_seconds,
+                    amount=updated_session.final_computed_amount,
+                    performed_by_user_id=actor_user_id,
+                )
+                return ForceEndSessionResponse(
+                    session=updated_session,
+                    command=command,
+                    acknowledgements=acknowledgements,
+                    forced=False,
+                    reason="normal_end_completed",
+                )
+            except Exception as error:
+                force_reason = str(error)
+                should_force = force_reason in {
+                    "no_matching_local_session",
+                    "session_id_mismatch",
+                }
+                if not should_force:
+                    self.repository.update_session(session)
+
+        if not should_force:
+            self.create_event(
+                session.session_id,
+                "command_failed",
+                message=f"Force-end normal attempt failed: {force_reason}",
+                performed_by_user_id=actor_user_id,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Client did not confirm recovery-safe end: {force_reason}",
+            )
+
+        updated_session = self.finalize_ended_session(
+            session,
+            "recovery_force_end",
+            actor_user_id,
+        )
+        self.create_event(
+            session.session_id,
+            "recovery_force_end",
+            seconds=updated_session.actual_elapsed_seconds,
+            message=force_reason,
+            amount=updated_session.final_computed_amount,
+            performed_by_user_id=actor_user_id,
+        )
+        return ForceEndSessionResponse(
+            session=updated_session,
+            command=command,
+            acknowledgements=acknowledgements,
+            forced=True,
+            reason=force_reason,
         )
 
     def complete_from_client(

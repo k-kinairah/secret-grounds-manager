@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { AuthShell } from "@/components/AuthShell";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -15,12 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <nav className="appShell">
-          <Link href="/">Dashboard</Link>
-          <Link href="/history">History</Link>
-          <Link href="/rates">Rates</Link>
-        </nav>
-        {children}
+        <AuthShell>{children}</AuthShell>
       </body>
     </html>
   );

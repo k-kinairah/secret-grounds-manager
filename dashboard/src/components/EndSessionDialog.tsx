@@ -1,5 +1,5 @@
 import styles from "@/app/page.module.css";
-import { formatTimer } from "@/lib/time";
+import { formatMoney, formatTimer } from "@/lib/time";
 import type { PcSummary } from "@/lib/types";
 
 interface EndSessionDialogProps {
@@ -7,13 +7,15 @@ interface EndSessionDialogProps {
   isLoading: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  recoveryMode?: boolean;
 }
 
 export function EndSessionDialog({
   pc,
   isLoading,
   onCancel,
-  onConfirm
+  onConfirm,
+  recoveryMode = false
 }: EndSessionDialogProps) {
   return (
     <div className={styles.overlay} role="presentation">
@@ -23,18 +25,45 @@ export function EndSessionDialog({
         aria-modal="true"
         aria-label={`End ${pc.pc_name} session`}
       >
-        <h2>End Session</h2>
+        <h2>{recoveryMode ? "Resolve Session" : "End Session"}</h2>
         <p>
-          End the current session on <strong>{pc.pc_name}</strong>?
+          {recoveryMode ? "Force-end the unresolved session on " : "End the current session on "}
+          <strong>{pc.pc_name}</strong>?
         </p>
-        <p>Remaining time: {formatTimer(pc.remaining_seconds)}</p>
-        <p>The client will lock immediately after the command completes.</p>
+        {recoveryMode ? (
+          <p>
+            The client reported no matching local session, so it will remain locked. The
+            server will preserve history and calculate any final Open Time amount from
+            server timestamps.
+          </p>
+        ) : null}
+        {pc.session_mode === "open_time" ? (
+          <>
+            <p>Elapsed time: {formatTimer(pc.actual_elapsed_seconds)}</p>
+            <p>Estimated total: {formatMoney(pc.estimated_total_amount)}</p>
+            <p>
+              The server will calculate the final amount after ending, then open the
+              settlement dialog.
+            </p>
+          </>
+        ) : (
+          <>
+            <p>Remaining time: {formatTimer(pc.remaining_seconds)}</p>
+            <p>The client will lock immediately after the command completes.</p>
+          </>
+        )}
         <div className={styles.dialogActions}>
           <button className={styles.secondaryButton} disabled={isLoading} onClick={onCancel}>
             Cancel
           </button>
           <button className={styles.dangerButton} disabled={isLoading} onClick={onConfirm}>
-            {isLoading ? "Ending..." : "End Session"}
+            {isLoading
+              ? "Ending..."
+              : recoveryMode
+                ? "Force End"
+                : pc.session_mode === "open_time"
+                  ? "End & Settle"
+                  : "End Session"}
           </button>
         </div>
       </section>

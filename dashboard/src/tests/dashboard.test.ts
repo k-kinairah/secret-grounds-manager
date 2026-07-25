@@ -3,14 +3,23 @@ import { readFileSync } from "node:fs";
 import {
   addTime,
   calculateTime,
+  createUser,
   createRate,
+  fetchCurrentUser,
   fetchRates,
+  fetchUsers,
+  forceEndSession,
   getApiBaseUrl,
+  login,
+  logout,
   recordPayment,
+  resetUserPassword,
   startSession,
   toCashierMessage,
   updateRate,
-  updateRateStatus
+  updateRateStatus,
+  updateUser,
+  updateUserStatus
 } from "../lib/api";
 import { calculateCashChange, isPaymentInputValid } from "../lib/paymentSelection";
 import { getPcActionAvailability, getPcCardTone, summarizePcs } from "../lib/pcStatus";
@@ -18,11 +27,13 @@ import { saveRateProfile } from "../lib/rateActions";
 import { rateFormToInput, rateToForm } from "../lib/rateForm";
 import { calculatePreviewSeconds } from "../lib/sessionSelection";
 import {
+  calculateOpenTimeEstimate,
   formatDuration,
   formatMoney,
   formatRateDuration,
   formatTimer,
-  minutesToSeconds
+  minutesToSeconds,
+  secondsFromStartedAt
 } from "../lib/time";
 import type { PcSummary, RateProfile, RateProfileInput } from "../lib/types";
 
@@ -34,6 +45,7 @@ function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
     last_seen: "2026-07-23T00:00:00+00:00",
     session_status: "idle",
     active_session_id: null,
+    started_at: null,
     scheduled_end_at: null,
     remaining_seconds: null,
     rate_name_snapshot: null,
@@ -47,7 +59,13 @@ function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
     actual_elapsed_seconds: null,
     billed_seconds: null,
     final_computed_amount: null,
+    metered_rate_price_snapshot: null,
+    metered_rate_duration_seconds_snapshot: null,
+    estimated_total_amount: null,
+    estimated_balance_due: null,
     settlement_pending: false,
+    recovery_required: false,
+    recovery_reason: null,
     ...overrides
   };
 }
@@ -63,12 +81,58 @@ assert.equal(formatRateDuration(1800), "30 min");
 assert.equal(formatMoney("12.30"), "₱12.30");
 assert.equal(formatMoney("0.00"), "₱0.00");
 
+assert.equal(
+  secondsFromStartedAt(
+    "2026-07-23T00:00:00.000Z",
+    Date.parse("2026-07-23T00:00:01.000Z")
+  ),
+  1
+);
+assert.equal(
+  secondsFromStartedAt(
+    "2026-07-23T00:00:00.000Z",
+    Date.parse("2026-07-23T00:00:05.000Z")
+  ),
+  5
+);
+assert.deepEqual(
+  calculateOpenTimeEstimate(
+    "2026-07-23T00:00:00.000Z",
+    Date.parse("2026-07-23T00:00:01.000Z"),
+    300,
+    "1.00",
+    "0.00"
+  ),
+  {
+    actualElapsedSeconds: 1,
+    billedSeconds: 300,
+    estimatedTotalAmount: "1.00",
+    estimatedBalanceDue: "1.00"
+  }
+);
+assert.deepEqual(
+  calculateOpenTimeEstimate(
+    "2026-07-23T00:00:00.000Z",
+    Date.parse("2026-07-23T00:05:01.000Z"),
+    300,
+    "1.00",
+    "1.00"
+  ),
+  {
+    actualElapsedSeconds: 301,
+    billedSeconds: 600,
+    estimatedTotalAmount: "2.00",
+    estimatedBalanceDue: "1.00"
+  }
+);
+
 const offlinePc = makePc({ connection_status: "offline" });
 assert.equal(getPcCardTone(offlinePc), "offline");
 assert.deepEqual(getPcActionAvailability(offlinePc), {
   canStart: false,
   canAddTime: false,
   canEnd: false,
+  canCollectPayment: false,
   canViewDetails: true
 });
 
@@ -80,6 +144,19 @@ const activePc = makePc({
 assert.equal(getPcCardTone(activePc), "active");
 assert.equal(getPcActionAvailability(activePc).canAddTime, true);
 assert.equal(getPcActionAvailability(activePc).canEnd, true);
+
+const settlementPc = makePc({
+  session_status: "settlement_pending",
+  active_session_id: "session-settle",
+  session_mode: "open_time",
+  total_amount: "20.00",
+  balance_due: "20.00",
+  settlement_pending: true
+});
+assert.equal(getPcCardTone(settlementPc), "warning");
+assert.equal(getPcActionAvailability(settlementPc).canStart, false);
+assert.equal(getPcActionAvailability(settlementPc).canEnd, false);
+assert.equal(getPcActionAvailability(settlementPc).canCollectPayment, true);
 
 const availablePc = makePc();
 assert.equal(getPcCardTone(availablePc), "available");
@@ -171,11 +248,17 @@ assert.equal(getApiBaseUrl(), "http://127.0.0.1:8000");
 
 async function runAsyncAssertions() {
   try {
-    const fetchCalls: Array<{ body: unknown; method: string; url: string }> = [];
+    const fetchCalls: Array<{
+      body: unknown;
+      credentials: RequestCredentials | undefined;
+      method: string;
+      url: string;
+    }> = [];
     globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       fetchCalls.push({
         body: init?.body ? JSON.parse(String(init.body)) : null,
+        credentials: init?.credentials,
         method: init?.method ?? "GET",
         url
       });
@@ -185,6 +268,23 @@ async function runAsyncAssertions() {
       });
     };
 
+    await login("owner", "password123");
+    await fetchCurrentUser();
+    await fetchUsers();
+    await createUser({
+      username: "cashier",
+      display_name: "Cashier",
+      password: "password123",
+      role: "cashier"
+    });
+    await updateUser("user-1", {
+      username: "cashier",
+      display_name: "Cashier One",
+      role: "admin"
+    });
+    await updateUserStatus("user-1", false);
+    await resetUserPassword("user-1", "new-password");
+    await logout();
     await fetchRates(true);
     await calculateTime("20.00");
     await createRate({
@@ -205,6 +305,7 @@ async function runAsyncAssertions() {
     await updateRateStatus("rate-30", false);
     await startSession("PC-01", { amount: "20.00" });
     await addTime("session-1", { amount: "5.00" });
+    await forceEndSession("session-1");
     await recordPayment("session-1", {
       payment_method: "cash",
       amount: "20.00",
@@ -214,6 +315,14 @@ async function runAsyncAssertions() {
     assert.deepEqual(
       fetchCalls.map((call) => ({ method: call.method, url: call.url })),
       [
+        { method: "POST", url: "http://127.0.0.1:8000/auth/login" },
+        { method: "GET", url: "http://127.0.0.1:8000/auth/me" },
+        { method: "GET", url: "http://127.0.0.1:8000/users" },
+        { method: "POST", url: "http://127.0.0.1:8000/users" },
+        { method: "PUT", url: "http://127.0.0.1:8000/users/user-1" },
+        { method: "PATCH", url: "http://127.0.0.1:8000/users/user-1/status" },
+        { method: "POST", url: "http://127.0.0.1:8000/users/user-1/reset-password" },
+        { method: "POST", url: "http://127.0.0.1:8000/auth/logout" },
         { method: "GET", url: "http://127.0.0.1:8000/rates?include_inactive=true" },
         { method: "POST", url: "http://127.0.0.1:8000/rates/calculate-time" },
         { method: "POST", url: "http://127.0.0.1:8000/rates" },
@@ -221,19 +330,29 @@ async function runAsyncAssertions() {
         { method: "PATCH", url: "http://127.0.0.1:8000/rates/rate-30/status" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/start" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/add-time" },
+        { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/force-end" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/payments" }
       ]
     );
-    assert.equal((fetchCalls[3].body as RateProfileInput).price, "50.00");
-    assert.equal((fetchCalls[3].body as RateProfileInput).duration_seconds, 1800);
-    assert.deepEqual(fetchCalls[5].body, {
+    assert.equal(fetchCalls.every((call) => call.credentials === "include"), true);
+    assert.deepEqual(fetchCalls[0].body, {
+      username: "owner",
+      password: "password123"
+    });
+    assert.deepEqual(fetchCalls[6].body, {
+      password: "new-password"
+    });
+    assert.equal((fetchCalls[11].body as RateProfileInput).price, "50.00");
+    assert.equal((fetchCalls[11].body as RateProfileInput).duration_seconds, 1800);
+    assert.deepEqual(fetchCalls[13].body, {
       pc_name: "PC-01",
       amount: "20.00"
     });
-    assert.deepEqual(fetchCalls[6].body, {
+    assert.deepEqual(fetchCalls[14].body, {
       amount: "5.00"
     });
-    assert.deepEqual(fetchCalls[7].body, {
+    assert.deepEqual(fetchCalls[15].body, null);
+    assert.deepEqual(fetchCalls[16].body, {
       payment_method: "cash",
       amount: "20.00",
       cash_received: "50.00"

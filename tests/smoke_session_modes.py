@@ -34,7 +34,11 @@ def main() -> None:
             PaymentCreateRequest,
             PrepaidAddTimeRequest,
             PrepaidStartSessionRequest,
+            RateProfileUpdate,
         )
+        from server.billing_service import calculate_open_time_estimate
+        from server.rate_repository import RateRepository
+        from server.time_utils import current_utc_time
 
         initialize_database()
 
@@ -110,18 +114,73 @@ def main() -> None:
         )
         assert open_started.session.session_mode == "open_time"
         assert open_started.session.original_seconds == 0
+        assert open_started.session.metered_rate_price_snapshot == Decimal("1.00")
+        assert open_started.session.metered_rate_duration_seconds_snapshot == 300
+
+        started_at = current_utc_time()
+        assert calculate_open_time_estimate(
+            started_at,
+            started_at,
+            Decimal("1.00"),
+            300,
+        ) == (0, 0, Decimal("0.00"))
+        assert calculate_open_time_estimate(
+            started_at,
+            started_at + __import__("datetime").timedelta(seconds=1),
+            Decimal("1.00"),
+            300,
+        ) == (1, 300, Decimal("1.00"))
+        assert calculate_open_time_estimate(
+            started_at,
+            started_at + __import__("datetime").timedelta(seconds=300),
+            Decimal("1.00"),
+            300,
+        ) == (300, 300, Decimal("1.00"))
+        assert calculate_open_time_estimate(
+            started_at,
+            started_at + __import__("datetime").timedelta(seconds=301),
+            Decimal("1.00"),
+            300,
+        ) == (301, 600, Decimal("2.00"))
+        assert calculate_open_time_estimate(
+            started_at,
+            started_at + __import__("datetime").timedelta(hours=2),
+            Decimal("1.00"),
+            300,
+        ) == (7200, 7200, Decimal("24.00"))
+        assert calculate_open_time_estimate(
+            started_at,
+            started_at + __import__("datetime").timedelta(seconds=301),
+            Decimal("1.25"),
+            300,
+        ) == (301, 600, Decimal("2.50"))
 
         session = session_service.repository.get_session(open_started.session.session_id)
         assert session is not None
+        metered_rate = RateRepository().get_active_metered_rate()
+        assert metered_rate is not None
+        RateRepository().update_rate(
+            metered_rate.rate_id,
+            RateProfileUpdate(
+                name="Edited Regular Rate",
+                duration_seconds=60,
+                price=Decimal("10.00"),
+                rate_type="metered",
+                sort_order=0,
+            ),
+        )
         adjusted = session.model_copy(
             update={"started_at": session.started_at - __import__("datetime").timedelta(minutes=6)}
         )
         session_service.repository.update_session(adjusted)
         ended = asyncio.run(end_session(open_started.session.session_id))
+        assert ended.session.status == "settlement_pending"
         assert ended.session.actual_elapsed_seconds is not None
         assert ended.session.billed_seconds == 600
         assert ended.session.final_computed_amount == Decimal("2.00")
+        assert ended.session.metered_rate_price_snapshot == Decimal("1.00")
         assert ended.session.settlement_pending is True
+        assert session_service.repository.get_active_session_for_pc("PC-OPEN") is not None
 
         unpaid = get_session_billing(open_started.session.session_id)
         assert unpaid.payment_status == "unpaid"
@@ -130,7 +189,9 @@ def main() -> None:
             PaymentCreateRequest(payment_method="gcash", amount=Decimal("2.00")),
         )
         assert settled.payment_status == "paid"
+        assert settled.session.status == "completed"
         assert settled.session.settlement_pending is False
+        assert session_service.repository.get_active_session_for_pc("PC-OPEN") is None
 
         pc_registry.clear()
         register_pc(PCRegistration(pc_name="PC-FAIL", ip_address="127.0.0.1"))

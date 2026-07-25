@@ -66,12 +66,21 @@ select:focus-visible {
   background: var(--nav);
   border-bottom: 1px solid var(--nav-line);
   display: flex;
-  gap: 8px;
+  gap: 20px;
+  justify-content: space-between;
   min-height: 58px;
   padding: 0 28px;
 }
 
-.appShell a {
+.appShell__links,
+.appShell__account {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.appShell a,
+.appShell button {
   border-radius: 6px;
   color: #dbeafe;
   font-size: 14px;
@@ -80,7 +89,38 @@ select:focus-visible {
   text-decoration: none;
 }
 
-.appShell a:hover {
+.appShell button {
+  background: transparent;
+  border: 1px solid rgb(148 163 184 / 0.35);
+}
+
+.appShell a:hover,
+.appShell button:hover:not(:disabled) {
   background: rgb(59 130 246 / 0.14);
   color: #ffffff;
+}
+
+.appShell__account span {
+  color: #aebcce;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.authLoading {
+  color: var(--muted);
+  font-weight: 700;
+  padding: 40px 28px;
+}
+
+@media (max-width: 720px) {
+  .appShell {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 14px 18px;
+  }
+
+  .appShell__links,
+  .appShell__account {
+    flex-wrap: wrap;
+  }
 }

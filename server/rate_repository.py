@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+import json
 from typing import Any
 from uuid import uuid4
 
@@ -24,6 +25,20 @@ def row_to_rate(row: Any) -> RateProfile:
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
+
+
+def rate_to_audit_dict(rate: RateProfile | None) -> dict[str, object] | None:
+    if rate is None:
+        return None
+    return {
+        "rate_id": rate.rate_id,
+        "name": rate.name,
+        "duration_seconds": rate.duration_seconds,
+        "price": decimal_to_storage(rate.price),
+        "rate_type": rate.rate_type,
+        "is_active": rate.is_active,
+        "sort_order": rate.sort_order,
+    }
 
 
 class RateRepository:
@@ -80,7 +95,44 @@ class RateRepository:
             (updated_at.isoformat(), active_rate_id),
         )
 
-    def create_rate(self, request: RateProfileCreate) -> RateProfile:
+    def add_audit_event(
+        self,
+        rate_id: str,
+        action: str,
+        old_values: dict[str, object] | None,
+        new_values: dict[str, object] | None,
+        performed_by_user_id: str | None,
+    ) -> None:
+        with get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO rate_audit_events (
+                    event_id,
+                    rate_id,
+                    action,
+                    old_values,
+                    new_values,
+                    performed_by_user_id,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    rate_id,
+                    action,
+                    json.dumps(old_values) if old_values is not None else None,
+                    json.dumps(new_values) if new_values is not None else None,
+                    performed_by_user_id,
+                    current_utc_time().isoformat(),
+                ),
+            )
+
+    def create_rate(
+        self,
+        request: RateProfileCreate,
+        performed_by_user_id: str | None = None,
+    ) -> RateProfile:
         now = current_utc_time()
         rate = RateProfile(
             rate_id=str(uuid4()),
@@ -129,9 +181,21 @@ class RateRepository:
                 ),
             )
 
+        self.add_audit_event(
+            rate.rate_id,
+            "created",
+            None,
+            rate_to_audit_dict(rate),
+            performed_by_user_id,
+        )
         return rate
 
-    def update_rate(self, rate_id: str, request: RateProfileUpdate) -> RateProfile | None:
+    def update_rate(
+        self,
+        rate_id: str,
+        request: RateProfileUpdate,
+        performed_by_user_id: str | None = None,
+    ) -> RateProfile | None:
         existing = self.get_rate(rate_id)
         if existing is None:
             return None
@@ -171,9 +235,21 @@ class RateRepository:
                 ),
             )
 
+        self.add_audit_event(
+            updated.rate_id,
+            "updated",
+            rate_to_audit_dict(existing),
+            rate_to_audit_dict(updated),
+            performed_by_user_id,
+        )
         return updated
 
-    def set_active(self, rate_id: str, is_active: bool) -> RateProfile | None:
+    def set_active(
+        self,
+        rate_id: str,
+        is_active: bool,
+        performed_by_user_id: str | None = None,
+    ) -> RateProfile | None:
         existing = self.get_rate(rate_id)
         if existing is None:
             return None
@@ -205,4 +281,11 @@ class RateRepository:
                 ),
             )
 
+        self.add_audit_event(
+            updated.rate_id,
+            "enabled" if updated.is_active else "disabled",
+            rate_to_audit_dict(existing),
+            rate_to_audit_dict(updated),
+            performed_by_user_id,
+        )
         return updated

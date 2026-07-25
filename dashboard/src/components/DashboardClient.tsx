@@ -5,7 +5,9 @@ import styles from "@/app/page.module.css";
 import {
   endSession,
   fetchPcs,
+  fetchCurrentUser,
   fetchRates,
+  forceEndSession,
   getPollingIntervalMs,
   recordPayment,
   startOpenTimeSession,
@@ -13,8 +15,8 @@ import {
   addPrepaidTime
 } from "@/lib/api";
 import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
-import { secondsFromScheduledEnd } from "@/lib/time";
-import type { PcSummary, RateProfile } from "@/lib/types";
+import { calculateOpenTimeEstimate, secondsFromScheduledEnd } from "@/lib/time";
+import type { CurrentUser, PcSummary, RateProfile } from "@/lib/types";
 import { DashboardSummary } from "./DashboardSummary";
 import { EndSessionDialog } from "./EndSessionDialog";
 import { PcCard } from "./PcCard";
@@ -26,6 +28,7 @@ type DialogState =
   | { type: "start"; pc: PcSummary }
   | { type: "add"; pc: PcSummary }
   | { type: "end"; pc: PcSummary }
+  | { type: "resolve"; pc: PcSummary }
   | { type: "details"; pc: PcSummary }
   | { type: "payment"; pc: PcSummary }
   | null;
@@ -33,6 +36,7 @@ type DialogState =
 export function DashboardClient() {
   const [pcs, setPcs] = useState<PcSummary[]>([]);
   const [rates, setRates] = useState<RateProfile[]>([]);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -49,9 +53,14 @@ export function DashboardClient() {
 
     isPollingRef.current = true;
     try {
-      const [nextPcs, nextRates] = await Promise.all([fetchPcs(), fetchRates()]);
+      const [nextPcs, nextRates, nextUser] = await Promise.all([
+        fetchPcs(),
+        fetchRates(),
+        fetchCurrentUser()
+      ]);
       setPcs(nextPcs);
       setRates(nextRates);
+      setCurrentUser(nextUser);
       setIsConnected(true);
       setHasLoadedOnce(true);
       setMessage(null);
@@ -89,13 +98,39 @@ export function DashboardClient() {
 
   const livePcs = useMemo(
     () =>
-      pcs.map((pc) => ({
-        ...pc,
-        remaining_seconds:
-          pc.session_status === "active"
-            ? secondsFromScheduledEnd(pc.scheduled_end_at, now?.getTime())
-            : pc.remaining_seconds
-      })),
+      pcs.map((pc) => {
+        const nowMs = now?.getTime();
+        if (pc.session_status !== "active" || nowMs === undefined) {
+          return pc;
+        }
+        if (pc.session_mode === "open_time") {
+          const estimate = calculateOpenTimeEstimate(
+            pc.started_at,
+            nowMs,
+            pc.metered_rate_duration_seconds_snapshot,
+            pc.metered_rate_price_snapshot,
+            pc.total_paid
+          );
+          if (estimate === null) {
+            return pc;
+          }
+
+          return {
+            ...pc,
+            actual_elapsed_seconds: estimate.actualElapsedSeconds,
+            billed_seconds: estimate.billedSeconds,
+            estimated_total_amount: estimate.estimatedTotalAmount,
+            estimated_balance_due: estimate.estimatedBalanceDue,
+            total_amount: estimate.estimatedTotalAmount,
+            balance_due: estimate.estimatedBalanceDue
+          };
+        }
+
+        return {
+          ...pc,
+          remaining_seconds: secondsFromScheduledEnd(pc.scheduled_end_at, nowMs)
+        };
+      }),
     [pcs, now]
   );
   const summary = summarizePcs(livePcs);
@@ -130,7 +165,7 @@ export function DashboardClient() {
         const settlementPc: PcSummary = {
           ...pc,
           active_session_id: response.session.session_id,
-          session_status: "active",
+          session_status: response.session.status === "settlement_pending" ? "settlement_pending" : "active",
           total_amount: response.session.total_amount,
           total_paid: response.session.total_paid,
           balance_due: response.session.balance_due,
@@ -154,8 +189,53 @@ export function DashboardClient() {
     }
   }
 
+  async function forceEndSessionAction(pc: PcSummary) {
+    if (!pc.active_session_id) {
+      setMessage("This PC no longer has an active session.");
+      setDialog(null);
+      return;
+    }
+
+    setIsMutating(true);
+    try {
+      const response = await forceEndSession(pc.active_session_id);
+      if (response.session.session_mode === "open_time" && response.session.settlement_pending) {
+        const settlementPc: PcSummary = {
+          ...pc,
+          active_session_id: response.session.session_id,
+          session_status: response.session.status === "settlement_pending" ? "settlement_pending" : "active",
+          total_amount: response.session.total_amount,
+          total_paid: response.session.total_paid,
+          balance_due: response.session.balance_due,
+          payment_status: response.session.payment_status,
+          billed_seconds: response.session.billed_seconds,
+          final_computed_amount: response.session.final_computed_amount,
+          actual_elapsed_seconds: response.session.actual_elapsed_seconds,
+          settlement_pending: response.session.settlement_pending,
+          recovery_required: false,
+          recovery_reason: null
+        };
+        setMessage(`${pc.pc_name} recovery session force-ended. Settlement is pending.`);
+        setDialog({ type: "payment", pc: settlementPc });
+      } else {
+        setMessage(`${pc.pc_name} recovery session resolved.`);
+        setDialog(null);
+      }
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Recovery action failed.");
+    } finally {
+      setIsMutating(false);
+    }
+  }
+
   function findCurrentPc(pc: PcSummary): PcSummary {
-    return livePcs.find((item) => item.pc_name === pc.pc_name) ?? pc;
+    const currentPc = livePcs.find((item) => item.pc_name === pc.pc_name);
+    if (pc.active_session_id && !currentPc?.active_session_id) {
+      return pc;
+    }
+
+    return currentPc ?? pc;
   }
 
   const currentTime = now === null ? "Loading time..." : now.toLocaleString();
@@ -201,8 +281,10 @@ export function DashboardClient() {
             onAddTime={(selectedPc) => setDialog({ type: "add", pc: selectedPc })}
             onDetails={(selectedPc) => setDialog({ type: "details", pc: selectedPc })}
             onEnd={(selectedPc) => setDialog({ type: "end", pc: selectedPc })}
+            onResolve={(selectedPc) => setDialog({ type: "resolve", pc: selectedPc })}
             onStart={(selectedPc) => setDialog({ type: "start", pc: selectedPc })}
             onPayment={(selectedPc) => setDialog({ type: "payment", pc: selectedPc })}
+            currentUserRole={currentUser?.role ?? null}
           />
         ))}
       </section>
@@ -271,6 +353,16 @@ export function DashboardClient() {
         />
       ) : null}
 
+      {dialog?.type === "resolve" ? (
+        <EndSessionDialog
+          isLoading={isMutating}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => void forceEndSessionAction(findCurrentPc(dialog.pc))}
+          pc={findCurrentPc(dialog.pc)}
+          recoveryMode
+        />
+      ) : null}
+
       {dialog?.type === "details" ? (
         <PcDetailsPanel pc={findCurrentPc(dialog.pc)} onClose={() => setDialog(null)} />
       ) : null}
@@ -284,6 +376,11 @@ export function DashboardClient() {
             if (!currentPc.active_session_id) {
               setMessage("This PC no longer has an active session.");
               setDialog(null);
+              return;
+            }
+            if (currentPc.session_mode === "open_time" && currentPc.session_status === "active") {
+              setDialog({ type: "end", pc: currentPc });
+              setMessage("End the Open Time session first so the final amount can be calculated.");
               return;
             }
             void runAction(

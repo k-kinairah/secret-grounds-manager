@@ -8,6 +8,7 @@ interface PcDetailsPanelProps {
 }
 
 export function PcDetailsPanel({ pc, onClose }: PcDetailsPanelProps) {
+  const isSettlementPending = pc.session_status === "settlement_pending";
   return (
     <div className={styles.overlay} role="presentation">
       <aside className={styles.sidePanel} aria-label={`${pc.pc_name} details`}>
@@ -62,16 +63,40 @@ export function PcDetailsPanel({ pc, onClose }: PcDetailsPanelProps) {
                 <strong>{formatMoney(pc.additional_amount)}</strong>
               </div>
               <div className={styles.detailRow}>
-                <span>Total</span>
-                <strong>{formatMoney(pc.total_amount)}</strong>
+                <span>
+                  {pc.session_mode === "open_time" && pc.session_status === "active"
+                    ? "Estimated total"
+                    : isSettlementPending
+                      ? "Final amount"
+                    : "Total"}
+                </span>
+                <strong>
+                  {formatMoney(
+                    pc.session_mode === "open_time" && pc.session_status === "active"
+                      ? pc.estimated_total_amount
+                      : pc.total_amount
+                  )}
+                </strong>
               </div>
               <div className={styles.detailRow}>
                 <span>Paid</span>
                 <strong>{formatMoney(pc.total_paid)}</strong>
               </div>
               <div className={styles.detailRow}>
-                <span>Balance due</span>
-                <strong>{formatMoney(pc.balance_due)}</strong>
+                <span>
+                  {pc.session_mode === "open_time" && pc.session_status === "active"
+                    ? "Estimated balance"
+                    : isSettlementPending
+                      ? "Balance"
+                    : "Balance due"}
+                </span>
+                <strong>
+                  {formatMoney(
+                    pc.session_mode === "open_time" && pc.session_status === "active"
+                      ? pc.estimated_balance_due
+                      : pc.balance_due
+                  )}
+                </strong>
               </div>
               <div className={styles.detailRow}>
                 <span>Payment status</span>

@@ -1,9 +1,14 @@
 import type {
   BillingSummary,
+  CurrentUser,
+  ForceEndSessionResponse,
   PcSummary,
   CalculatedTimeResponse,
   PaymentInput,
   PrepaidSessionSelection,
+  UserAdminRecord,
+  UserCreateInput,
+  UserUpdateInput,
   RateProfile,
   RateProfileInput,
   SessionCommandResponse,
@@ -46,7 +51,12 @@ async function parseResponse<T>(response: Response): Promise<T> {
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   try {
-    return await parseResponse<T>(await fetch(url, init));
+    return await parseResponse<T>(
+      await fetch(url, {
+        ...init,
+        credentials: "include"
+      })
+    );
   } catch (error) {
     if (error instanceof TypeError || (error instanceof Error && error.message === "Failed to fetch")) {
       console.error("Secret Grounds API network failure", {
@@ -60,6 +70,73 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
     }
     throw error;
   }
+}
+
+export async function login(username: string, password: string): Promise<CurrentUser> {
+  return requestJson<CurrentUser>(`${getApiBaseUrl()}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password })
+  });
+}
+
+export async function logout(): Promise<void> {
+  await requestJson<{ message: string }>(`${getApiBaseUrl()}/auth/logout`, {
+    method: "POST"
+  });
+}
+
+export async function fetchCurrentUser(): Promise<CurrentUser> {
+  return requestJson<CurrentUser>(`${getApiBaseUrl()}/auth/me`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchUsers(): Promise<UserAdminRecord[]> {
+  return requestJson<UserAdminRecord[]>(`${getApiBaseUrl()}/users`, {
+    cache: "no-store"
+  });
+}
+
+export async function createUser(input: UserCreateInput): Promise<UserAdminRecord> {
+  return requestJson<UserAdminRecord>(`${getApiBaseUrl()}/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updateUser(
+  userId: string,
+  input: UserUpdateInput
+): Promise<UserAdminRecord> {
+  return requestJson<UserAdminRecord>(`${getApiBaseUrl()}/users/${userId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updateUserStatus(
+  userId: string,
+  isActive: boolean
+): Promise<UserAdminRecord> {
+  return requestJson<UserAdminRecord>(`${getApiBaseUrl()}/users/${userId}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_active: isActive })
+  });
+}
+
+export async function resetUserPassword(
+  userId: string,
+  newPassword: string
+): Promise<UserAdminRecord> {
+  return requestJson<UserAdminRecord>(`${getApiBaseUrl()}/users/${userId}/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: newPassword })
+  });
 }
 
 export function toCashierMessage(message: string): string {
@@ -227,6 +304,15 @@ export async function addPrepaidTime(
 export async function endSession(sessionId: string): Promise<SessionCommandResponse> {
   return requestJson<SessionCommandResponse>(
     `${getApiBaseUrl()}/sessions/${sessionId}/end`,
+    {
+      method: "POST"
+    }
+  );
+}
+
+export async function forceEndSession(sessionId: string): Promise<ForceEndSessionResponse> {
+  return requestJson<ForceEndSessionResponse>(
+    `${getApiBaseUrl()}/sessions/${sessionId}/force-end`,
     {
       method: "POST"
     }

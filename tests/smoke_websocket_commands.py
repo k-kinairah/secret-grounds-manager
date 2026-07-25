@@ -39,6 +39,36 @@ def register_pc(pc_name: str, ip_address: str) -> None:
     response.raise_for_status()
 
 
+def bootstrap_owner(database_path: str) -> None:
+    os.environ["SECRET_GROUNDS_DB_PATH"] = database_path
+    from server.database import initialize_database
+    from server.schemas import UserCreateRequest
+    from server.user_repository import UserRepository
+
+    initialize_database()
+    repository = UserRepository()
+    if repository.get_by_username("owner") is None:
+        repository.create_user(
+            UserCreateRequest(
+                username="owner",
+                display_name="Owner",
+                password="owner-pass",
+                role="owner",
+            )
+        )
+
+
+def login_owner() -> requests.Session:
+    session = requests.Session()
+    response = session.post(
+        f"{SERVER_URL}/auth/login",
+        json={"username": "owner", "password": "owner-pass"},
+        timeout=5,
+    )
+    response.raise_for_status()
+    return session
+
+
 def run_ping_client(received_commands: list[dict[str, Any]]) -> None:
     with SimpleWebSocketClient(WEBSOCKET_URL, timeout=5) as websocket:
         command = websocket.receive_json()
@@ -66,6 +96,7 @@ def main() -> None:
 
     environment = os.environ.copy()
     environment["SECRET_GROUNDS_DB_PATH"] = database_path
+    bootstrap_owner(database_path)
 
     server_process = subprocess.Popen(
         [
@@ -86,6 +117,7 @@ def main() -> None:
 
     try:
         wait_for_server()
+        admin_session = login_owner()
         register_pc("PC-01", "127.0.0.1")
 
         received_commands: list[dict[str, Any]] = []
@@ -96,7 +128,7 @@ def main() -> None:
         websocket_thread.start()
         time.sleep(0.5)
 
-        command_response = requests.post(
+        command_response = admin_session.post(
             f"{SERVER_URL}/commands/test-ping",
             json={"pc_name": "PC-01"},
             timeout=10,
@@ -113,7 +145,7 @@ def main() -> None:
 
         register_pc("PC-OFFLINE", "127.0.0.2")
         time.sleep(16)
-        rejected_response = requests.post(
+        rejected_response = admin_session.post(
             f"{SERVER_URL}/commands/test-ping",
             json={"pc_name": "PC-OFFLINE"},
             timeout=5,

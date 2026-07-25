@@ -20,6 +20,36 @@ from client.websocket_transport import SimpleWebSocketClient
 SERVER_URL = "http://127.0.0.1:8766"
 
 
+def bootstrap_owner(database_path: str) -> None:
+    os.environ["SECRET_GROUNDS_DB_PATH"] = database_path
+    from server.database import initialize_database
+    from server.schemas import UserCreateRequest
+    from server.user_repository import UserRepository
+
+    initialize_database()
+    repository = UserRepository()
+    if repository.get_by_username("owner") is None:
+        repository.create_user(
+            UserCreateRequest(
+                username="owner",
+                display_name="Owner",
+                password="owner-pass",
+                role="owner",
+            )
+        )
+
+
+def login_owner() -> requests.Session:
+    session = requests.Session()
+    response = session.post(
+        f"{SERVER_URL}/auth/login",
+        json={"username": "owner", "password": "owner-pass"},
+        timeout=5,
+    )
+    response.raise_for_status()
+    return session
+
+
 def start_server(database_path: str) -> subprocess.Popen[str]:
     environment = os.environ.copy()
     environment["SECRET_GROUNDS_DB_PATH"] = database_path
@@ -63,11 +93,11 @@ def wait_for_server() -> None:
     raise RuntimeError("Server did not start")
 
 
-def wait_for_ping(pc_name: str) -> dict[str, object]:
+def wait_for_ping(session: requests.Session, pc_name: str) -> dict[str, object]:
     last_error = ""
     for _ in range(40):
         try:
-            response = requests.post(
+            response = session.post(
                 f"{SERVER_URL}/commands/test-ping",
                 json={"pc_name": pc_name},
                 timeout=5,
@@ -82,20 +112,28 @@ def wait_for_ping(pc_name: str) -> dict[str, object]:
     raise RuntimeError(f"Ping never succeeded: {last_error}")
 
 
-def wait_for_session_status(session_id: str, status: str) -> dict[str, object]:
+def wait_for_session_status(
+    session: requests.Session,
+    session_id: str,
+    status: str,
+) -> dict[str, object]:
     for _ in range(40):
-        response = requests.get(f"{SERVER_URL}/sessions/{session_id}", timeout=5)
+        response = session.get(f"{SERVER_URL}/sessions/{session_id}", timeout=5)
         response.raise_for_status()
-        session = response.json()
-        if session["status"] == status:
-            return session
+        session_payload = response.json()
+        if session_payload["status"] == status:
+            return session_payload
         time.sleep(0.25)
 
     raise RuntimeError(f"Session {session_id} did not become {status}")
 
 
-def post_json(path: str, payload: dict[str, object]) -> requests.Response:
-    return requests.post(f"{SERVER_URL}{path}", json=payload, timeout=10)
+def post_json(
+    session: requests.Session,
+    path: str,
+    payload: dict[str, object],
+) -> requests.Response:
+    return session.post(f"{SERVER_URL}{path}", json=payload, timeout=10)
 
 
 def assert_client_rejects_mismatched_session() -> None:
@@ -137,18 +175,21 @@ def create_smoke_client(temp_directory: str) -> SecretGroundsClient:
 def main() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
         database_path = str(Path(temp_directory) / "secret_grounds_test.sqlite3")
+        bootstrap_owner(database_path)
         server_process = start_server(database_path)
         client = create_smoke_client(temp_directory)
         client_thread = threading.Thread(target=client.run_forever, daemon=True)
 
         try:
             wait_for_server()
+            admin_session = login_owner()
             client_thread.start()
 
-            ping_payload = wait_for_ping("PC-01")
+            ping_payload = wait_for_ping(admin_session, "PC-01")
             assert ping_payload["acknowledgements"][-1]["message"] == "pong"
 
             first_start = post_json(
+                admin_session,
                 "/sessions/start",
                 {"pc_name": "PC-01", "duration_seconds": 3},
             )
@@ -157,12 +198,14 @@ def main() -> None:
             first_session_id = first_session["session_id"]
 
             duplicate_start = post_json(
+                admin_session,
                 "/sessions/start",
                 {"pc_name": "PC-01", "duration_seconds": 3},
             )
             assert duplicate_start.status_code == 409
 
             add_time = post_json(
+                admin_session,
                 f"/sessions/{first_session_id}/add-time",
                 {"seconds": 2},
             )
@@ -170,20 +213,21 @@ def main() -> None:
             assert add_time.json()["session"]["added_seconds"] == 2
             assert add_time.json()["session"]["total_seconds"] == 5
 
-            manual_end = requests.post(
+            manual_end = admin_session.post(
                 f"{SERVER_URL}/sessions/{first_session_id}/end",
                 timeout=10,
             )
             manual_end.raise_for_status()
-            assert manual_end.json()["session"]["status"] == "ended_manually"
+            assert manual_end.json()["session"]["status"] == "completed"
 
             auto_start = post_json(
+                admin_session,
                 "/sessions/start",
                 {"pc_name": "PC-01", "duration_seconds": 2},
             )
             auto_start.raise_for_status()
             auto_session_id = auto_start.json()["session"]["session_id"]
-            wait_for_session_status(auto_session_id, "completed")
+            wait_for_session_status(admin_session, auto_session_id, "completed")
 
             with SimpleWebSocketClient("ws://127.0.0.1:8766/ws/PC-01", timeout=5) as websocket:
                 websocket.send_json(
@@ -201,7 +245,7 @@ def main() -> None:
                     }
                 )
             time.sleep(0.5)
-            response = requests.get(
+            response = admin_session.get(
                 f"{SERVER_URL}/sessions/{auto_session_id}",
                 timeout=5,
             )
@@ -218,6 +262,7 @@ def main() -> None:
             assert completed_event_count == 1
 
             assert_client_rejects_mismatched_session()
+            client.stop()
 
             requests.post(
                 f"{SERVER_URL}/register",
@@ -226,12 +271,13 @@ def main() -> None:
             ).raise_for_status()
             time.sleep(16)
             offline_start = post_json(
+                admin_session,
                 "/sessions/start",
                 {"pc_name": "PC-OFFLINE", "duration_seconds": 1},
             )
             assert offline_start.status_code == 409
 
-            history_before_restart = requests.get(
+            history_before_restart = admin_session.get(
                 f"{SERVER_URL}/sessions/history",
                 timeout=5,
             )
@@ -241,8 +287,9 @@ def main() -> None:
             stop_server(server_process)
             server_process = start_server(database_path)
             wait_for_server()
+            admin_session = login_owner()
 
-            history_after_restart = requests.get(
+            history_after_restart = admin_session.get(
                 f"{SERVER_URL}/sessions/history",
                 timeout=5,
             )

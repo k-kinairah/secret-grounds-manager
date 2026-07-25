@@ -1,4 +1,5 @@
-from decimal import Decimal
+from datetime import datetime
+from decimal import Decimal, ROUND_CEILING
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -33,6 +34,25 @@ def get_payment_status(total_amount: Decimal, total_paid: Decimal) -> BillingPay
     return "overpaid"
 
 
+def calculate_open_time_estimate(
+    started_at: datetime,
+    as_of: datetime,
+    rate_price: Decimal,
+    rate_duration_seconds: int,
+) -> tuple[int, int, Decimal]:
+    actual_elapsed_seconds = max(0, int((as_of - started_at).total_seconds()))
+    if actual_elapsed_seconds == 0:
+        return 0, 0, money(Decimal("0.00"))
+
+    billing_units = int(
+        (Decimal(actual_elapsed_seconds) / Decimal(rate_duration_seconds))
+        .to_integral_value(rounding=ROUND_CEILING)
+    )
+    billed_seconds = billing_units * rate_duration_seconds
+    estimated_total = money(rate_price * Decimal(billing_units))
+    return actual_elapsed_seconds, billed_seconds, estimated_total
+
+
 class BillingService:
     """Derived billing rules for sessions and auditable payment records."""
 
@@ -52,13 +72,42 @@ class BillingService:
                 Decimal("0.00"),
             )
         )
-        balance_due = money(max(session.total_amount - total_paid, Decimal("0.00")))
-        payment_status = get_payment_status(session.total_amount, total_paid)
+        display_total = session.total_amount
+        estimated_balance_due: Decimal | None = None
+        estimated_total_amount: Decimal | None = None
+        estimated_billed_seconds: int | None = session.billed_seconds
+        estimated_elapsed_seconds: int | None = session.actual_elapsed_seconds
+
+        if (
+            session.session_mode == "open_time"
+            and session.status == "active"
+            and session.metered_rate_price_snapshot is not None
+            and session.metered_rate_duration_seconds_snapshot is not None
+        ):
+            (
+                estimated_elapsed_seconds,
+                estimated_billed_seconds,
+                estimated_total_amount,
+            ) = calculate_open_time_estimate(
+                session.started_at,
+                current_utc_time(),
+                session.metered_rate_price_snapshot,
+                session.metered_rate_duration_seconds_snapshot,
+            )
+            display_total = estimated_total_amount
+            estimated_balance_due = money(max(display_total - total_paid, Decimal("0.00")))
+
+        balance_due = money(max(display_total - total_paid, Decimal("0.00")))
+        payment_status = get_payment_status(display_total, total_paid)
         enriched_session = session.model_copy(
             update={
                 "total_paid": total_paid,
                 "balance_due": balance_due,
                 "payment_status": payment_status,
+                "actual_elapsed_seconds": estimated_elapsed_seconds,
+                "billed_seconds": estimated_billed_seconds,
+                "estimated_total_amount": estimated_total_amount,
+                "estimated_balance_due": estimated_balance_due,
             }
         )
 
@@ -66,7 +115,7 @@ class BillingService:
             session=enriched_session,
             base_amount=session.base_amount,
             additional_amount=session.additional_amount,
-            total_amount=session.total_amount,
+            total_amount=display_total,
             total_paid=total_paid,
             balance_due=balance_due,
             payment_status=payment_status,
@@ -90,6 +139,7 @@ class BillingService:
         action_type: str = "manual",
         related_command_id: str | None = None,
         max_amount: Decimal | None = None,
+        actor_user_id: str | None = None,
     ) -> BillingSummary:
         billing = self.get_billing(session_id)
         amount = money(request.amount)
@@ -131,6 +181,7 @@ class BillingService:
             action_type=action_type,  # type: ignore[arg-type]
             related_command_id=related_command_id,
             review_required=False,
+            recorded_by_user_id=actor_user_id,
             status="completed",
             created_at=current_utc_time(),
         )
@@ -145,6 +196,7 @@ class BillingService:
                 created_at=current_utc_time(),
                 payment_id=payment.payment_id,
                 payment_method=payment.payment_method,
+                performed_by_user_id=actor_user_id,
             )
         )
         updated_billing = self.get_billing(session_id)
@@ -154,7 +206,10 @@ class BillingService:
             and updated_billing.balance_due == Decimal("0.00")
         ):
             settled_session = updated_billing.session.model_copy(
-                update={"settlement_pending": False}
+                update={
+                    "status": "completed",
+                    "settlement_pending": False,
+                }
             )
             self.session_repository.update_session(settled_session)
             self.session_repository.add_event(
@@ -167,6 +222,7 @@ class BillingService:
                     created_at=current_utc_time(),
                     payment_id=payment.payment_id,
                     payment_method=payment.payment_method,
+                    performed_by_user_id=actor_user_id,
                 )
             )
             return self.get_billing(session_id)
@@ -207,7 +263,12 @@ class BillingService:
     ) -> None:
         self.payment_repository.mark_review_required(payment_id, related_command_id)
 
-    def void_payment(self, payment_id: str, reason: str) -> BillingSummary:
+    def void_payment(
+        self,
+        payment_id: str,
+        reason: str,
+        actor_user_id: str | None = None,
+    ) -> BillingSummary:
         cleaned_reason = reason.strip()
         if not cleaned_reason:
             raise HTTPException(status_code=400, detail="Void reason is required")
@@ -218,7 +279,11 @@ class BillingService:
         if payment.status == "voided":
             raise HTTPException(status_code=409, detail="Payment is already voided")
 
-        voided_payment = self.payment_repository.void_payment(payment_id)
+        voided_payment = self.payment_repository.void_payment(
+            payment_id,
+            actor_user_id,
+            cleaned_reason,
+        )
         if voided_payment is None:
             raise HTTPException(status_code=404, detail="Payment not found")
 
@@ -232,6 +297,7 @@ class BillingService:
                 created_at=current_utc_time(),
                 payment_id=payment.payment_id,
                 payment_method=payment.payment_method,
+                performed_by_user_id=actor_user_id,
             )
         )
 

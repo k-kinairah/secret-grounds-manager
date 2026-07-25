@@ -12,10 +12,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from client.client import SecretGroundsClient
 from client.session_recovery import SessionRecoveryStore
 from server.database import initialize_database
+from server.billing_service import BillingService
+from server.payment_repository import PaymentRepository
 from server.rate_repository import RateRepository
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
-from server.schemas import PCRecord, SessionRecord
+from server.schemas import CommandAcknowledgement, PCRecord, SessionRecord
 
 
 class CapturingWebSocket:
@@ -139,10 +141,20 @@ def test_stale_local_record_cleared(temp_directory: str) -> None:
 
 def test_server_only_session_stays_locked(temp_directory: str) -> None:
     client = create_client(temp_directory)
+    websocket = CapturingWebSocket()
+    client.set_current_websocket(websocket)
     client.get_server_session_state = lambda: server_state("server-only", iso_in(60))
     client.reconcile_session_state()
     assert client.lock_screen.is_locked()
     assert client.active_session is None
+    assert websocket.sent_messages[-1] == {
+        "event_type": "reconciliation_unresolved",
+        "session_id": "server-only",
+        "reason": "server_only_active_session",
+    }
+    acknowledgement = client.end_local_session(end_command("server-only"))
+    assert acknowledgement["status"] == "failed"
+    assert acknowledgement["message"] == "no_matching_local_session"
     client.stop()
 
 
@@ -273,6 +285,80 @@ def test_duplicate_completion_event_not_duplicated(temp_directory: str) -> None:
     assert event_count == 1
 
 
+def test_force_end_server_only_open_time(temp_directory: str) -> None:
+    database_path = Path(temp_directory) / "force-end.sqlite3"
+    import os
+
+    os.environ["SECRET_GROUNDS_DB_PATH"] = str(database_path)
+    initialize_database()
+    repository = SessionRepository()
+    service = SessionService(
+        repository=repository,
+        rate_repository=RateRepository(),
+        connection_manager=DummyConnectionManager(),
+        pc_registry={
+            "PC-RECOVERY": PCRecord(
+                pc_name="PC-RECOVERY",
+                ip_address="127.0.0.1",
+                status="online",
+                last_seen=datetime.now(timezone.utc),
+            )
+        },
+        command_timeout_seconds=1,
+        billing_service=BillingService(repository, PaymentRepository()),
+    )
+
+    now = datetime.now(timezone.utc)
+    repository.create_session(
+        SessionRecord(
+            session_id="server-only-open-time",
+            pc_name="PC-RECOVERY",
+            status="active",
+            started_at=now - timedelta(minutes=6),
+            scheduled_end_at=now,
+            ended_at=None,
+            original_seconds=0,
+            added_seconds=0,
+            total_seconds=0,
+            amount_paid=None,
+            ended_reason=None,
+            created_at=now,
+            session_mode="open_time",
+            settlement_pending=True,
+            metered_rate_price_snapshot=__import__("decimal").Decimal("1.00"),
+            metered_rate_duration_seconds_snapshot=300,
+        )
+    )
+
+    async def reject_no_local_session(*_: object) -> list[CommandAcknowledgement]:
+        raise RuntimeError("no_matching_local_session")
+
+    service.send_required_command = reject_no_local_session  # type: ignore[method-assign]
+    response = __import__("asyncio").run(
+        service.force_end_session("server-only-open-time", "admin-user")
+    )
+    assert response.forced is True
+    assert response.reason == "no_matching_local_session"
+    assert response.session.status == "settlement_pending"
+    assert response.session.ended_reason == "recovery_force_end"
+    assert response.session.billed_seconds == 600
+    assert response.session.final_computed_amount == __import__("decimal").Decimal("2.00")
+    assert response.session.settlement_pending is True
+    assert repository.get_active_session_for_pc("PC-RECOVERY") is not None
+    assert repository.get_session("server-only-open-time") is not None
+
+    with sqlite3.connect(database_path) as connection:
+        event = connection.execute(
+            """
+            SELECT event_type, performed_by_user_id
+            FROM session_events
+            WHERE session_id = ? AND event_type = 'recovery_force_end'
+            """,
+            ("server-only-open-time",),
+        ).fetchone()
+    assert event == ("recovery_force_end", "admin-user")
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
         test_recovery_store_atomic_save_load_clear(temp_directory)
@@ -286,6 +372,7 @@ def main() -> None:
         test_expiration_offline_creates_pending_completion(temp_directory)
         test_reconnect_sends_pending_and_confirmation_clears(temp_directory)
         test_duplicate_completion_event_not_duplicated(temp_directory)
+        test_force_end_server_only_open_time(temp_directory)
     print("Session recovery smoke tests passed.")
 
 

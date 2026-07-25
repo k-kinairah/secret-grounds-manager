@@ -397,10 +397,25 @@ class SecretGroundsClient:
                 self.active_session is None
                 or self.active_session.session_id != session_id
             ):
+                if self.active_session is None:
+                    print(
+                        "Rejecting end_session command: "
+                        f"no local session for target {session_id}."
+                    )
+                    return self.build_acknowledgement(
+                        command_id,
+                        "failed",
+                        "no_matching_local_session",
+                    )
+
+                print(
+                    "Rejecting end_session command: local session "
+                    f"{self.active_session.session_id} does not match target {session_id}."
+                )
                 return self.build_acknowledgement(
                     command_id,
                     "failed",
-                    "Session ID does not match active timer",
+                    "session_id_mismatch",
                 )
 
             self.active_session.stop_event.set()
@@ -602,6 +617,14 @@ class SecretGroundsClient:
 
         if recovery_record is None and has_server_active_session:
             print("Reconciliation unresolved: server-only active session found.")
+            if isinstance(server_session, dict):
+                self.send_client_event(
+                    {
+                        "event_type": "reconciliation_unresolved",
+                        "session_id": server_session.get("session_id"),
+                        "reason": "server_only_active_session",
+                    }
+                )
             self.lock_screen.show_locked()
             return
 

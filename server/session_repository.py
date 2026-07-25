@@ -51,7 +51,17 @@ def row_to_session(row: Any) -> SessionRecord:
             if row["final_computed_amount"] is not None
             else None
         ),
+        metered_rate_price_snapshot=(
+            Decimal(row["metered_rate_price_snapshot"])
+            if row["metered_rate_price_snapshot"] is not None
+            else None
+        ),
+        metered_rate_duration_seconds_snapshot=row[
+            "metered_rate_duration_seconds_snapshot"
+        ],
         settlement_pending=bool(row["settlement_pending"]),
+        created_by_user_id=row["created_by_user_id"],
+        ended_by_user_id=row["ended_by_user_id"],
     )
 
 
@@ -68,6 +78,7 @@ def row_to_event(row: Any) -> SessionEventRecord:
         amount=Decimal(row["amount"]) if row["amount"] is not None else None,
         payment_id=row["payment_id"],
         payment_method=row["payment_method"],
+        performed_by_user_id=row["performed_by_user_id"],
     )
 
 
@@ -100,9 +111,13 @@ class SessionRepository:
                     actual_elapsed_seconds,
                     billed_seconds,
                     final_computed_amount,
-                    settlement_pending
+                    metered_rate_price_snapshot,
+                    metered_rate_duration_seconds_snapshot,
+                    settlement_pending,
+                    created_by_user_id,
+                    ended_by_user_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.session_id,
@@ -126,7 +141,11 @@ class SessionRepository:
                     session.actual_elapsed_seconds,
                     session.billed_seconds,
                     decimal_to_storage(session.final_computed_amount),
+                    decimal_to_storage(session.metered_rate_price_snapshot),
+                    session.metered_rate_duration_seconds_snapshot,
                     1 if session.settlement_pending else 0,
+                    session.created_by_user_id,
+                    session.ended_by_user_id,
                 ),
             )
 
@@ -147,9 +166,10 @@ class SessionRepository:
                     rate_name_snapshot,
                     amount,
                     payment_id,
-                    payment_method
+                    payment_method,
+                    performed_by_user_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.event_id,
@@ -163,6 +183,7 @@ class SessionRepository:
                     decimal_to_storage(event.amount),
                     event.payment_id,
                     event.payment_method,
+                    event.performed_by_user_id,
                 ),
             )
 
@@ -185,7 +206,7 @@ class SessionRepository:
             row = connection.execute(
                 """
                 SELECT * FROM sessions
-                WHERE pc_name = ? AND status = 'active'
+                WHERE pc_name = ? AND status IN ('active', 'ending', 'settlement_pending')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -202,7 +223,7 @@ class SessionRepository:
             rows = connection.execute(
                 """
                 SELECT * FROM sessions
-                WHERE status = 'active'
+                WHERE status IN ('active', 'ending', 'settlement_pending')
                 ORDER BY created_at DESC
                 """
             ).fetchall()
@@ -243,7 +264,11 @@ class SessionRepository:
                     actual_elapsed_seconds = ?,
                     billed_seconds = ?,
                     final_computed_amount = ?,
-                    settlement_pending = ?
+                    metered_rate_price_snapshot = ?,
+                    metered_rate_duration_seconds_snapshot = ?,
+                    settlement_pending = ?,
+                    created_by_user_id = ?,
+                    ended_by_user_id = ?
                 WHERE session_id = ?
                 """,
                 (
@@ -267,7 +292,11 @@ class SessionRepository:
                     session.actual_elapsed_seconds,
                     session.billed_seconds,
                     decimal_to_storage(session.final_computed_amount),
+                    decimal_to_storage(session.metered_rate_price_snapshot),
+                    session.metered_rate_duration_seconds_snapshot,
                     1 if session.settlement_pending else 0,
+                    session.created_by_user_id,
+                    session.ended_by_user_id,
                     session.session_id,
                 ),
             )

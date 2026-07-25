@@ -30,6 +30,14 @@ def row_to_payment(row: Any) -> PaymentRecord:
         action_type=row["action_type"],
         related_command_id=row["related_command_id"],
         review_required=bool(row["review_required"]),
+        recorded_by_user_id=row["recorded_by_user_id"],
+        voided_by_user_id=row["voided_by_user_id"],
+        voided_at=(
+            datetime.fromisoformat(row["voided_at"])
+            if row["voided_at"] is not None
+            else None
+        ),
+        void_reason=row["void_reason"],
         status=row["status"],
         created_at=datetime.fromisoformat(row["created_at"]),
     )
@@ -54,10 +62,14 @@ class PaymentRepository:
                     action_type,
                     related_command_id,
                     review_required,
+                    recorded_by_user_id,
+                    voided_by_user_id,
+                    voided_at,
+                    void_reason,
                     status,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payment.payment_id,
@@ -71,6 +83,10 @@ class PaymentRepository:
                     payment.action_type,
                     payment.related_command_id,
                     1 if payment.review_required else 0,
+                    payment.recorded_by_user_id,
+                    payment.voided_by_user_id,
+                    payment.voided_at.isoformat() if payment.voided_at is not None else None,
+                    payment.void_reason,
                     payment.status,
                     payment.created_at.isoformat(),
                 ),
@@ -100,16 +116,35 @@ class PaymentRepository:
 
         return [row_to_payment(row) for row in rows]
 
-    def void_payment(self, payment_id: str) -> PaymentRecord | None:
+    def void_payment(
+        self,
+        payment_id: str,
+        voided_by_user_id: str | None,
+        reason: str,
+    ) -> PaymentRecord | None:
         existing = self.get_payment(payment_id)
         if existing is None:
             return None
 
-        updated = existing.model_copy(update={"status": "voided"})
+        from server.time_utils import current_utc_time
+
+        now = current_utc_time()
+        updated = existing.model_copy(
+            update={
+                "status": "voided",
+                "voided_by_user_id": voided_by_user_id,
+                "voided_at": now,
+                "void_reason": reason,
+            }
+        )
         with get_connection() as connection:
             connection.execute(
-                "UPDATE payments SET status = 'voided' WHERE payment_id = ?",
-                (payment_id,),
+                """
+                UPDATE payments
+                SET status = 'voided', voided_by_user_id = ?, voided_at = ?, void_reason = ?
+                WHERE payment_id = ?
+                """,
+                (voided_by_user_id, now.isoformat(), reason, payment_id),
             )
 
         return updated

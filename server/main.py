@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from server.connection_manager import ClientConnectionManager
@@ -16,6 +16,7 @@ from server.schemas import (
     CalculateTimeRequest,
     ClientEvent,
     ClientCommand,
+    ForceEndSessionResponse,
     PCHeartbeat,
     PCDashboardRecord,
     PCRecord,
@@ -23,6 +24,8 @@ from server.schemas import (
     PCRegistrationResponse,
     PCSessionStateResponse,
     PaymentCreateRequest,
+    LoginRequest,
+    PasswordResetRequest,
     PrepaidAddTimeRequest,
     PrepaidStartSessionRequest,
     OpenTimeStartRequest,
@@ -37,6 +40,24 @@ from server.schemas import (
     TestCommandRequest,
     TestCommandResponse,
     VoidPaymentRequest,
+    UserAdminRecord,
+    UserCreateRequest,
+    UserPublic,
+    UserStatusUpdate,
+    UserUpdateRequest,
+)
+from server.auth import (
+    AUTH_COOKIE_NAME,
+    auth_session_repository,
+    authenticate_login,
+    clear_auth_cookie,
+    get_actor_user_id,
+    get_current_user,
+    require_owner,
+    require_role,
+    set_auth_cookie,
+    to_public_user,
+    user_repository,
 )
 from server.billing_service import BillingService
 from server.payment_repository import PaymentRepository
@@ -48,6 +69,7 @@ from server.time_utils import current_utc_time
 
 
 pc_registry: dict[str, PCRecord] = {}
+recovery_flags: dict[str, dict[str, str]] = {}
 connection_manager = ClientConnectionManager()
 session_repository = SessionRepository()
 payment_repository = PaymentRepository()
@@ -143,7 +165,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_cors_origins(),
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH"],
     allow_headers=["Content-Type"],
 )
@@ -154,6 +176,79 @@ def home() -> dict[str, str]:
     return {
         "message": "Welcome to Secret Grounds Management System!"
     }
+
+
+@app.post("/auth/login", response_model=UserPublic)
+def login(request: LoginRequest, response: Response) -> UserPublic:
+    user = authenticate_login(request)
+    token, _ = auth_session_repository.create_session(user.user_id, int(os.getenv("SECRET_GROUNDS_AUTH_SECONDS", str(8 * 60 * 60))))
+    set_auth_cookie(response, token)
+    return to_public_user(user)
+
+
+@app.post("/auth/logout")
+def logout(
+    response: Response,
+    sg_session: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+) -> dict[str, str]:
+    if sg_session:
+        auth_session_repository.revoke_token(sg_session)
+    clear_auth_cookie(response)
+    return {"message": "Logged out"}
+
+
+@app.get("/auth/me", response_model=UserPublic)
+def get_me(current_user=Depends(get_current_user)) -> UserPublic:
+    return to_public_user(current_user)
+
+
+@app.get("/users", response_model=list[UserAdminRecord])
+def list_users(_: object = Depends(require_owner)) -> list[UserAdminRecord]:
+    return user_repository.list_users()
+
+
+@app.post("/users", response_model=UserAdminRecord)
+def create_user(
+    request: UserCreateRequest,
+    _: object = Depends(require_owner),
+) -> UserAdminRecord:
+    return user_repository.create_user(request)
+
+
+@app.put("/users/{user_id}", response_model=UserAdminRecord)
+def update_user(
+    user_id: str,
+    request: UserUpdateRequest,
+    _: object = Depends(require_owner),
+) -> UserAdminRecord:
+    user = user_repository.update_user(user_id, request)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@app.patch("/users/{user_id}/status", response_model=UserAdminRecord)
+def update_user_status(
+    user_id: str,
+    request: UserStatusUpdate,
+    _: object = Depends(require_owner),
+) -> UserAdminRecord:
+    user = user_repository.set_active(user_id, request)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@app.post("/users/{user_id}/reset-password", response_model=UserAdminRecord)
+def reset_user_password(
+    user_id: str,
+    request: PasswordResetRequest,
+    _: object = Depends(require_owner),
+) -> UserAdminRecord:
+    user = user_repository.reset_password(user_id, request)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 
 @app.post("/register", response_model=PCRegistrationResponse)
@@ -206,6 +301,7 @@ async def client_websocket(websocket: WebSocket, pc_name: str) -> None:
                     client_event.session_id,
                     client_event.message,
                 )
+                recovery_flags.pop(cleaned_pc_name, None)
                 await websocket.send_json(
                     {
                         "event_type": "session_completion_recorded",
@@ -214,6 +310,12 @@ async def client_websocket(websocket: WebSocket, pc_name: str) -> None:
                         "server_time": current_utc_time().isoformat(),
                     }
                 )
+            elif message.get("event_type") == "reconciliation_unresolved":
+                client_event = ClientEvent.model_validate(message)
+                recovery_flags[cleaned_pc_name] = {
+                    "session_id": client_event.session_id,
+                    "reason": client_event.reason or "reconciliation_unresolved",
+                }
     except WebSocketDisconnect:
         pass
     finally:
@@ -221,18 +323,30 @@ async def client_websocket(websocket: WebSocket, pc_name: str) -> None:
 
 
 @app.get("/pcs", response_model=list[PCDashboardRecord])
-def get_registered_pcs() -> list[PCDashboardRecord]:
+def get_registered_pcs(
+    _: object = Depends(require_role("cashier")),
+) -> list[PCDashboardRecord]:
     mark_stale_pcs_offline()
     now = current_utc_time()
     dashboard_records: list[PCDashboardRecord] = []
 
     for _, pc in sorted(pc_registry.items()):
         active_session = session_repository.get_active_session_for_pc(pc.pc_name)
+        recovery_flag = recovery_flags.get(pc.pc_name)
         remaining_seconds: int | None = None
         connection_status = "online" if pc.status == "online" else "offline"
-        session_status = "active" if active_session is not None else "idle"
+        session_status = (
+            active_session.status
+            if active_session is not None
+            and active_session.status in {"active", "ending", "settlement_pending"}
+            else "idle"
+        )
 
-        if connection_status == "offline" and active_session is not None:
+        if (
+            connection_status == "offline"
+            and active_session is not None
+            and active_session.status in {"active", "ending"}
+        ):
             session_status = "unknown"
 
         if active_session is not None:
@@ -241,8 +355,10 @@ def get_registered_pcs() -> list[PCDashboardRecord]:
                 int((active_session.scheduled_end_at - now).total_seconds()),
             )
             billing = billing_service.summarize_session(active_session)
+            display_session = billing.session
         else:
             billing = None
+            display_session = None
 
         dashboard_records.append(
             PCDashboardRecord(
@@ -254,6 +370,9 @@ def get_registered_pcs() -> list[PCDashboardRecord]:
                 active_session_id=(
                     active_session.session_id if active_session is not None else None
                 ),
+                started_at=(
+                    active_session.started_at if active_session is not None else None
+                ),
                 scheduled_end_at=(
                     active_session.scheduled_end_at
                     if active_session is not None
@@ -261,21 +380,21 @@ def get_registered_pcs() -> list[PCDashboardRecord]:
                 ),
                 remaining_seconds=remaining_seconds,
                 rate_name_snapshot=(
-                    active_session.rate_name_snapshot if active_session is not None else None
+                    display_session.rate_name_snapshot if display_session is not None else None
                 ),
                 base_amount=(
-                    active_session.base_amount
-                    if active_session is not None
+                    display_session.base_amount
+                    if display_session is not None
                     else 0
                 ),
                 additional_amount=(
-                    active_session.additional_amount
-                    if active_session is not None
+                    display_session.additional_amount
+                    if display_session is not None
                     else 0
                 ),
                 total_amount=(
-                    active_session.total_amount
-                    if active_session is not None
+                    display_session.total_amount
+                    if display_session is not None
                     else 0
                 ),
                 total_paid=(billing.total_paid if billing is not None else 0),
@@ -284,29 +403,57 @@ def get_registered_pcs() -> list[PCDashboardRecord]:
                     billing.payment_status if billing is not None else "unpaid"
                 ),
                 session_mode=(
-                    active_session.session_mode if active_session is not None else "prepaid"
+                    display_session.session_mode if display_session is not None else "prepaid"
                 ),
                 actual_elapsed_seconds=(
-                    max(0, int((now - active_session.started_at).total_seconds()))
-                    if active_session is not None and active_session.session_mode == "open_time"
-                    else (
-                        active_session.actual_elapsed_seconds
-                        if active_session is not None
-                        else None
-                    )
+                    display_session.actual_elapsed_seconds
+                    if display_session is not None
+                    else None
                 ),
                 billed_seconds=(
-                    active_session.billed_seconds if active_session is not None else None
+                    display_session.billed_seconds if display_session is not None else None
                 ),
                 final_computed_amount=(
-                    active_session.final_computed_amount
-                    if active_session is not None
+                    display_session.final_computed_amount
+                    if display_session is not None
+                    else None
+                ),
+                metered_rate_price_snapshot=(
+                    display_session.metered_rate_price_snapshot
+                    if display_session is not None
+                    else None
+                ),
+                metered_rate_duration_seconds_snapshot=(
+                    display_session.metered_rate_duration_seconds_snapshot
+                    if display_session is not None
+                    else None
+                ),
+                estimated_total_amount=(
+                    display_session.estimated_total_amount
+                    if display_session is not None
+                    else None
+                ),
+                estimated_balance_due=(
+                    display_session.estimated_balance_due
+                    if display_session is not None
                     else None
                 ),
                 settlement_pending=(
-                    active_session.settlement_pending
-                    if active_session is not None
+                    display_session.settlement_pending
+                    if display_session is not None
                     else False
+                ),
+                recovery_required=(
+                    active_session is not None
+                    and recovery_flag is not None
+                    and recovery_flag.get("session_id") == active_session.session_id
+                ),
+                recovery_reason=(
+                    recovery_flag.get("reason")
+                    if active_session is not None
+                    and recovery_flag is not None
+                    and recovery_flag.get("session_id") == active_session.session_id
+                    else None
                 ),
             )
         )
@@ -318,10 +465,14 @@ def get_registered_pcs() -> list[PCDashboardRecord]:
 def get_pc_session_state(pc_name: str) -> PCSessionStateResponse:
     cleaned_pc_name = pc_name.strip()
     active_session = session_repository.get_active_session_for_pc(cleaned_pc_name)
+    has_client_active_session = (
+        active_session is not None
+        and active_session.status in {"active", "ending"}
+    )
 
     return PCSessionStateResponse(
         pc_name=cleaned_pc_name,
-        has_active_session=active_session is not None,
+        has_active_session=has_client_active_session,
         session=(
             SessionStateSummary(
                 session_id=active_session.session_id,
@@ -330,7 +481,7 @@ def get_pc_session_state(pc_name: str) -> PCSessionStateResponse:
                 total_seconds=active_session.total_seconds,
                 session_mode=active_session.session_mode,
             )
-            if active_session is not None
+            if has_client_active_session and active_session is not None
             else None
         ),
         server_time=current_utc_time(),
@@ -340,6 +491,7 @@ def get_pc_session_state(pc_name: str) -> PCSessionStateResponse:
 @app.post("/commands/test-ping", response_model=TestCommandResponse)
 async def send_test_ping_command(
     request: TestCommandRequest,
+    _: object = Depends(require_role("admin")),
 ) -> TestCommandResponse:
     pc_name = request.pc_name.strip()
     mark_stale_pcs_offline()
@@ -385,42 +537,59 @@ async def send_test_ping_command(
 
 
 @app.post("/sessions/start", response_model=SessionCommandResponse)
-async def start_session(request: StartSessionRequest) -> SessionCommandResponse:
+async def start_session(
+    request: StartSessionRequest,
+    current_user: object = Depends(require_role("cashier")),
+) -> SessionCommandResponse:
     mark_stale_pcs_offline()
-    return await session_service.start_session(
+    response = await session_service.start_session(
         request.pc_name,
         request.duration_seconds,
         request.rate_id,
         request.amount,
+        get_actor_user_id(current_user),
     )
+    recovery_flags.pop(response.session.pc_name, None)
+    return response
 
 
 @app.post("/sessions/start-prepaid", response_model=SessionCommandResponse)
 async def start_prepaid_session(
     request: PrepaidStartSessionRequest,
+    current_user: object = Depends(require_role("cashier")),
 ) -> SessionCommandResponse:
     mark_stale_pcs_offline()
-    return await session_service.start_prepaid_session(
+    response = await session_service.start_prepaid_session(
         request.pc_name,
         request.payment,
         request.duration_seconds,
         request.rate_id,
         request.amount,
+        get_actor_user_id(current_user),
     )
+    recovery_flags.pop(response.session.pc_name, None)
+    return response
 
 
 @app.post("/sessions/start-open-time", response_model=SessionCommandResponse)
 async def start_open_time_session(
     request: OpenTimeStartRequest,
+    current_user: object = Depends(require_role("cashier")),
 ) -> SessionCommandResponse:
     mark_stale_pcs_offline()
-    return await session_service.start_open_time_session(request.pc_name)
+    response = await session_service.start_open_time_session(
+        request.pc_name,
+        get_actor_user_id(current_user),
+    )
+    recovery_flags.pop(response.session.pc_name, None)
+    return response
 
 
 @app.post("/sessions/{session_id}/add-time", response_model=SessionCommandResponse)
 async def add_time_to_session(
     session_id: str,
     request: AddTimeRequest,
+    current_user: object = Depends(require_role("cashier")),
 ) -> SessionCommandResponse:
     mark_stale_pcs_offline()
     return await session_service.add_time(
@@ -428,6 +597,7 @@ async def add_time_to_session(
         request.seconds,
         request.rate_id,
         request.amount,
+        get_actor_user_id(current_user),
     )
 
 
@@ -435,6 +605,7 @@ async def add_time_to_session(
 async def add_prepaid_time_to_session(
     session_id: str,
     request: PrepaidAddTimeRequest,
+    current_user: object = Depends(require_role("cashier")),
 ) -> SessionCommandResponse:
     mark_stale_pcs_offline()
     return await session_service.add_prepaid_time(
@@ -443,17 +614,42 @@ async def add_prepaid_time_to_session(
         request.seconds,
         request.rate_id,
         request.amount,
+        get_actor_user_id(current_user),
     )
 
 
 @app.post("/sessions/{session_id}/end", response_model=SessionCommandResponse)
-async def end_session(session_id: str) -> SessionCommandResponse:
+async def end_session(
+    session_id: str,
+    current_user: object = Depends(require_role("cashier")),
+) -> SessionCommandResponse:
     mark_stale_pcs_offline()
-    return await session_service.end_session(session_id)
+    response = await session_service.end_session(
+        session_id,
+        get_actor_user_id(current_user),
+    )
+    recovery_flags.pop(response.session.pc_name, None)
+    return response
+
+
+@app.post("/sessions/{session_id}/force-end", response_model=ForceEndSessionResponse)
+async def force_end_session(
+    session_id: str,
+    current_user: object = Depends(require_role("admin")),
+) -> ForceEndSessionResponse:
+    mark_stale_pcs_offline()
+    response = await session_service.force_end_session(
+        session_id,
+        get_actor_user_id(current_user),
+    )
+    recovery_flags.pop(response.session.pc_name, None)
+    return response
 
 
 @app.get("/sessions/active", response_model=list[SessionRecord])
-def get_active_sessions() -> list[SessionRecord]:
+def get_active_sessions(
+    _: object = Depends(require_role("cashier")),
+) -> list[SessionRecord]:
     return [
         billing_service.enrich_session(session)
         for session in session_repository.list_active_sessions()
@@ -461,7 +657,9 @@ def get_active_sessions() -> list[SessionRecord]:
 
 
 @app.get("/sessions/history", response_model=list[SessionRecord])
-def get_session_history() -> list[SessionRecord]:
+def get_session_history(
+    _: object = Depends(require_role("cashier")),
+) -> list[SessionRecord]:
     return [
         billing_service.enrich_session(session)
         for session in session_repository.list_history()
@@ -469,7 +667,10 @@ def get_session_history() -> list[SessionRecord]:
 
 
 @app.get("/sessions/{session_id}", response_model=SessionRecord)
-def get_session(session_id: str) -> SessionRecord:
+def get_session(
+    session_id: str,
+    _: object = Depends(require_role("cashier")),
+) -> SessionRecord:
     session = session_repository.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -478,7 +679,10 @@ def get_session(session_id: str) -> SessionRecord:
 
 
 @app.get("/sessions/{session_id}/billing", response_model=BillingSummary)
-def get_session_billing(session_id: str) -> BillingSummary:
+def get_session_billing(
+    session_id: str,
+    _: object = Depends(require_role("cashier")),
+) -> BillingSummary:
     return billing_service.get_billing(session_id)
 
 
@@ -486,22 +690,40 @@ def get_session_billing(session_id: str) -> BillingSummary:
 def record_payment(
     session_id: str,
     request: PaymentCreateRequest,
+    current_user: object = Depends(require_role("cashier")),
 ) -> BillingSummary:
-    return billing_service.record_payment(session_id, request)
+    return billing_service.record_payment(
+        session_id,
+        request,
+        actor_user_id=get_actor_user_id(current_user),
+    )
 
 
 @app.post("/payments/{payment_id}/void", response_model=BillingSummary)
-def void_payment(payment_id: str, request: VoidPaymentRequest) -> BillingSummary:
-    return billing_service.void_payment(payment_id, request.reason)
+def void_payment(
+    payment_id: str,
+    request: VoidPaymentRequest,
+    current_user: object = Depends(require_role("admin")),
+) -> BillingSummary:
+    return billing_service.void_payment(
+        payment_id,
+        request.reason,
+        get_actor_user_id(current_user),
+    )
 
 
 @app.get("/rates", response_model=list[RateProfile])
-def get_rates(include_inactive: bool = False) -> list[RateProfile]:
+def get_rates(
+    include_inactive: bool = False,
+    _: object = Depends(require_role("cashier")),
+) -> list[RateProfile]:
     return rate_repository.list_rates(include_inactive=include_inactive)
 
 
 @app.get("/rates/metered", response_model=RateProfile)
-def get_metered_rate() -> RateProfile:
+def get_metered_rate(
+    _: object = Depends(require_role("cashier")),
+) -> RateProfile:
     rate = rate_repository.get_active_metered_rate()
     if rate is None:
         raise HTTPException(status_code=404, detail="Active metered rate is missing")
@@ -509,7 +731,10 @@ def get_metered_rate() -> RateProfile:
 
 
 @app.post("/rates/calculate-time", response_model=CalculatedTimeResponse)
-def calculate_time(request: CalculateTimeRequest) -> CalculatedTimeResponse:
+def calculate_time(
+    request: CalculateTimeRequest,
+    _: object = Depends(require_role("cashier")),
+) -> CalculatedTimeResponse:
     rate = rate_repository.get_active_metered_rate()
     if rate is None:
         raise HTTPException(status_code=409, detail="Active metered rate is missing")
@@ -517,21 +742,36 @@ def calculate_time(request: CalculateTimeRequest) -> CalculatedTimeResponse:
 
 
 @app.post("/rates", response_model=RateProfile)
-def create_rate(request: RateProfileCreate) -> RateProfile:
-    return rate_repository.create_rate(request)
+def create_rate(
+    request: RateProfileCreate,
+    current_user: object = Depends(require_role("admin")),
+) -> RateProfile:
+    return rate_repository.create_rate(request, get_actor_user_id(current_user))
 
 
 @app.put("/rates/{rate_id}", response_model=RateProfile)
-def update_rate(rate_id: str, request: RateProfileUpdate) -> RateProfile:
-    rate = rate_repository.update_rate(rate_id, request)
+def update_rate(
+    rate_id: str,
+    request: RateProfileUpdate,
+    current_user: object = Depends(require_role("admin")),
+) -> RateProfile:
+    rate = rate_repository.update_rate(rate_id, request, get_actor_user_id(current_user))
     if rate is None:
         raise HTTPException(status_code=404, detail="Rate not found")
     return rate
 
 
 @app.patch("/rates/{rate_id}/status", response_model=RateProfile)
-def update_rate_status(rate_id: str, request: RateStatusUpdate) -> RateProfile:
-    rate = rate_repository.set_active(rate_id, request.is_active)
+def update_rate_status(
+    rate_id: str,
+    request: RateStatusUpdate,
+    current_user: object = Depends(require_role("admin")),
+) -> RateProfile:
+    rate = rate_repository.set_active(
+        rate_id,
+        request.is_active,
+        get_actor_user_id(current_user),
+    )
     if rate is None:
         raise HTTPException(status_code=404, detail="Rate not found")
     return rate

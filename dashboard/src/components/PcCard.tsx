@@ -1,15 +1,17 @@
 import styles from "@/app/page.module.css";
 import { formatDateTime, formatMoney, formatTimer } from "@/lib/time";
 import { getPcActionAvailability, getPcCardTone } from "@/lib/pcStatus";
-import type { PcSummary } from "@/lib/types";
+import type { PcSummary, UserRole } from "@/lib/types";
 
 interface PcCardProps {
   pc: PcSummary;
   onStart: (pc: PcSummary) => void;
   onAddTime: (pc: PcSummary) => void;
   onEnd: (pc: PcSummary) => void;
+  onResolve: (pc: PcSummary) => void;
   onDetails: (pc: PcSummary) => void;
   onPayment: (pc: PcSummary) => void;
+  currentUserRole: UserRole | null;
 }
 
 const toneClassName = {
@@ -24,23 +26,43 @@ const connectionBadgeClassName = {
   offline: styles.badgeOffline
 };
 
-export function PcCard({ pc, onStart, onAddTime, onEnd, onDetails, onPayment }: PcCardProps) {
+export function PcCard({
+  pc,
+  onStart,
+  onAddTime,
+  onEnd,
+  onResolve,
+  onDetails,
+  onPayment,
+  currentUserRole
+}: PcCardProps) {
   const actions = getPcActionAvailability(pc);
   const tone = getPcCardTone(pc);
   const connectionLabel = pc.connection_status === "online" ? "Online" : "Offline";
   const sessionLabel =
     pc.session_status === "active"
       ? "In Use"
+      : pc.session_status === "ending"
+        ? "Ending"
+        : pc.session_status === "settlement_pending"
+          ? "Settlement Pending"
       : pc.session_status === "unknown"
         ? "Needs Review"
         : "Available";
   const sessionBadgeClassName =
-    pc.session_status === "active"
+    pc.recovery_required
+      ? styles.badgeWarning
+      : pc.session_status === "active"
       ? styles.badgeActive
+      : pc.session_status === "ending" || pc.session_status === "settlement_pending"
+        ? styles.badgeWarning
       : pc.session_status === "unknown"
         ? styles.badgeWarning
         : styles.badgeIdle;
   const isOpenTime = pc.session_mode === "open_time";
+  const isSettlementPending = pc.session_status === "settlement_pending";
+  const canResolve =
+    pc.recovery_required && (currentUserRole === "owner" || currentUserRole === "admin");
 
   return (
     <article className={`${styles.pcCard} ${toneClassName[tone]}`}>
@@ -60,17 +82,19 @@ export function PcCard({ pc, onStart, onAddTime, onEnd, onDetails, onPayment }: 
               {connectionLabel}
             </span>
             <span className={`${styles.sessionPill} ${sessionBadgeClassName}`}>
-              {sessionLabel}
+              {pc.recovery_required ? "Recovery Required" : sessionLabel}
             </span>
           </div>
         </div>
-        {pc.session_status === "active" ? (
+        {pc.session_status === "active" || pc.session_status === "ending" ? (
           <div className={styles.timerBlock}>
             <div className={styles.timerLabel}>{isOpenTime ? "Elapsed" : "Remaining"}</div>
             <div className={styles.timerValue}>
               {formatTimer(isOpenTime ? pc.actual_elapsed_seconds : pc.remaining_seconds)}
             </div>
           </div>
+        ) : isSettlementPending ? (
+          <div className={styles.availableBlock}>Settlement Pending</div>
         ) : (
           <div className={styles.availableBlock}>
             {pc.session_status === "unknown" ? "Recovery Review" : "Available"}
@@ -83,19 +107,39 @@ export function PcCard({ pc, onStart, onAddTime, onEnd, onDetails, onPayment }: 
               {pc.connection_status === "offline" ? formatDateTime(pc.last_seen) : pc.ip_address}
             </strong>
           </div>
-          {pc.session_status === "active" ? (
+          {pc.session_status === "active" || pc.session_status === "ending" || isSettlementPending ? (
             <>
               <div className={styles.detailRow}>
-                <span>Current total</span>
-                <strong>{formatMoney(pc.total_amount)}</strong>
+                <span>
+                  {isSettlementPending
+                    ? "Final amount"
+                    : isOpenTime
+                      ? "Estimated total"
+                      : "Current total"}
+                </span>
+                <strong>
+                  {formatMoney(
+                    isSettlementPending
+                      ? pc.total_amount
+                      : isOpenTime
+                        ? pc.estimated_total_amount
+                        : pc.total_amount
+                  )}
+                </strong>
               </div>
               <div className={styles.detailRow}>
                 <span>Paid</span>
                 <strong>{formatMoney(pc.total_paid)}</strong>
               </div>
               <div className={styles.detailRow}>
-                <span>Balance</span>
-                <strong>{formatMoney(pc.balance_due)}</strong>
+                <span>{isOpenTime && !isSettlementPending ? "Estimated balance" : "Balance"}</span>
+                <strong>
+                  {formatMoney(
+                    isOpenTime && !isSettlementPending
+                      ? pc.estimated_balance_due
+                      : pc.balance_due
+                  )}
+                </strong>
               </div>
             </>
           ) : null}
@@ -118,17 +162,17 @@ export function PcCard({ pc, onStart, onAddTime, onEnd, onDetails, onPayment }: 
         </button>
         <button
           className={styles.secondaryButton}
-          disabled={!actions.canAddTime}
-          onClick={() => onPayment(pc)}
+          disabled={pc.recovery_required || (!actions.canAddTime && !actions.canCollectPayment)}
+          onClick={() => (isOpenTime && !isSettlementPending ? onEnd(pc) : onPayment(pc))}
         >
-          {isOpenTime && pc.settlement_pending ? "Settle" : "Payment"}
+          {isSettlementPending ? "Collect Payment" : isOpenTime ? "End & Settle" : "Payment"}
         </button>
         <button
           className={styles.dangerButton}
-          disabled={!actions.canEnd}
-          onClick={() => onEnd(pc)}
+          disabled={!actions.canEnd || (pc.recovery_required && !canResolve)}
+          onClick={() => (pc.recovery_required ? onResolve(pc) : onEnd(pc))}
         >
-          End Session
+          {pc.recovery_required ? (canResolve ? "Resolve Session" : "Needs Admin") : "End Session"}
         </button>
       </div>
     </article>

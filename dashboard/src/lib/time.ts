@@ -98,3 +98,71 @@ export function secondsFromScheduledEnd(
 
   return Math.max(0, Math.floor((new Date(scheduledEndAt).getTime() - nowMs) / 1000));
 }
+
+export function secondsFromStartedAt(startedAt: string | null, nowMs = Date.now()): number | null {
+  if (startedAt === null) {
+    return null;
+  }
+
+  return Math.max(0, Math.floor((nowMs - new Date(startedAt).getTime()) / 1000));
+}
+
+function parseMoneyToCents(value: string | null): bigint {
+  if (value === null) {
+    return 0n;
+  }
+
+  const trimmedValue = value.trim();
+  const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(trimmedValue);
+  if (!match) {
+    return 0n;
+  }
+
+  const pesos = BigInt(match[1]);
+  const cents = BigInt((match[2] ?? "").padEnd(2, "0"));
+  return pesos * 100n + cents;
+}
+
+function formatCents(cents: bigint): string {
+  const safeCents = cents < 0n ? 0n : cents;
+  const pesos = safeCents / 100n;
+  const remainder = safeCents % 100n;
+  return `${pesos}.${remainder.toString().padStart(2, "0")}`;
+}
+
+export interface OpenTimeEstimate {
+  actualElapsedSeconds: number;
+  billedSeconds: number;
+  estimatedTotalAmount: string;
+  estimatedBalanceDue: string;
+}
+
+export function calculateOpenTimeEstimate(
+  startedAt: string | null,
+  nowMs: number,
+  rateDurationSeconds: number | null,
+  ratePrice: string | null,
+  paidAmount: string
+): OpenTimeEstimate | null {
+  const elapsedSeconds = secondsFromStartedAt(startedAt, nowMs);
+  if (
+    elapsedSeconds === null ||
+    rateDurationSeconds === null ||
+    rateDurationSeconds <= 0 ||
+    ratePrice === null
+  ) {
+    return null;
+  }
+
+  const billingUnits = elapsedSeconds === 0 ? 0 : Math.ceil(elapsedSeconds / rateDurationSeconds);
+  const billedSeconds = billingUnits * rateDurationSeconds;
+  const estimatedTotalCents = parseMoneyToCents(ratePrice) * BigInt(billingUnits);
+  const estimatedBalanceCents = estimatedTotalCents - parseMoneyToCents(paidAmount);
+
+  return {
+    actualElapsedSeconds: elapsedSeconds,
+    billedSeconds,
+    estimatedTotalAmount: formatCents(estimatedTotalCents),
+    estimatedBalanceDue: formatCents(estimatedBalanceCents)
+  };
+}
