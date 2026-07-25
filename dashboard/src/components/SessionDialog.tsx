@@ -1,13 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import styles from "@/app/page.module.css";
+import { fetchMembers } from "@/lib/api";
 import { calculateCashChange } from "@/lib/paymentSelection";
 import { calculatePreviewSeconds } from "@/lib/sessionSelection";
 import { formatMoney, formatRateDuration, minutesToSeconds } from "@/lib/time";
-import type { PaymentMethod, PcSummary, PrepaidSessionSelection, RateProfile } from "@/lib/types";
+import type { MemberRecord, MemberSessionSelection, PaymentMethod, PcSummary, PrepaidSessionSelection, RateProfile } from "@/lib/types";
 
 type DialogMode = "start" | "add";
-type SelectionTab = "amount" | "packages" | "open_time";
-type SessionSelection = PrepaidSessionSelection | { sessionMode: "open_time" };
+type SelectionTab = "amount" | "packages" | "member" | "open_time";
+type SessionSelection = PrepaidSessionSelection | MemberSessionSelection | { sessionMode: "open_time" };
 
 interface SessionDialogProps {
   mode: DialogMode;
@@ -40,6 +41,11 @@ export function SessionDialog({
   const [cashReceived, setCashReceived] = useState("");
   const [referenceNumber, setReferenceNumber] = useState("");
   const [notes, setNotes] = useState("");
+  const [members, setMembers] = useState<MemberRecord[]>([]);
+  const [memberQuery, setMemberQuery] = useState("");
+  const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [useMemberCap, setUseMemberCap] = useState(false);
+  const [memberMinutes, setMemberMinutes] = useState("60");
   const title = mode === "start" ? `Start ${pc.pc_name}` : `Add time to ${pc.pc_name}`;
   const previewSeconds = useMemo(
     () => calculatePreviewSeconds(amount, meteredRate),
@@ -56,6 +62,38 @@ export function SessionDialog({
     selectedPaymentAmount,
     cashReceived || selectedPaymentAmount
   );
+  const selectedMember = members.find((member) => member.member_id === selectedMemberId) ?? null;
+  const memberDurationMinutes = Number(memberMinutes || "0");
+  const memberDurationSeconds =
+    Number.isFinite(memberDurationMinutes) && memberDurationMinutes > 0
+      ? minutesToSeconds(memberDurationMinutes)
+      : 0;
+  const memberBalanceAfter =
+    selectedMember === null
+      ? null
+      : selectedMember.time_balance_seconds - (useMemberCap ? memberDurationSeconds : 0);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchMembers(memberQuery)
+      .then((nextMembers) => {
+        if (!isMounted) {
+          return;
+        }
+        setMembers(nextMembers.filter((member) => member.status === "active"));
+        if (!selectedMemberId && nextMembers[0]) {
+          setSelectedMemberId(nextMembers[0].member_id);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setMembers([]);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [memberQuery, selectedMemberId]);
 
   function buildPayment(paymentAmount: string) {
     return {
@@ -70,6 +108,23 @@ export function SessionDialog({
   function confirm() {
     if (activeTab === "open_time") {
       onConfirm({ sessionMode: "open_time" });
+      return;
+    }
+
+    if (activeTab === "member") {
+      if (
+        !selectedMember ||
+        (useMemberCap && memberDurationSeconds <= 0) ||
+        memberBalanceAfter === null ||
+        memberBalanceAfter < 0
+      ) {
+        return;
+      }
+      onConfirm({
+        sessionMode: "member_balance",
+        memberId: selectedMember.member_id,
+        durationSeconds: useMemberCap ? memberDurationSeconds : undefined
+      });
       return;
     }
 
@@ -112,6 +167,15 @@ export function SessionDialog({
           >
             Packages
           </button>
+          <button
+            aria-selected={activeTab === "member"}
+            className={`${styles.tabButton} ${activeTab === "member" ? styles.tabActive : ""}`}
+            onClick={() => setActiveTab("member")}
+            role="tab"
+            type="button"
+          >
+            Member
+          </button>
           {mode === "start" ? (
             <button
               aria-selected={activeTab === "open_time"}
@@ -137,6 +201,85 @@ export function SessionDialog({
                   )}`
                 : "No active metered rate"}
             </strong>
+          </div>
+        ) : activeTab === "member" ? (
+          <div className={styles.amountPanel} role="tabpanel">
+            <label className={styles.field}>
+              Search member
+              <input
+                onChange={(event) => setMemberQuery(event.target.value)}
+                placeholder="Code, name, or phone"
+                value={memberQuery}
+              />
+            </label>
+            <label className={styles.field}>
+              Member
+              <select
+                onChange={(event) => setSelectedMemberId(event.target.value)}
+                value={selectedMemberId}
+              >
+                {members.map((member) => (
+                  <option key={member.member_id} value={member.member_id}>
+                    {member.member_code} - {member.full_name} ({formatRateDuration(member.time_balance_seconds)})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className={styles.amountPreview}>
+              <span>Member Open Time</span>
+              <strong>Only the time actually used will be deducted.</strong>
+            </div>
+            <label className={styles.field}>
+              <span>
+                <input
+                  checked={useMemberCap}
+                  onChange={(event) => setUseMemberCap(event.target.checked)}
+                  type="checkbox"
+                />{" "}
+                Set maximum time
+              </span>
+            </label>
+            {useMemberCap ? (
+              <>
+                <div className={styles.quickAmountRow}>
+                  {[
+                    ["30", "30 min"],
+                    ["60", "1 hour"],
+                    ["120", "2 hours"]
+                  ].map(([minutes, label]) => (
+                    <button key={minutes} onClick={() => setMemberMinutes(minutes)} type="button">
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <label className={styles.field}>
+                  Custom minutes
+                  <input
+                    inputMode="numeric"
+                    onChange={(event) => setMemberMinutes(event.target.value)}
+                    value={memberMinutes}
+                  />
+                </label>
+              </>
+            ) : null}
+            <div className={styles.amountPreview}>
+              <span>Balance preview</span>
+              <strong>
+                {selectedMember
+                  ? useMemberCap
+                    ? `Current balance: ${formatRateDuration(
+                        selectedMember.time_balance_seconds
+                      )}. Maximum session: ${formatRateDuration(memberDurationSeconds)}. ${
+                        memberBalanceAfter !== null && memberBalanceAfter >= 0
+                          ? "Unused time remains in the account."
+                          : "Insufficient balance"
+                      }`
+                    : `Current balance: ${formatRateDuration(
+                        selectedMember.time_balance_seconds
+                      )}. Session can continue until ended or balance is exhausted.`
+                  : "Select a member"}
+              </strong>
+            </div>
           </div>
         ) : activeTab === "amount" ? (
           <div className={styles.amountPanel} role="tabpanel">
@@ -198,7 +341,7 @@ export function SessionDialog({
           </div>
         )}
 
-        {activeTab !== "open_time" ? (
+        {activeTab !== "open_time" && activeTab !== "member" ? (
           <div className={styles.paymentBox}>
             <label className={styles.field}>
               Payment method

@@ -12,6 +12,7 @@ export type PaymentStatus = "completed" | "voided";
 export type PaymentMethod = "cash" | "gcash" | "maya" | "other";
 export type BillingPaymentStatus = "unpaid" | "partially_paid" | "paid" | "overpaid";
 export type SessionMode = "prepaid" | "open_time";
+export type ExtendedSessionMode = SessionMode | "member_balance";
 export type UserRole = "owner" | "admin" | "cashier";
 
 export interface PcSummary {
@@ -31,7 +32,7 @@ export interface PcSummary {
   total_paid: string;
   balance_due: string;
   payment_status: BillingPaymentStatus;
-  session_mode: SessionMode;
+  session_mode: ExtendedSessionMode;
   actual_elapsed_seconds: number | null;
   billed_seconds: number | null;
   final_computed_amount: string | null;
@@ -42,6 +43,11 @@ export interface PcSummary {
   settlement_pending: boolean;
   recovery_required: boolean;
   recovery_reason: string | null;
+  member_id: string | null;
+  member_code_snapshot: string | null;
+  member_name_snapshot: string | null;
+  member_balance_before_seconds: number | null;
+  member_balance_after_seconds: number | null;
 }
 
 export interface SessionRecord {
@@ -65,7 +71,7 @@ export interface SessionRecord {
   total_paid: string;
   balance_due: string;
   payment_status: BillingPaymentStatus;
-  session_mode: SessionMode;
+  session_mode: ExtendedSessionMode;
   actual_elapsed_seconds: number | null;
   billed_seconds: number | null;
   final_computed_amount: string | null;
@@ -74,6 +80,11 @@ export interface SessionRecord {
   estimated_total_amount: string | null;
   estimated_balance_due: string | null;
   settlement_pending: boolean;
+  member_id: string | null;
+  member_code_snapshot: string | null;
+  member_name_snapshot: string | null;
+  member_balance_before_seconds: number | null;
+  member_balance_after_seconds: number | null;
 }
 
 export interface SessionCommandResponse {
@@ -146,6 +157,7 @@ export interface PaymentRecord {
   change_given: string | null;
   reference_number: string | null;
   notes: string | null;
+  shift_id: string | null;
   status: PaymentStatus;
   created_at: string;
 }
@@ -163,6 +175,12 @@ export interface PrepaidSessionSelection {
   durationSeconds?: number;
   rateId?: string;
   payment: PaymentInput;
+}
+
+export interface MemberSessionSelection {
+  sessionMode: "member_balance";
+  memberId: string;
+  durationSeconds?: number;
 }
 
 export interface BillingSummary {
@@ -201,4 +219,105 @@ export interface UserUpdateInput {
   username: string;
   display_name: string;
   role: UserRole;
+}
+
+export type ShiftStatus = "open" | "closed";
+
+export interface ShiftTotals {
+  expected_cash: string;
+  gross_session_sales: string;
+  cash_payments: string;
+  gcash_payments: string;
+  maya_payments: string;
+  other_payments: string;
+  voided_payments: string;
+  payment_count: number;
+  sessions_handled: number;
+  outstanding_unsettled_balance: string;
+  review_required_payments: number;
+  settlement_pending_sessions: number;
+}
+
+export interface CashierShiftRecord {
+  shift_id: string;
+  user_id: string;
+  cashier_name: string | null;
+  status: ShiftStatus;
+  opened_at: string;
+  closed_at: string | null;
+  opening_cash: string;
+  expected_cash: string | null;
+  actual_cash: string | null;
+  difference: string | null;
+  closing_notes: string | null;
+  force_close_reason: string | null;
+  opened_by_user_id: string;
+  closed_by_user_id: string | null;
+  gross_session_sales: string;
+  cash_payments: string;
+  gcash_payments: string;
+  maya_payments: string;
+  other_payments: string;
+  voided_payments: string;
+  payment_count: number;
+  sessions_handled: number;
+  outstanding_unsettled_balance: string;
+  review_required_payments: number;
+  settlement_pending_sessions: number;
+}
+
+export interface CashierShiftDetail {
+  shift: CashierShiftRecord;
+  totals: ShiftTotals;
+  payments: PaymentRecord[];
+}
+
+export interface MemberRecord {
+  member_id: string;
+  member_code: string;
+  full_name: string;
+  phone_number: string | null;
+  status: "active" | "inactive";
+  time_balance_seconds: number;
+  joined_at: string;
+  expires_at: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MembershipProduct {
+  product_id: string;
+  name: string;
+  price: string;
+  time_seconds: number;
+  product_type: "initial_membership" | "member_topup";
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemberTimeTransaction {
+  transaction_id: string;
+  member_id: string;
+  transaction_type:
+    | "membership_purchase"
+    | "promo_topup"
+    | "session_reservation_created"
+    | "session_usage_finalized"
+    | "session_reservation_released"
+    | "session_reservation"
+    | "session_refund"
+    | "manual_adjustment"
+    | "expiration_adjustment";
+  seconds_delta: number;
+  balance_before_seconds: number;
+  balance_after_seconds: number;
+  amount_paid: string | null;
+  related_session_id: string | null;
+  related_payment_id: string | null;
+  notes: string | null;
+  performed_by_user_id: string | null;
+  created_at: string;
 }

@@ -10,8 +10,10 @@ import {
   forceEndSession,
   getPollingIntervalMs,
   recordPayment,
+  startMemberSession,
   startOpenTimeSession,
   startPrepaidSession,
+  addMemberTime,
   addPrepaidTime
 } from "@/lib/api";
 import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
@@ -298,7 +300,9 @@ export function DashboardClient() {
             void runAction(
               () =>
                 "sessionMode" in selection
-                  ? startOpenTimeSession(dialog.pc.pc_name)
+                  ? selection.sessionMode === "open_time"
+                    ? startOpenTimeSession(dialog.pc.pc_name)
+                    : startMemberSession(dialog.pc.pc_name, selection)
                   : startPrepaidSession(dialog.pc.pc_name, selection),
               `${dialog.pc.pc_name} session started.`
             )
@@ -324,7 +328,9 @@ export function DashboardClient() {
             void runAction(
               () =>
                 "sessionMode" in selection
-                  ? Promise.reject(new Error("Open-time sessions do not support add time."))
+                  ? selection.sessionMode === "member_balance"
+                    ? addMemberTime(currentPc.active_session_id as string, selection)
+                    : Promise.reject(new Error("Open-time sessions do not support add time."))
                   : addPrepaidTime(currentPc.active_session_id as string, selection),
               `${currentPc.pc_name} time updated.`
             );

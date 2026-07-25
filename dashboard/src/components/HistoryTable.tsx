@@ -153,7 +153,15 @@ export function HistoryTable() {
                   <td>{formatDuration(session.original_seconds)}</td>
                   <td>{formatDuration(session.added_seconds)}</td>
                   <td>{formatDuration(session.total_seconds)}</td>
-                  <td>{session.rate_name_snapshot ?? "Custom Time"}</td>
+                  <td>
+                    {session.session_mode === "member_balance"
+                      ? `Member: ${
+                          session.member_name_snapshot ??
+                          session.member_code_snapshot ??
+                          "Balance"
+                        }`
+                      : session.rate_name_snapshot ?? "Custom Time"}
+                  </td>
                   <td>{formatMoney(session.base_amount)}</td>
                   <td>{formatMoney(session.additional_amount)}</td>
                   <td>{formatMoney(session.total_amount)}</td>

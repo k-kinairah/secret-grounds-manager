@@ -106,10 +106,153 @@ select:focus-visible {
   font-weight: 700;
 }
 
+.appShell__shift {
+  background: rgb(5 150 105 / 0.16);
+  border: 1px solid rgb(16 185 129 / 0.38);
+  border-radius: 999px;
+  color: #bbf7d0 !important;
+  padding: 6px 10px;
+}
+
 .authLoading {
   color: var(--muted);
   font-weight: 700;
   padding: 40px 28px;
+}
+
+.shiftNotice {
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
+  border-left: 5px solid var(--available);
+  color: #065f46;
+  font-weight: 800;
+  padding: 12px 28px;
+}
+
+.shiftCloseBar {
+  align-items: center;
+  background: #111827;
+  border-bottom: 1px solid #243047;
+  color: #dbeafe;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto auto minmax(120px, 160px) minmax(160px, 1fr) minmax(180px, 1fr) auto;
+  padding: 12px 28px;
+}
+
+.shiftCloseBar span {
+  color: #a7f3d0;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.shiftCloseBar input {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #f8fafc;
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.shiftCloseBar input::placeholder {
+  color: #94a3b8;
+  opacity: 1;
+}
+
+.shiftCloseBar button,
+.shiftGate button {
+  background: var(--available);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #ffffff;
+  font-weight: 900;
+  min-height: 38px;
+  padding: 8px 12px;
+}
+
+.shiftGate {
+  align-items: center;
+  display: flex;
+  min-height: calc(100vh - 58px);
+  justify-content: center;
+  padding: 32px;
+}
+
+.shiftGate__panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  max-width: 520px;
+  padding: 30px;
+  width: 100%;
+}
+
+.shiftGate__eyebrow {
+  color: var(--available);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin: 0 0 10px;
+  text-transform: uppercase;
+}
+
+.shiftGate h1 {
+  font-size: 36px;
+  line-height: 1;
+  margin: 0 0 12px;
+}
+
+.shiftGate p {
+  color: var(--muted);
+  margin: 0 0 20px;
+}
+
+.shiftGate form,
+.shiftGate label {
+  display: grid;
+  gap: 10px;
+}
+
+.shiftGate label {
+  color: #334155;
+  font-weight: 900;
+}
+
+.shiftGate input {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  color: #f8fafc;
+  font-size: 24px;
+  font-weight: 900;
+  padding: 12px 14px;
+}
+
+.shiftGate input::placeholder {
+  color: #94a3b8;
+  opacity: 1;
+}
+
+.shiftGate__message,
+.shiftGate__error {
+  border-radius: 8px;
+  font-weight: 800;
+  margin-bottom: 14px;
+  padding: 12px;
+}
+
+.shiftGate__message {
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
+  color: #065f46;
+}
+
+.shiftGate__error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
 }
 
 @media (max-width: 720px) {
@@ -122,5 +265,9 @@ select:focus-visible {
   .appShell__links,
   .appShell__account {
     flex-wrap: wrap;
+  }
+
+  .shiftCloseBar {
+    grid-template-columns: 1fr;
   }
 }

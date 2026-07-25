@@ -35,6 +35,7 @@ class SessionService:
         pc_registry: dict[str, PCRecord],
         command_timeout_seconds: int,
         billing_service: BillingService | None = None,
+        member_repository: object | None = None,
     ) -> None:
         self.repository = repository
         self.rate_repository = rate_repository
@@ -42,6 +43,7 @@ class SessionService:
         self.pc_registry = pc_registry
         self.command_timeout_seconds = command_timeout_seconds
         self.billing_service = billing_service
+        self.member_repository = member_repository
 
     def require_available_client(self, pc_name: str) -> PCRecord:
         pc = self.pc_registry.get(pc_name)
@@ -208,6 +210,29 @@ class SessionService:
                     "settlement_pending": True,
                 }
             )
+        elif session.session_mode == "member_balance":
+            if self.member_repository is None or session.member_id is None:
+                raise HTTPException(status_code=500, detail="Member reservation service is unavailable")
+            actual_elapsed_seconds = max(0, int((ended_at - session.started_at).total_seconds()))
+            consumed_seconds, transaction = self.member_repository.finalize_reservation_usage(  # type: ignore[attr-defined]
+                session.member_id,
+                session.session_id,
+                actual_elapsed_seconds,
+                actor_user_id,
+            )
+            member = self.member_repository.get_member(session.member_id)  # type: ignore[attr-defined]
+            update_values.update(
+                {
+                    "actual_elapsed_seconds": actual_elapsed_seconds,
+                    "billed_seconds": consumed_seconds,
+                    "total_seconds": consumed_seconds,
+                    "member_balance_after_seconds": (
+                        transaction.balance_after_seconds
+                        if transaction is not None
+                        else member.time_balance_seconds if member is not None else session.member_balance_after_seconds
+                    ),
+                }
+            )
 
         updated_session = session.model_copy(update=update_values)
         self.repository.update_session(updated_session)
@@ -334,6 +359,8 @@ class SessionService:
             raise HTTPException(status_code=409, detail="Session is not active")
         if session.session_mode == "open_time":
             raise HTTPException(status_code=400, detail="Open-time sessions do not support add time")
+        if session.session_mode == "member_balance":
+            raise HTTPException(status_code=400, detail="Use member balance to add time to this session")
 
         self.require_available_client(session.pc_name)
         command = self.create_command(
@@ -527,6 +554,8 @@ class SessionService:
             raise HTTPException(status_code=409, detail="Session is not active")
         if session.session_mode == "open_time":
             raise HTTPException(status_code=400, detail="Open-time sessions do not support add time")
+        if session.session_mode == "member_balance":
+            raise HTTPException(status_code=400, detail="Use member balance to add time to this session")
 
         self.require_available_client(session.pc_name)
         updated_session = session.model_copy(
@@ -670,6 +699,185 @@ class SessionService:
 
         return SessionCommandResponse(
             session=session,
+            command=command,
+            acknowledgements=acknowledgements,
+        )
+
+    async def start_member_session(
+        self,
+        pc_name: str,
+        member_id: str,
+        duration_seconds: int | None,
+        actor_user_id: str | None = None,
+    ) -> SessionCommandResponse:
+        if self.member_repository is None:
+            raise HTTPException(status_code=500, detail="Member service is unavailable")
+        if duration_seconds is not None and duration_seconds <= 0:
+            raise HTTPException(status_code=400, detail="Duration must be positive")
+
+        cleaned_pc_name = pc_name.strip()
+        self.require_available_client(cleaned_pc_name)
+        if self.repository.get_active_session_for_pc(cleaned_pc_name) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{cleaned_pc_name} already has an active session",
+            )
+
+        member = self.member_repository.require_usable_member(member_id)  # type: ignore[attr-defined]
+        session_id = str(uuid4())
+        reserved_seconds = duration_seconds or member.time_balance_seconds
+        if reserved_seconds <= 0:
+            raise HTTPException(status_code=409, detail="Member has no available time balance")
+        self.member_repository.create_reservation(  # type: ignore[attr-defined]
+            member,
+            session_id,
+            reserved_seconds,
+            actor_user_id,
+        )
+        now = current_utc_time()
+        session = SessionRecord(
+            session_id=session_id,
+            pc_name=cleaned_pc_name,
+            status="active",
+            started_at=now,
+            scheduled_end_at=now + timedelta(seconds=reserved_seconds),
+            ended_at=None,
+            original_seconds=duration_seconds or 0,
+            added_seconds=0,
+            total_seconds=reserved_seconds,
+            amount_paid=None,
+            ended_reason=None,
+            created_at=now,
+            base_amount=Decimal("0.00"),
+            additional_amount=Decimal("0.00"),
+            total_amount=Decimal("0.00"),
+            session_mode="member_balance",
+            created_by_user_id=actor_user_id,
+            member_id=member.member_id,
+            member_code_snapshot=member.member_code,
+            member_name_snapshot=member.full_name,
+            member_balance_before_seconds=member.time_balance_seconds,
+            member_balance_after_seconds=member.time_balance_seconds,
+        )
+        self.repository.create_session(session)
+        self.create_event(
+            session.session_id,
+            "session_started",
+            seconds=reserved_seconds,
+            message="Member balance session started; only actual finalized usage is deducted.",
+            performed_by_user_id=actor_user_id,
+        )
+        command = self.create_command(
+            "start_session",
+            {
+                "session_id": session.session_id,
+                "session_mode": "member_balance",
+                "timer_mode": "elapsed" if duration_seconds is None else "countdown",
+                "duration_seconds": reserved_seconds,
+                "max_usable_seconds": reserved_seconds,
+                "scheduled_end_at": session.scheduled_end_at.isoformat(),
+            },
+        )
+        try:
+            acknowledgements = await self.send_required_command(cleaned_pc_name, command)
+        except Exception as error:
+            self.member_repository.release_reservation(  # type: ignore[attr-defined]
+                member.member_id,
+                session.session_id,
+                actor_user_id,
+                f"Released failed member start command reservation: {error}",
+            )
+            failed_session = session.model_copy(
+                update={
+                    "status": "failed",
+                    "ended_at": current_utc_time(),
+                    "ended_reason": "command_failed_after_member_reservation",
+                }
+            )
+            self.repository.update_session(failed_session)
+            self.create_event(
+                session.session_id,
+                "command_failed",
+                message=str(error),
+                performed_by_user_id=actor_user_id,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Member time was refunded after start command failed: {error}",
+            ) from error
+
+        return SessionCommandResponse(
+            session=session,
+            command=command,
+            acknowledgements=acknowledgements,
+        )
+
+    async def add_member_time(
+        self,
+        session_id: str,
+        member_id: str,
+        seconds: int,
+        actor_user_id: str | None = None,
+    ) -> SessionCommandResponse:
+        if self.member_repository is None:
+            raise HTTPException(status_code=500, detail="Member service is unavailable")
+        if seconds <= 0:
+            raise HTTPException(status_code=400, detail="Seconds must be positive")
+
+        session = self.repository.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session.status != "active":
+            raise HTTPException(status_code=409, detail="Session is not active")
+        if session.session_mode != "member_balance" or session.member_id != member_id:
+            raise HTTPException(status_code=400, detail="Session is not funded by this member")
+
+        self.require_available_client(session.pc_name)
+        member = self.member_repository.require_usable_member(member_id)  # type: ignore[attr-defined]
+        if member.time_balance_seconds < session.total_seconds + seconds:
+            raise HTTPException(status_code=409, detail="Insufficient member time balance")
+        command = self.create_command(
+            "add_time",
+            {"session_id": session.session_id, "seconds": seconds},
+        )
+        try:
+            acknowledgements = await self.send_required_command(session.pc_name, command)
+        except Exception as error:
+            self.create_event(
+                session.session_id,
+                "command_failed",
+                message=str(error),
+                performed_by_user_id=actor_user_id,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Member add-time command failed before reservation changed: {error}",
+            ) from error
+
+        reserved_seconds = self.member_repository.extend_reservation(  # type: ignore[attr-defined]
+            member,
+            session.session_id,
+            seconds,
+            actor_user_id,
+        )
+        updated_session = session.model_copy(
+            update={
+                "added_seconds": session.added_seconds + seconds,
+                "total_seconds": session.total_seconds + seconds,
+                "scheduled_end_at": session.scheduled_end_at + timedelta(seconds=seconds),
+                "member_balance_after_seconds": member.time_balance_seconds,
+            }
+        )
+        self.repository.update_session(updated_session)
+        self.create_event(
+            session.session_id,
+            "time_added",
+            seconds=seconds,
+            message=f"Member balance reservation extended to {reserved_seconds} seconds.",
+            performed_by_user_id=actor_user_id,
+        )
+        return SessionCommandResponse(
+            session=updated_session,
             command=command,
             acknowledgements=acknowledgements,
         )
@@ -857,14 +1065,11 @@ class SessionService:
         if self.repository.event_exists(session_id, "session_completed"):
             return True
 
-        completed_session = session.model_copy(
-            update={
-                "status": "completed",
-                "ended_at": current_utc_time(),
-                "ended_reason": message or "timer_finished",
-            }
+        completed_session = self.finalize_ended_session(
+            session,
+            message or "timer_finished",
+            None,
         )
-        self.repository.update_session(completed_session)
         self.create_event(
             session_id,
             "session_completed",

@@ -317,7 +317,7 @@ class SecretGroundsClient:
             session_id=session_id,
             duration_seconds=duration_seconds,
             scheduled_end_at=scheduled_end_at,
-            session_mode="prepaid",
+            session_mode=session_mode if isinstance(session_mode, str) else "prepaid",
         )
         if not initialized:
             return self.build_acknowledgement(
@@ -326,7 +326,7 @@ class SecretGroundsClient:
                 "Client already has an active session",
             )
 
-        print(f"Session {session_id} started for {duration_seconds} seconds.")
+        print(f"{session_mode} session {session_id} started for up to {duration_seconds} seconds.")
         return self.build_acknowledgement(
             command_id,
             "completed",

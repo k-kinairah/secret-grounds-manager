@@ -24,8 +24,22 @@ RateType = Literal["metered", "package"]
 PaymentMethod = Literal["cash", "gcash", "maya", "other"]
 PaymentStatus = Literal["completed", "voided"]
 BillingPaymentStatus = Literal["unpaid", "partially_paid", "paid", "overpaid"]
-SessionMode = Literal["prepaid", "open_time"]
+SessionMode = Literal["prepaid", "open_time", "member_balance"]
 UserRole = Literal["owner", "admin", "cashier"]
+ShiftStatus = Literal["open", "closed"]
+MemberStatus = Literal["active", "inactive"]
+MembershipProductType = Literal["initial_membership", "member_topup"]
+MemberTransactionType = Literal[
+    "membership_purchase",
+    "promo_topup",
+    "session_reservation_created",
+    "session_usage_finalized",
+    "session_reservation_released",
+    "session_reservation",
+    "session_refund",
+    "manual_adjustment",
+    "expiration_adjustment",
+]
 
 
 class PCRegistration(BaseModel):
@@ -73,6 +87,11 @@ class PCDashboardRecord(BaseModel):
     settlement_pending: bool = False
     recovery_required: bool = False
     recovery_reason: str | None = None
+    member_id: str | None = None
+    member_code_snapshot: str | None = None
+    member_name_snapshot: str | None = None
+    member_balance_before_seconds: int | None = None
+    member_balance_after_seconds: int | None = None
 
 
 class PCRegistrationResponse(PCRecord):
@@ -161,6 +180,11 @@ class SessionRecord(BaseModel):
     settlement_pending: bool = False
     created_by_user_id: str | None = None
     ended_by_user_id: str | None = None
+    member_id: str | None = None
+    member_code_snapshot: str | None = None
+    member_name_snapshot: str | None = None
+    member_balance_before_seconds: int | None = None
+    member_balance_after_seconds: int | None = None
 
 
 class SessionEventRecord(BaseModel):
@@ -207,6 +231,17 @@ class AddTimeRequest(BaseModel):
 
 class PrepaidAddTimeRequest(AddTimeRequest):
     payment: "PaymentCreateRequest"
+
+
+class MemberSessionStartRequest(BaseModel):
+    pc_name: str = Field(..., min_length=1)
+    member_id: str = Field(..., min_length=1)
+    duration_seconds: int | None = Field(default=None, gt=0)
+
+
+class MemberAddTimeRequest(BaseModel):
+    member_id: str = Field(..., min_length=1)
+    seconds: int = Field(..., gt=0)
 
 
 class OpenTimeStartRequest(BaseModel):
@@ -317,7 +352,7 @@ class CalculatedTimeResponse(BaseModel):
 
 class PaymentRecord(BaseModel):
     payment_id: str
-    session_id: str
+    session_id: str | None = None
     amount: Decimal
     payment_method: PaymentMethod
     cash_received: Decimal | None = None
@@ -327,6 +362,7 @@ class PaymentRecord(BaseModel):
     action_type: Literal["session_start", "add_time", "settlement", "manual"] = "manual"
     related_command_id: str | None = None
     review_required: bool = False
+    shift_id: str | None = None
     recorded_by_user_id: str | None = None
     voided_by_user_id: str | None = None
     voided_at: datetime | None = None
@@ -366,6 +402,181 @@ class BillingSummary(BaseModel):
     balance_due: Decimal
     payment_status: BillingPaymentStatus
     payments: list[PaymentRecord]
+
+
+class ShiftOpenRequest(BaseModel):
+    opening_cash: Decimal
+
+    @field_validator("opening_cash")
+    @classmethod
+    def validate_opening_cash(cls, value: Decimal) -> Decimal:
+        return normalize_money(value)
+
+
+class ShiftCloseRequest(BaseModel):
+    actual_cash: Decimal
+    closing_notes: str | None = None
+    force_close_reason: str | None = None
+
+    @field_validator("actual_cash")
+    @classmethod
+    def validate_actual_cash(cls, value: Decimal) -> Decimal:
+        return normalize_money(value)
+
+
+class ShiftTotals(BaseModel):
+    expected_cash: Decimal
+    gross_session_sales: Decimal
+    cash_payments: Decimal
+    gcash_payments: Decimal
+    maya_payments: Decimal
+    other_payments: Decimal
+    voided_payments: Decimal
+    payment_count: int
+    sessions_handled: int
+    outstanding_unsettled_balance: Decimal
+    review_required_payments: int
+    settlement_pending_sessions: int
+
+
+class CashierShiftRecord(BaseModel):
+    shift_id: str
+    user_id: str
+    cashier_name: str | None = None
+    status: ShiftStatus
+    opened_at: datetime
+    closed_at: datetime | None = None
+    opening_cash: Decimal
+    expected_cash: Decimal | None = None
+    actual_cash: Decimal | None = None
+    difference: Decimal | None = None
+    closing_notes: str | None = None
+    force_close_reason: str | None = None
+    opened_by_user_id: str
+    closed_by_user_id: str | None = None
+    gross_session_sales: Decimal = Decimal("0.00")
+    cash_payments: Decimal = Decimal("0.00")
+    gcash_payments: Decimal = Decimal("0.00")
+    maya_payments: Decimal = Decimal("0.00")
+    other_payments: Decimal = Decimal("0.00")
+    voided_payments: Decimal = Decimal("0.00")
+    payment_count: int = 0
+    sessions_handled: int = 0
+    outstanding_unsettled_balance: Decimal = Decimal("0.00")
+    review_required_payments: int = 0
+    settlement_pending_sessions: int = 0
+
+
+class CashierShiftDetail(BaseModel):
+    shift: CashierShiftRecord
+    totals: ShiftTotals
+    payments: list[PaymentRecord] = Field(default_factory=list)
+
+
+class MemberRecord(BaseModel):
+    member_id: str
+    member_code: str
+    full_name: str
+    phone_number: str | None = None
+    status: MemberStatus
+    time_balance_seconds: int
+    joined_at: datetime
+    expires_at: datetime | None = None
+    created_by_user_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MemberCreateRequest(BaseModel):
+    member_code: str = Field(..., min_length=1)
+    full_name: str = Field(..., min_length=1)
+    phone_number: str | None = None
+    expires_at: datetime | None = None
+
+
+class MemberUpdateRequest(BaseModel):
+    member_code: str = Field(..., min_length=1)
+    full_name: str = Field(..., min_length=1)
+    phone_number: str | None = None
+    expires_at: datetime | None = None
+
+
+class MemberStatusUpdate(BaseModel):
+    status: MemberStatus
+
+
+class MembershipProductRecord(BaseModel):
+    product_id: str
+    name: str
+    price: Decimal
+    time_seconds: int
+    product_type: MembershipProductType
+    is_active: bool
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class MembershipProductCreate(BaseModel):
+    name: str = Field(..., min_length=1)
+    price: Decimal
+    time_seconds: int = Field(..., gt=0)
+    product_type: MembershipProductType
+    sort_order: int = 0
+    is_active: bool = True
+
+    @field_validator("price")
+    @classmethod
+    def validate_price(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+
+class MembershipProductUpdate(BaseModel):
+    name: str = Field(..., min_length=1)
+    price: Decimal
+    time_seconds: int = Field(..., gt=0)
+    product_type: MembershipProductType
+    sort_order: int = 0
+
+    @field_validator("price")
+    @classmethod
+    def validate_price(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+
+class MemberPurchaseRequest(BaseModel):
+    product_id: str = Field(..., min_length=1)
+    payment_method: PaymentMethod
+    cash_received: Decimal | None = None
+    reference_number: str | None = None
+    notes: str | None = None
+
+    @field_validator("cash_received")
+    @classmethod
+    def validate_cash_received(cls, value: Decimal | None) -> Decimal | None:
+        return normalize_positive_money(value) if value is not None else None
+
+
+class MemberTimeTransactionRecord(BaseModel):
+    transaction_id: str
+    member_id: str
+    transaction_type: MemberTransactionType
+    seconds_delta: int
+    balance_before_seconds: int
+    balance_after_seconds: int
+    amount_paid: Decimal | None = None
+    related_session_id: str | None = None
+    related_payment_id: str | None = None
+    notes: str | None = None
+    performed_by_user_id: str | None = None
+    created_at: datetime
+
+
+class MemberPurchaseResponse(BaseModel):
+    member: MemberRecord
+    product: MembershipProductRecord
+    payment: PaymentRecord
+    transaction: MemberTimeTransactionRecord
 
 
 class UserPublic(BaseModel):

@@ -25,6 +25,7 @@ def main() -> None:
         from server.database import get_connection, initialize_database
         from server.main import (
             create_rate,
+            open_shift,
             record_payment,
             session_repository,
             update_user_status,
@@ -34,6 +35,7 @@ def main() -> None:
             LoginRequest,
             PaymentCreateRequest,
             RateProfileCreate,
+            ShiftOpenRequest,
             SessionRecord,
             UserCreateRequest,
             UserStatusUpdate,
@@ -168,6 +170,7 @@ def main() -> None:
                 created_by_user_id=owner.user_id,
             )
         )
+        open_shift(ShiftOpenRequest(opening_cash=Decimal("0.00")), stored_owner)
         billing = record_payment(
             "auth-session",
             PaymentCreateRequest(payment_method="cash", amount=Decimal("20.00")),

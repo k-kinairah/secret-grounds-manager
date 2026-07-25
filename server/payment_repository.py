@@ -30,6 +30,7 @@ def row_to_payment(row: Any) -> PaymentRecord:
         action_type=row["action_type"],
         related_command_id=row["related_command_id"],
         review_required=bool(row["review_required"]),
+        shift_id=row["shift_id"],
         recorded_by_user_id=row["recorded_by_user_id"],
         voided_by_user_id=row["voided_by_user_id"],
         voided_at=(
@@ -62,6 +63,7 @@ class PaymentRepository:
                     action_type,
                     related_command_id,
                     review_required,
+                    shift_id,
                     recorded_by_user_id,
                     voided_by_user_id,
                     voided_at,
@@ -69,7 +71,7 @@ class PaymentRepository:
                     status,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payment.payment_id,
@@ -83,6 +85,7 @@ class PaymentRepository:
                     payment.action_type,
                     payment.related_command_id,
                     1 if payment.review_required else 0,
+                    payment.shift_id,
                     payment.recorded_by_user_id,
                     payment.voided_by_user_id,
                     payment.voided_at.isoformat() if payment.voided_at is not None else None,

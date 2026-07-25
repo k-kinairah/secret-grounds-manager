@@ -191,6 +191,193 @@ def get_columns(connection: sqlite3.Connection, table_name: str) -> list[sqlite3
     ).fetchall()
 
 
+def ensure_payments_accept_membership_payments(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'payments'"
+    ).fetchone()
+    table_sql = row["sql"] if row is not None else ""
+    if "session_id TEXT NOT NULL" not in table_sql:
+        return
+
+    columns = get_columns(connection, "payments")
+    column_names = [column["name"] for column in columns]
+    index_rows = connection.execute(
+        """
+        SELECT sql FROM sqlite_master
+        WHERE type = 'index'
+          AND tbl_name = 'payments'
+          AND sql IS NOT NULL
+        """
+    ).fetchall()
+    index_sql_statements = [index_row["sql"] for index_row in index_rows]
+
+    original_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    connection.commit()
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute("BEGIN")
+    try:
+        connection.execute("DROP TABLE IF EXISTS payments_migration_new")
+        connection.execute(
+            """
+            CREATE TABLE payments_migration_new (
+                payment_id TEXT PRIMARY KEY,
+                session_id TEXT,
+                amount TEXT NOT NULL,
+                payment_method TEXT NOT NULL CHECK (
+                    payment_method IN ('cash', 'gcash', 'maya', 'other')
+                ),
+                cash_received TEXT,
+                change_given TEXT,
+                reference_number TEXT,
+                notes TEXT,
+                action_type TEXT NOT NULL DEFAULT 'manual',
+                related_command_id TEXT,
+                review_required INTEGER NOT NULL DEFAULT 0,
+                shift_id TEXT,
+                recorded_by_user_id TEXT,
+                voided_by_user_id TEXT,
+                voided_at TEXT,
+                void_reason TEXT,
+                status TEXT NOT NULL CHECK (status IN ('completed', 'voided')),
+                created_at TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+            """
+        )
+        insert_columns = [
+            "payment_id",
+            "session_id",
+            "amount",
+            "payment_method",
+            "cash_received",
+            "change_given",
+            "reference_number",
+            "notes",
+            "action_type",
+            "related_command_id",
+            "review_required",
+            "shift_id",
+            "recorded_by_user_id",
+            "voided_by_user_id",
+            "voided_at",
+            "void_reason",
+            "status",
+            "created_at",
+        ]
+        select_expressions = [
+            quote_identifier(column) if column in column_names else "NULL"
+            for column in insert_columns
+        ]
+        connection.execute(
+            f"""
+            INSERT INTO payments_migration_new (
+                {", ".join(quote_identifier(column) for column in insert_columns)}
+            )
+            SELECT {", ".join(select_expressions)}
+            FROM payments
+            """
+        )
+        connection.execute("DROP TABLE payments")
+        connection.execute("ALTER TABLE payments_migration_new RENAME TO payments")
+        for index_sql in index_sql_statements:
+            connection.execute(index_sql)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {int(original_foreign_keys)}")
+
+
+def ensure_member_transactions_accept_reservation_events(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'member_time_transactions'"
+    ).fetchone()
+    table_sql = row["sql"] if row is not None else ""
+    if not table_sql or "session_usage_finalized" in table_sql:
+        return
+
+    original_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    connection.commit()
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute("BEGIN")
+    try:
+        connection.execute("ALTER TABLE member_time_transactions RENAME TO member_time_transactions_old")
+        connection.execute(
+            """
+            CREATE TABLE member_time_transactions (
+                transaction_id TEXT PRIMARY KEY,
+                member_id TEXT NOT NULL,
+                transaction_type TEXT NOT NULL CHECK (
+                    transaction_type IN (
+                        'membership_purchase',
+                        'promo_topup',
+                        'session_reservation_created',
+                        'session_usage_finalized',
+                        'session_reservation_released',
+                        'session_reservation',
+                        'session_refund',
+                        'manual_adjustment',
+                        'expiration_adjustment'
+                    )
+                ),
+                seconds_delta INTEGER NOT NULL,
+                balance_before_seconds INTEGER NOT NULL,
+                balance_after_seconds INTEGER NOT NULL CHECK (balance_after_seconds >= 0),
+                amount_paid TEXT,
+                related_session_id TEXT,
+                related_payment_id TEXT,
+                notes TEXT,
+                performed_by_user_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (member_id) REFERENCES members(member_id),
+                FOREIGN KEY (related_session_id) REFERENCES sessions(session_id),
+                FOREIGN KEY (related_payment_id) REFERENCES payments(payment_id),
+                FOREIGN KEY (performed_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO member_time_transactions (
+                transaction_id,
+                member_id,
+                transaction_type,
+                seconds_delta,
+                balance_before_seconds,
+                balance_after_seconds,
+                amount_paid,
+                related_session_id,
+                related_payment_id,
+                notes,
+                performed_by_user_id,
+                created_at
+            )
+            SELECT
+                transaction_id,
+                member_id,
+                transaction_type,
+                seconds_delta,
+                balance_before_seconds,
+                balance_after_seconds,
+                amount_paid,
+                related_session_id,
+                related_payment_id,
+                notes,
+                performed_by_user_id,
+                created_at
+            FROM member_time_transactions_old
+            """
+        )
+        connection.execute("DROP TABLE member_time_transactions_old")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {int(original_foreign_keys)}")
+
+
 def ensure_sessions_accept_state_machine_statuses(connection: sqlite3.Connection) -> None:
     row = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'"
@@ -354,6 +541,58 @@ def seed_default_metered_rate(connection: sqlite3.Connection) -> None:
     )
 
 
+def seed_default_membership_products(connection: sqlite3.Connection) -> None:
+    existing_count = connection.execute(
+        "SELECT COUNT(*) FROM membership_products"
+    ).fetchone()[0]
+    if existing_count:
+        return
+
+    now = __import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc
+    ).isoformat()
+    connection.executemany(
+        """
+        INSERT INTO membership_products (
+            product_id,
+            name,
+            price,
+            time_seconds,
+            product_type,
+            is_active,
+            sort_order,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "membership-fee",
+                "Membership Fee",
+                "100.00",
+                6 * 60 * 60,
+                "initial_membership",
+                1,
+                10,
+                now,
+                now,
+            ),
+            (
+                "member-promo",
+                "Member Promo",
+                "50.00",
+                4 * 60 * 60,
+                "member_topup",
+                1,
+                20,
+                now,
+                now,
+            ),
+        ],
+    )
+
+
 def initialize_database() -> None:
     with get_connection() as connection:
         connection.execute(
@@ -498,6 +737,11 @@ def initialize_database() -> None:
         )
         add_column_if_missing(connection, "sessions", "created_by_user_id", "TEXT")
         add_column_if_missing(connection, "sessions", "ended_by_user_id", "TEXT")
+        add_column_if_missing(connection, "sessions", "member_id", "TEXT")
+        add_column_if_missing(connection, "sessions", "member_code_snapshot", "TEXT")
+        add_column_if_missing(connection, "sessions", "member_name_snapshot", "TEXT")
+        add_column_if_missing(connection, "sessions", "member_balance_before_seconds", "INTEGER")
+        add_column_if_missing(connection, "sessions", "member_balance_after_seconds", "INTEGER")
         connection.execute(
             """
             UPDATE sessions
@@ -566,6 +810,7 @@ def initialize_database() -> None:
                 action_type TEXT NOT NULL DEFAULT 'manual',
                 related_command_id TEXT,
                 review_required INTEGER NOT NULL DEFAULT 0,
+                shift_id TEXT,
                 recorded_by_user_id TEXT,
                 voided_by_user_id TEXT,
                 voided_at TEXT,
@@ -576,6 +821,7 @@ def initialize_database() -> None:
             )
             """
         )
+        ensure_payments_accept_membership_payments(connection)
         add_column_if_missing(
             connection,
             "payments",
@@ -589,10 +835,155 @@ def initialize_database() -> None:
             "review_required",
             "INTEGER NOT NULL DEFAULT 0",
         )
+        add_column_if_missing(connection, "payments", "shift_id", "TEXT")
         add_column_if_missing(connection, "payments", "recorded_by_user_id", "TEXT")
         add_column_if_missing(connection, "payments", "voided_by_user_id", "TEXT")
         add_column_if_missing(connection, "payments", "voided_at", "TEXT")
         add_column_if_missing(connection, "payments", "void_reason", "TEXT")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS members (
+                member_id TEXT PRIMARY KEY,
+                member_code TEXT NOT NULL UNIQUE,
+                full_name TEXT NOT NULL,
+                phone_number TEXT,
+                status TEXT NOT NULL CHECK (status IN ('active', 'inactive')),
+                time_balance_seconds INTEGER NOT NULL CHECK (time_balance_seconds >= 0),
+                joined_at TEXT NOT NULL,
+                expires_at TEXT,
+                created_by_user_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (created_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS member_time_transactions (
+                transaction_id TEXT PRIMARY KEY,
+                member_id TEXT NOT NULL,
+                transaction_type TEXT NOT NULL CHECK (
+                    transaction_type IN (
+                        'membership_purchase',
+                        'promo_topup',
+                        'session_reservation_created',
+                        'session_usage_finalized',
+                        'session_reservation_released',
+                        'session_reservation',
+                        'session_refund',
+                        'manual_adjustment',
+                        'expiration_adjustment'
+                    )
+                ),
+                seconds_delta INTEGER NOT NULL,
+                balance_before_seconds INTEGER NOT NULL,
+                balance_after_seconds INTEGER NOT NULL CHECK (balance_after_seconds >= 0),
+                amount_paid TEXT,
+                related_session_id TEXT,
+                related_payment_id TEXT,
+                notes TEXT,
+                performed_by_user_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (member_id) REFERENCES members(member_id),
+                FOREIGN KEY (related_session_id) REFERENCES sessions(session_id),
+                FOREIGN KEY (related_payment_id) REFERENCES payments(payment_id),
+                FOREIGN KEY (performed_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        ensure_member_transactions_accept_reservation_events(connection)
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS member_time_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                member_id TEXT NOT NULL,
+                session_id TEXT NOT NULL UNIQUE,
+                reserved_seconds INTEGER NOT NULL CHECK (reserved_seconds > 0),
+                consumed_seconds INTEGER NOT NULL DEFAULT 0 CHECK (consumed_seconds >= 0),
+                status TEXT NOT NULL CHECK (status IN ('active', 'finalized', 'released')),
+                created_at TEXT NOT NULL,
+                finalized_at TEXT,
+                FOREIGN KEY (member_id) REFERENCES members(member_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS membership_products (
+                product_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                price TEXT NOT NULL,
+                time_seconds INTEGER NOT NULL CHECK (time_seconds > 0),
+                product_type TEXT NOT NULL CHECK (
+                    product_type IN ('initial_membership', 'member_topup')
+                ),
+                is_active INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cashier_shifts (
+                shift_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('open', 'closed')),
+                opened_at TEXT NOT NULL,
+                closed_at TEXT,
+                opening_cash TEXT NOT NULL,
+                expected_cash TEXT,
+                actual_cash TEXT,
+                difference TEXT,
+                closing_notes TEXT,
+                force_close_reason TEXT,
+                opened_by_user_id TEXT NOT NULL,
+                closed_by_user_id TEXT,
+                gross_session_sales TEXT NOT NULL DEFAULT '0.00',
+                cash_payments TEXT NOT NULL DEFAULT '0.00',
+                gcash_payments TEXT NOT NULL DEFAULT '0.00',
+                maya_payments TEXT NOT NULL DEFAULT '0.00',
+                other_payments TEXT NOT NULL DEFAULT '0.00',
+                voided_payments TEXT NOT NULL DEFAULT '0.00',
+                payment_count INTEGER NOT NULL DEFAULT 0,
+                sessions_handled INTEGER NOT NULL DEFAULT 0,
+                outstanding_unsettled_balance TEXT NOT NULL DEFAULT '0.00',
+                review_required_payments INTEGER NOT NULL DEFAULT 0,
+                settlement_pending_sessions INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users(user_id),
+                FOREIGN KEY (opened_by_user_id) REFERENCES users(user_id),
+                FOREIGN KEY (closed_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_members_search
+            ON members (member_code, full_name, phone_number)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_member_time_transactions_member
+            ON member_time_transactions (member_id, created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_member_reservation
+            ON member_time_reservations (member_id)
+            WHERE status = 'active'
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_membership_products_active_sort
+            ON membership_products (is_active, sort_order)
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS rate_audit_events (
@@ -632,6 +1023,25 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_payments_shift_id
+            ON payments (shift_id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_shift_per_user
+            ON cashier_shifts (user_id)
+            WHERE status = 'open'
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_cashier_shifts_user_status
+            ON cashier_shifts (user_id, status, opened_at)
+            """
+        )
+        connection.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_rate_profiles_active_sort
             ON rate_profiles (is_active, sort_order)
             """
@@ -645,3 +1055,4 @@ def initialize_database() -> None:
         )
         seed_default_rates(connection)
         seed_default_metered_rate(connection)
+        seed_default_membership_products(connection)

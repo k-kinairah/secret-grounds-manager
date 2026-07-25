@@ -60,6 +60,7 @@ export function PcCard({
         ? styles.badgeWarning
         : styles.badgeIdle;
   const isOpenTime = pc.session_mode === "open_time";
+  const isMemberSession = pc.session_mode === "member_balance";
   const isSettlementPending = pc.session_status === "settlement_pending";
   const canResolve =
     pc.recovery_required && (currentUserRole === "owner" || currentUserRole === "admin");
@@ -88,9 +89,15 @@ export function PcCard({
         </div>
         {pc.session_status === "active" || pc.session_status === "ending" ? (
           <div className={styles.timerBlock}>
-            <div className={styles.timerLabel}>{isOpenTime ? "Elapsed" : "Remaining"}</div>
+            <div className={styles.timerLabel}>
+              {isOpenTime || isMemberSession ? "Elapsed" : "Remaining"}
+            </div>
             <div className={styles.timerValue}>
-              {formatTimer(isOpenTime ? pc.actual_elapsed_seconds : pc.remaining_seconds)}
+              {formatTimer(
+                isOpenTime || isMemberSession
+                  ? pc.actual_elapsed_seconds
+                  : pc.remaining_seconds
+              )}
             </div>
           </div>
         ) : isSettlementPending ? (
@@ -115,18 +122,28 @@ export function PcCard({
                     ? "Final amount"
                     : isOpenTime
                       ? "Estimated total"
+                      : isMemberSession
+                        ? "Funded by"
                       : "Current total"}
                 </span>
                 <strong>
-                  {formatMoney(
-                    isSettlementPending
-                      ? pc.total_amount
-                      : isOpenTime
-                        ? pc.estimated_total_amount
-                        : pc.total_amount
-                  )}
+                  {isMemberSession
+                    ? pc.member_name_snapshot ?? pc.member_code_snapshot ?? "Member balance"
+                    : formatMoney(
+                        isSettlementPending
+                          ? pc.total_amount
+                          : isOpenTime
+                            ? pc.estimated_total_amount
+                            : pc.total_amount
+                      )}
                 </strong>
               </div>
+              {isMemberSession ? (
+                <div className={styles.detailRow}>
+                  <span>Estimated balance</span>
+                  <strong>{formatTimer(pc.member_balance_after_seconds)}</strong>
+                </div>
+              ) : null}
               <div className={styles.detailRow}>
                 <span>Paid</span>
                 <strong>{formatMoney(pc.total_paid)}</strong>

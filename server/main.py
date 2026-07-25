@@ -12,6 +12,8 @@ from server.database import initialize_database
 from server.schemas import (
     AddTimeRequest,
     BillingSummary,
+    CashierShiftDetail,
+    CashierShiftRecord,
     CalculatedTimeResponse,
     CalculateTimeRequest,
     ClientEvent,
@@ -25,6 +27,18 @@ from server.schemas import (
     PCSessionStateResponse,
     PaymentCreateRequest,
     LoginRequest,
+    MemberAddTimeRequest,
+    MemberCreateRequest,
+    MemberPurchaseRequest,
+    MemberPurchaseResponse,
+    MemberRecord,
+    MembershipProductCreate,
+    MembershipProductRecord,
+    MembershipProductUpdate,
+    MemberSessionStartRequest,
+    MemberStatusUpdate,
+    MemberTimeTransactionRecord,
+    MemberUpdateRequest,
     PasswordResetRequest,
     PrepaidAddTimeRequest,
     PrepaidStartSessionRequest,
@@ -33,6 +47,8 @@ from server.schemas import (
     RateProfileCreate,
     RateProfileUpdate,
     RateStatusUpdate,
+    ShiftCloseRequest,
+    ShiftOpenRequest,
     SessionCommandResponse,
     SessionRecord,
     SessionStateSummary,
@@ -60,10 +76,12 @@ from server.auth import (
     user_repository,
 )
 from server.billing_service import BillingService
+from server.member_repository import MemberRepository
 from server.payment_repository import PaymentRepository
 from server.rate_calculator import calculate_metered_time
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
+from server.shift_repository import ShiftRepository
 from server.rate_repository import RateRepository
 from server.time_utils import current_utc_time
 
@@ -73,7 +91,9 @@ recovery_flags: dict[str, dict[str, str]] = {}
 connection_manager = ClientConnectionManager()
 session_repository = SessionRepository()
 payment_repository = PaymentRepository()
-billing_service = BillingService(session_repository, payment_repository)
+shift_repository = ShiftRepository()
+member_repository = MemberRepository(payment_repository, shift_repository)
+billing_service = BillingService(session_repository, payment_repository, shift_repository, user_repository)
 rate_repository = RateRepository()
 session_service = SessionService(
     repository=session_repository,
@@ -82,6 +102,7 @@ session_service = SessionService(
     pc_registry=pc_registry,
     command_timeout_seconds=5,
     billing_service=billing_service,
+    member_repository=member_repository,
 )
 OFFLINE_AFTER_SECONDS = 15
 MONITOR_INTERVAL_SECONDS = 5
@@ -200,6 +221,161 @@ def logout(
 @app.get("/auth/me", response_model=UserPublic)
 def get_me(current_user=Depends(get_current_user)) -> UserPublic:
     return to_public_user(current_user)
+
+
+@app.post("/shifts/open", response_model=CashierShiftDetail)
+def open_shift(
+    request: ShiftOpenRequest,
+    current_user=Depends(require_role("cashier")),
+) -> CashierShiftDetail:
+    return shift_repository.open_shift(request, current_user)
+
+
+@app.get("/shifts/current", response_model=CashierShiftDetail | None)
+def get_current_shift(
+    current_user=Depends(require_role("cashier")),
+) -> CashierShiftDetail | None:
+    shift = shift_repository.get_open_shift_for_user(current_user.user_id)
+    if shift is None:
+        return None
+    return shift_repository.get_shift(shift.shift_id, current_user)
+
+
+@app.get("/shifts", response_model=list[CashierShiftRecord])
+def list_shifts(
+    current_user=Depends(require_role("cashier")),
+) -> list[CashierShiftRecord]:
+    return shift_repository.list_shifts(current_user)
+
+
+@app.get("/shifts/{shift_id}", response_model=CashierShiftDetail)
+def get_shift(
+    shift_id: str,
+    current_user=Depends(require_role("cashier")),
+) -> CashierShiftDetail:
+    detail = shift_repository.get_shift(shift_id, current_user)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Shift not found")
+    return detail
+
+
+@app.post("/shifts/{shift_id}/close", response_model=CashierShiftDetail)
+def close_shift(
+    shift_id: str,
+    request: ShiftCloseRequest,
+    current_user=Depends(require_role("cashier")),
+) -> CashierShiftDetail:
+    return shift_repository.close_shift(shift_id, request, current_user)
+
+
+@app.get("/members", response_model=list[MemberRecord])
+def list_members(
+    q: str | None = None,
+    _: object = Depends(require_role("cashier")),
+) -> list[MemberRecord]:
+    return member_repository.list_members(q)
+
+
+@app.get("/members/{member_id}", response_model=MemberRecord)
+def get_member(
+    member_id: str,
+    _: object = Depends(require_role("cashier")),
+) -> MemberRecord:
+    member = member_repository.get_member(member_id)
+    if member is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return member
+
+
+@app.post("/members", response_model=MemberRecord)
+def create_member(
+    request: MemberCreateRequest,
+    current_user=Depends(require_role("cashier")),
+) -> MemberRecord:
+    return member_repository.create_member(request, get_actor_user_id(current_user))
+
+
+@app.put("/members/{member_id}", response_model=MemberRecord)
+def update_member(
+    member_id: str,
+    request: MemberUpdateRequest,
+    _: object = Depends(require_role("admin")),
+) -> MemberRecord:
+    member = member_repository.update_member(member_id, request)
+    if member is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return member
+
+
+@app.patch("/members/{member_id}/status", response_model=MemberRecord)
+def update_member_status(
+    member_id: str,
+    request: MemberStatusUpdate,
+    _: object = Depends(require_role("admin")),
+) -> MemberRecord:
+    member = member_repository.set_member_status(member_id, request)
+    if member is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return member
+
+
+@app.get("/members/{member_id}/ledger", response_model=list[MemberTimeTransactionRecord])
+def get_member_ledger(
+    member_id: str,
+    _: object = Depends(require_role("cashier")),
+) -> list[MemberTimeTransactionRecord]:
+    if member_repository.get_member(member_id) is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return member_repository.list_ledger(member_id)
+
+
+@app.post("/members/{member_id}/purchase", response_model=MemberPurchaseResponse)
+def purchase_member_time(
+    member_id: str,
+    request: MemberPurchaseRequest,
+    current_user=Depends(require_role("cashier")),
+) -> MemberPurchaseResponse:
+    return member_repository.purchase(member_id, request, current_user)
+
+
+@app.get("/membership-products", response_model=list[MembershipProductRecord])
+def list_membership_products(
+    include_inactive: bool = False,
+    _: object = Depends(require_role("cashier")),
+) -> list[MembershipProductRecord]:
+    return member_repository.list_products(include_inactive)
+
+
+@app.post("/membership-products", response_model=MembershipProductRecord)
+def create_membership_product(
+    request: MembershipProductCreate,
+    _: object = Depends(require_role("admin")),
+) -> MembershipProductRecord:
+    return member_repository.create_product(request)
+
+
+@app.put("/membership-products/{product_id}", response_model=MembershipProductRecord)
+def update_membership_product(
+    product_id: str,
+    request: MembershipProductUpdate,
+    _: object = Depends(require_role("admin")),
+) -> MembershipProductRecord:
+    product = member_repository.update_product(product_id, request)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Membership product not found")
+    return product
+
+
+@app.patch("/membership-products/{product_id}/status", response_model=MembershipProductRecord)
+def update_membership_product_status(
+    product_id: str,
+    request: RateStatusUpdate,
+    _: object = Depends(require_role("admin")),
+) -> MembershipProductRecord:
+    product = member_repository.set_product_active(product_id, request.is_active)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Membership product not found")
+    return product
 
 
 @app.get("/users", response_model=list[UserAdminRecord])
@@ -455,6 +631,25 @@ def get_registered_pcs(
                     and recovery_flag.get("session_id") == active_session.session_id
                     else None
                 ),
+                member_id=(
+                    display_session.member_id if display_session is not None else None
+                ),
+                member_code_snapshot=(
+                    display_session.member_code_snapshot if display_session is not None else None
+                ),
+                member_name_snapshot=(
+                    display_session.member_name_snapshot if display_session is not None else None
+                ),
+                member_balance_before_seconds=(
+                    display_session.member_balance_before_seconds
+                    if display_session is not None
+                    else None
+                ),
+                member_balance_after_seconds=(
+                    display_session.member_balance_after_seconds
+                    if display_session is not None
+                    else None
+                ),
             )
         )
 
@@ -585,6 +780,22 @@ async def start_open_time_session(
     return response
 
 
+@app.post("/sessions/start-member", response_model=SessionCommandResponse)
+async def start_member_session(
+    request: MemberSessionStartRequest,
+    current_user: object = Depends(require_role("cashier")),
+) -> SessionCommandResponse:
+    mark_stale_pcs_offline()
+    response = await session_service.start_member_session(
+        request.pc_name,
+        request.member_id,
+        request.duration_seconds,
+        get_actor_user_id(current_user),
+    )
+    recovery_flags.pop(response.session.pc_name, None)
+    return response
+
+
 @app.post("/sessions/{session_id}/add-time", response_model=SessionCommandResponse)
 async def add_time_to_session(
     session_id: str,
@@ -614,6 +825,21 @@ async def add_prepaid_time_to_session(
         request.seconds,
         request.rate_id,
         request.amount,
+        get_actor_user_id(current_user),
+    )
+
+
+@app.post("/sessions/{session_id}/add-time-member", response_model=SessionCommandResponse)
+async def add_member_time_to_session(
+    session_id: str,
+    request: MemberAddTimeRequest,
+    current_user: object = Depends(require_role("cashier")),
+) -> SessionCommandResponse:
+    mark_stale_pcs_offline()
+    return await session_service.add_member_time(
+        session_id,
+        request.member_id,
+        request.seconds,
         get_actor_user_id(current_user),
     )
 

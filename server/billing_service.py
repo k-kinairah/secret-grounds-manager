@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from decimal import Decimal, ROUND_CEILING
 from uuid import uuid4
@@ -14,7 +15,9 @@ from server.schemas import (
     SessionRecord,
 )
 from server.session_repository import SessionRepository
+from server.shift_repository import ShiftRepository
 from server.time_utils import current_utc_time
+from server.user_repository import UserRepository
 
 
 def money(value: Decimal) -> Decimal:
@@ -60,9 +63,36 @@ class BillingService:
         self,
         session_repository: SessionRepository,
         payment_repository: PaymentRepository,
+        shift_repository: ShiftRepository | None = None,
+        user_repository: UserRepository | None = None,
     ) -> None:
         self.session_repository = session_repository
         self.payment_repository = payment_repository
+        self.shift_repository = shift_repository
+        self.user_repository = user_repository or UserRepository()
+
+    def get_payment_shift_id(self, actor_user_id: str | None) -> str | None:
+        if actor_user_id is None or self.shift_repository is None:
+            return None
+
+        actor = self.user_repository.get_user(actor_user_id)
+        if actor is None:
+            raise HTTPException(status_code=401, detail="Authenticated user was not found")
+
+        open_shift = self.shift_repository.get_open_shift_for_user(actor.user_id)
+        if open_shift is not None:
+            return open_shift.shift_id
+
+        admin_override_enabled = (
+            os.getenv("SECRET_GROUNDS_ALLOW_ADMIN_PAYMENTS_WITHOUT_SHIFT", "false")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if actor.role in {"owner", "admin"} and admin_override_enabled:
+            return None
+
+        return self.shift_repository.require_payment_shift(actor)
 
     def summarize_session(self, session: SessionRecord) -> BillingSummary:
         payments = self.payment_repository.list_payments(session.session_id)
@@ -96,6 +126,20 @@ class BillingService:
             )
             display_total = estimated_total_amount
             estimated_balance_due = money(max(display_total - total_paid, Decimal("0.00")))
+        elif (
+            session.session_mode == "member_balance"
+            and session.status == "active"
+            and session.member_balance_before_seconds is not None
+        ):
+            estimated_elapsed_seconds = max(
+                0,
+                int((current_utc_time() - session.started_at).total_seconds()),
+            )
+            estimated_billed_seconds = min(
+                estimated_elapsed_seconds,
+                session.total_seconds,
+                session.member_balance_before_seconds,
+            )
 
         balance_due = money(max(display_total - total_paid, Decimal("0.00")))
         payment_status = get_payment_status(display_total, total_paid)
@@ -106,6 +150,13 @@ class BillingService:
                 "payment_status": payment_status,
                 "actual_elapsed_seconds": estimated_elapsed_seconds,
                 "billed_seconds": estimated_billed_seconds,
+                "member_balance_after_seconds": (
+                    max(session.member_balance_before_seconds - estimated_billed_seconds, 0)
+                    if session.session_mode == "member_balance"
+                    and session.member_balance_before_seconds is not None
+                    and estimated_billed_seconds is not None
+                    else session.member_balance_after_seconds
+                ),
                 "estimated_total_amount": estimated_total_amount,
                 "estimated_balance_due": estimated_balance_due,
             }
@@ -144,6 +195,7 @@ class BillingService:
         billing = self.get_billing(session_id)
         amount = money(request.amount)
         limit = money(max_amount) if max_amount is not None else billing.balance_due
+        shift_id = self.get_payment_shift_id(actor_user_id)
 
         if amount > limit:
             raise HTTPException(
@@ -181,6 +233,7 @@ class BillingService:
             action_type=action_type,  # type: ignore[arg-type]
             related_command_id=related_command_id,
             review_required=False,
+            shift_id=shift_id,
             recorded_by_user_id=actor_user_id,
             status="completed",
             created_at=current_utc_time(),

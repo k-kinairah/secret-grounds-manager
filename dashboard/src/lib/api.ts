@@ -1,7 +1,13 @@
 import type {
   BillingSummary,
+  CashierShiftDetail,
+  CashierShiftRecord,
   CurrentUser,
   ForceEndSessionResponse,
+  MemberRecord,
+  MembershipProduct,
+  MemberSessionSelection,
+  MemberTimeTransaction,
   PcSummary,
   CalculatedTimeResponse,
   PaymentInput,
@@ -92,6 +98,47 @@ export async function fetchCurrentUser(): Promise<CurrentUser> {
   });
 }
 
+export async function fetchCurrentShift(): Promise<CashierShiftDetail | null> {
+  return requestJson<CashierShiftDetail | null>(`${getApiBaseUrl()}/shifts/current`, {
+    cache: "no-store"
+  });
+}
+
+export async function openShift(openingCash: string): Promise<CashierShiftDetail> {
+  return requestJson<CashierShiftDetail>(`${getApiBaseUrl()}/shifts/open`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ opening_cash: openingCash })
+  });
+}
+
+export async function closeShift(
+  shiftId: string,
+  input: { actualCash: string; closingNotes?: string; forceCloseReason?: string }
+): Promise<CashierShiftDetail> {
+  return requestJson<CashierShiftDetail>(`${getApiBaseUrl()}/shifts/${shiftId}/close`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      actual_cash: input.actualCash,
+      closing_notes: input.closingNotes,
+      force_close_reason: input.forceCloseReason
+    })
+  });
+}
+
+export async function fetchShifts(): Promise<CashierShiftRecord[]> {
+  return requestJson<CashierShiftRecord[]>(`${getApiBaseUrl()}/shifts`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchShift(shiftId: string): Promise<CashierShiftDetail> {
+  return requestJson<CashierShiftDetail>(`${getApiBaseUrl()}/shifts/${shiftId}`, {
+    cache: "no-store"
+  });
+}
+
 export async function fetchUsers(): Promise<UserAdminRecord[]> {
   return requestJson<UserAdminRecord[]>(`${getApiBaseUrl()}/users`, {
     cache: "no-store"
@@ -163,6 +210,65 @@ export function toCashierMessage(message: string): string {
 
 export async function fetchPcs(): Promise<PcSummary[]> {
   return requestJson<PcSummary[]>(`${getApiBaseUrl()}/pcs`, { cache: "no-store" });
+}
+
+export async function fetchMembers(query = ""): Promise<MemberRecord[]> {
+  const search = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+  return requestJson<MemberRecord[]>(`${getApiBaseUrl()}/members${search}`, {
+    cache: "no-store"
+  });
+}
+
+export async function createMember(input: {
+  member_code: string;
+  full_name: string;
+  phone_number?: string;
+}): Promise<MemberRecord> {
+  return requestJson<MemberRecord>(`${getApiBaseUrl()}/members`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updateMemberStatus(
+  memberId: string,
+  status: "active" | "inactive"
+): Promise<MemberRecord> {
+  return requestJson<MemberRecord>(`${getApiBaseUrl()}/members/${memberId}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status })
+  });
+}
+
+export async function fetchMemberLedger(memberId: string): Promise<MemberTimeTransaction[]> {
+  return requestJson<MemberTimeTransaction[]>(`${getApiBaseUrl()}/members/${memberId}/ledger`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchMembershipProducts(): Promise<MembershipProduct[]> {
+  return requestJson<MembershipProduct[]>(`${getApiBaseUrl()}/membership-products`, {
+    cache: "no-store"
+  });
+}
+
+export async function purchaseMemberTime(
+  memberId: string,
+  input: {
+    product_id: string;
+    payment_method: PaymentInput["payment_method"];
+    cash_received?: string;
+    reference_number?: string;
+    notes?: string;
+  }
+): Promise<{ member: MemberRecord }> {
+  return requestJson<{ member: MemberRecord }>(`${getApiBaseUrl()}/members/${memberId}/purchase`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
 }
 
 export async function fetchHistory(): Promise<SessionRecord[]> {
@@ -264,6 +370,21 @@ export async function startOpenTimeSession(pcName: string): Promise<SessionComma
   });
 }
 
+export async function startMemberSession(
+  pcName: string,
+  payload: MemberSessionSelection
+): Promise<SessionCommandResponse> {
+  return requestJson<SessionCommandResponse>(`${getApiBaseUrl()}/sessions/start-member`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      pc_name: pcName,
+      member_id: payload.memberId,
+      duration_seconds: payload.durationSeconds
+    })
+  });
+}
+
 export async function addTime(
   sessionId: string,
   payload: { amount?: string; seconds?: number; rateId?: string }
@@ -296,6 +417,23 @@ export async function addPrepaidTime(
         seconds: payload.durationSeconds,
         rate_id: payload.rateId,
         payment: payload.payment
+      })
+    }
+  );
+}
+
+export async function addMemberTime(
+  sessionId: string,
+  payload: MemberSessionSelection
+): Promise<SessionCommandResponse> {
+  return requestJson<SessionCommandResponse>(
+    `${getApiBaseUrl()}/sessions/${sessionId}/add-time-member`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        member_id: payload.memberId,
+        seconds: payload.durationSeconds
       })
     }
   );

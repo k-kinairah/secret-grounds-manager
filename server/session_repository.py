@@ -62,6 +62,11 @@ def row_to_session(row: Any) -> SessionRecord:
         settlement_pending=bool(row["settlement_pending"]),
         created_by_user_id=row["created_by_user_id"],
         ended_by_user_id=row["ended_by_user_id"],
+        member_id=row["member_id"],
+        member_code_snapshot=row["member_code_snapshot"],
+        member_name_snapshot=row["member_name_snapshot"],
+        member_balance_before_seconds=row["member_balance_before_seconds"],
+        member_balance_after_seconds=row["member_balance_after_seconds"],
     )
 
 
@@ -115,9 +120,14 @@ class SessionRepository:
                     metered_rate_duration_seconds_snapshot,
                     settlement_pending,
                     created_by_user_id,
-                    ended_by_user_id
+                    ended_by_user_id,
+                    member_id,
+                    member_code_snapshot,
+                    member_name_snapshot,
+                    member_balance_before_seconds,
+                    member_balance_after_seconds
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.session_id,
@@ -146,6 +156,11 @@ class SessionRepository:
                     1 if session.settlement_pending else 0,
                     session.created_by_user_id,
                     session.ended_by_user_id,
+                    session.member_id,
+                    session.member_code_snapshot,
+                    session.member_name_snapshot,
+                    session.member_balance_before_seconds,
+                    session.member_balance_after_seconds,
                 ),
             )
 
@@ -268,7 +283,12 @@ class SessionRepository:
                     metered_rate_duration_seconds_snapshot = ?,
                     settlement_pending = ?,
                     created_by_user_id = ?,
-                    ended_by_user_id = ?
+                    ended_by_user_id = ?,
+                    member_id = ?,
+                    member_code_snapshot = ?,
+                    member_name_snapshot = ?,
+                    member_balance_before_seconds = ?,
+                    member_balance_after_seconds = ?
                 WHERE session_id = ?
                 """,
                 (
@@ -297,6 +317,11 @@ class SessionRepository:
                     1 if session.settlement_pending else 0,
                     session.created_by_user_id,
                     session.ended_by_user_id,
+                    session.member_id,
+                    session.member_code_snapshot,
+                    session.member_name_snapshot,
+                    session.member_balance_before_seconds,
+                    session.member_balance_after_seconds,
                     session.session_id,
                 ),
             )

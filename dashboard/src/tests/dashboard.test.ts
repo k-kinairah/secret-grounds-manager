@@ -66,6 +66,11 @@ function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
     settlement_pending: false,
     recovery_required: false,
     recovery_reason: null,
+    member_id: null,
+    member_code_snapshot: null,
+    member_name_snapshot: null,
+    member_balance_before_seconds: null,
+    member_balance_after_seconds: null,
     ...overrides
   };
 }
