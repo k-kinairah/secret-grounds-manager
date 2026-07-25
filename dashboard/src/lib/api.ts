@@ -242,6 +242,17 @@ export async function updateMemberStatus(
   });
 }
 
+export async function resetMemberPin(
+  memberId: string,
+  pin: string | null
+): Promise<MemberRecord> {
+  return requestJson<MemberRecord>(`${getApiBaseUrl()}/members/${memberId}/pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pin })
+  });
+}
+
 export async function fetchMemberLedger(memberId: string): Promise<MemberTimeTransaction[]> {
   return requestJson<MemberTimeTransaction[]>(`${getApiBaseUrl()}/members/${memberId}/ledger`, {
     cache: "no-store"
@@ -380,7 +391,8 @@ export async function startMemberSession(
     body: JSON.stringify({
       pc_name: pcName,
       member_id: payload.memberId,
-      duration_seconds: payload.durationSeconds
+      duration_seconds: payload.durationSeconds,
+      member_pin: payload.memberPin
     })
   });
 }

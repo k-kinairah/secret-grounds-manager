@@ -13,7 +13,9 @@ import {
   login,
   logout,
   recordPayment,
+  resetMemberPin,
   resetUserPassword,
+  startMemberSession,
   startSession,
   toCashierMessage,
   updateRate,
@@ -30,6 +32,7 @@ import {
   calculateOpenTimeEstimate,
   formatDuration,
   formatMoney,
+  formatNaturalDuration,
   formatRateDuration,
   formatTimer,
   minutesToSeconds,
@@ -83,8 +86,12 @@ assert.equal(formatDuration(null), "Unknown");
 assert.equal(formatTimer(1985), "33:05");
 assert.equal(formatTimer(6138), "1:42:18");
 assert.equal(formatRateDuration(1800), "30 min");
-assert.equal(formatMoney("12.30"), "₱12.30");
-assert.equal(formatMoney("0.00"), "₱0.00");
+assert.equal(formatNaturalDuration(45), "45 sec");
+assert.equal(formatNaturalDuration(720), "12 min");
+assert.equal(formatNaturalDuration(3600), "1 hr");
+assert.equal(formatNaturalDuration(16620), "4 hr 37 min");
+assert.equal(formatMoney("12.30"), "\u20b112.30");
+assert.equal(formatMoney("0.00"), "\u20b10.00");
 
 assert.equal(
   secondsFromStartedAt(
@@ -191,7 +198,7 @@ const renderedRate = {
 assert.deepEqual(renderedRate, {
   name: "1 Hour",
   duration: "1 hr",
-  price: "₱100.10"
+  price: "\u20b1100.10"
 });
 
 const sampleRate: RateProfile = {
@@ -290,6 +297,7 @@ async function runAsyncAssertions() {
     await updateUserStatus("user-1", false);
     await resetUserPassword("user-1", "new-password");
     await logout();
+    await resetMemberPin("member-1", "1234");
     await fetchRates(true);
     await calculateTime("20.00");
     await createRate({
@@ -308,6 +316,12 @@ async function runAsyncAssertions() {
       sort_order: 10
     });
     await updateRateStatus("rate-30", false);
+    await startMemberSession("PC-01", {
+      sessionMode: "member_balance",
+      memberId: "member-1",
+      durationSeconds: 3600,
+      memberPin: "1234"
+    });
     await startSession("PC-01", { amount: "20.00" });
     await addTime("session-1", { amount: "5.00" });
     await forceEndSession("session-1");
@@ -328,11 +342,13 @@ async function runAsyncAssertions() {
         { method: "PATCH", url: "http://127.0.0.1:8000/users/user-1/status" },
         { method: "POST", url: "http://127.0.0.1:8000/users/user-1/reset-password" },
         { method: "POST", url: "http://127.0.0.1:8000/auth/logout" },
+        { method: "POST", url: "http://127.0.0.1:8000/members/member-1/pin" },
         { method: "GET", url: "http://127.0.0.1:8000/rates?include_inactive=true" },
         { method: "POST", url: "http://127.0.0.1:8000/rates/calculate-time" },
         { method: "POST", url: "http://127.0.0.1:8000/rates" },
         { method: "PUT", url: "http://127.0.0.1:8000/rates/rate-30" },
         { method: "PATCH", url: "http://127.0.0.1:8000/rates/rate-30/status" },
+        { method: "POST", url: "http://127.0.0.1:8000/sessions/start-member" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/start" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/add-time" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/force-end" },
@@ -347,17 +363,26 @@ async function runAsyncAssertions() {
     assert.deepEqual(fetchCalls[6].body, {
       password: "new-password"
     });
-    assert.equal((fetchCalls[11].body as RateProfileInput).price, "50.00");
-    assert.equal((fetchCalls[11].body as RateProfileInput).duration_seconds, 1800);
-    assert.deepEqual(fetchCalls[13].body, {
+    assert.deepEqual(fetchCalls[8].body, {
+      pin: "1234"
+    });
+    assert.equal((fetchCalls[12].body as RateProfileInput).price, "50.00");
+    assert.equal((fetchCalls[12].body as RateProfileInput).duration_seconds, 1800);
+    assert.deepEqual(fetchCalls[14].body, {
+      pc_name: "PC-01",
+      member_id: "member-1",
+      duration_seconds: 3600,
+      member_pin: "1234"
+    });
+    assert.deepEqual(fetchCalls[15].body, {
       pc_name: "PC-01",
       amount: "20.00"
     });
-    assert.deepEqual(fetchCalls[14].body, {
+    assert.deepEqual(fetchCalls[16].body, {
       amount: "5.00"
     });
-    assert.deepEqual(fetchCalls[15].body, null);
-    assert.deepEqual(fetchCalls[16].body, {
+    assert.deepEqual(fetchCalls[17].body, null);
+    assert.deepEqual(fetchCalls[18].body, {
       payment_method: "cash",
       amount: "20.00",
       cash_received: "50.00"

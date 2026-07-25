@@ -708,6 +708,7 @@ class SessionService:
         pc_name: str,
         member_id: str,
         duration_seconds: int | None,
+        member_pin: str | None = None,
         actor_user_id: str | None = None,
     ) -> SessionCommandResponse:
         if self.member_repository is None:
@@ -724,6 +725,7 @@ class SessionService:
             )
 
         member = self.member_repository.require_usable_member(member_id)  # type: ignore[attr-defined]
+        self.member_repository.verify_member_pin_if_required(member.member_id, member_pin)  # type: ignore[attr-defined]
         session_id = str(uuid4())
         reserved_seconds = duration_seconds or member.time_balance_seconds
         if reserved_seconds <= 0:

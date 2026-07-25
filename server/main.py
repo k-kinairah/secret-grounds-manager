@@ -31,6 +31,7 @@ from server.schemas import (
     MemberCreateRequest,
     MemberPurchaseRequest,
     MemberPurchaseResponse,
+    MemberPinResetRequest,
     MemberRecord,
     MembershipProductCreate,
     MembershipProductRecord,
@@ -314,6 +315,18 @@ def update_member_status(
     _: object = Depends(require_role("admin")),
 ) -> MemberRecord:
     member = member_repository.set_member_status(member_id, request)
+    if member is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return member
+
+
+@app.post("/members/{member_id}/pin", response_model=MemberRecord)
+def reset_member_pin(
+    member_id: str,
+    request: MemberPinResetRequest,
+    _: object = Depends(require_role("owner")),
+) -> MemberRecord:
+    member = member_repository.set_member_pin(member_id, request.pin)
     if member is None:
         raise HTTPException(status_code=404, detail="Member not found")
     return member
@@ -790,6 +803,7 @@ async def start_member_session(
         request.pc_name,
         request.member_id,
         request.duration_seconds,
+        request.member_pin,
         get_actor_user_id(current_user),
     )
     recovery_flags.pop(response.session.pc_name, None)

@@ -14,14 +14,14 @@
 }
 
 .topBar h1 {
-  color: #0f172a;
+  color: var(--text);
   font-size: clamp(28px, 3vw, 40px);
   letter-spacing: 0;
   margin: 0;
 }
 
 .topBar p {
-  color: #64748b;
+  color: var(--muted);
   margin: 6px 0 0;
 }
 

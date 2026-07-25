@@ -237,6 +237,16 @@ class MemberSessionStartRequest(BaseModel):
     pc_name: str = Field(..., min_length=1)
     member_id: str = Field(..., min_length=1)
     duration_seconds: int | None = Field(default=None, gt=0)
+    member_pin: str | None = None
+
+    @field_validator("member_pin")
+    @classmethod
+    def validate_member_pin(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if not value.isdigit() or len(value) < 4 or len(value) > 6:
+            raise ValueError("Member PIN must be 4 to 6 numeric digits")
+        return value
 
 
 class MemberAddTimeRequest(BaseModel):
@@ -478,6 +488,7 @@ class MemberRecord(BaseModel):
     member_code: str
     full_name: str
     phone_number: str | None = None
+    has_pin: bool = False
     status: MemberStatus
     time_balance_seconds: int
     joined_at: datetime
@@ -503,6 +514,19 @@ class MemberUpdateRequest(BaseModel):
 
 class MemberStatusUpdate(BaseModel):
     status: MemberStatus
+
+
+class MemberPinResetRequest(BaseModel):
+    pin: str | None = None
+
+    @field_validator("pin")
+    @classmethod
+    def validate_pin(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if not value.isdigit() or len(value) < 4 or len(value) > 6:
+            raise ValueError("Member PIN must be 4 to 6 numeric digits")
+        return value
 
 
 class MembershipProductRecord(BaseModel):

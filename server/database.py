@@ -847,6 +847,7 @@ def initialize_database() -> None:
                 member_code TEXT NOT NULL UNIQUE,
                 full_name TEXT NOT NULL,
                 phone_number TEXT,
+                pin_hash TEXT,
                 status TEXT NOT NULL CHECK (status IN ('active', 'inactive')),
                 time_balance_seconds INTEGER NOT NULL CHECK (time_balance_seconds >= 0),
                 joined_at TEXT NOT NULL,
@@ -858,6 +859,7 @@ def initialize_database() -> None:
             )
             """
         )
+        add_column_if_missing(connection, "members", "pin_hash", "TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS member_time_transactions (

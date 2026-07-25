@@ -181,6 +181,7 @@ export interface MemberSessionSelection {
   sessionMode: "member_balance";
   memberId: string;
   durationSeconds?: number;
+  memberPin?: string;
 }
 
 export interface BillingSummary {
@@ -277,6 +278,7 @@ export interface MemberRecord {
   member_code: string;
   full_name: string;
   phone_number: string | null;
+  has_pin: boolean;
   status: "active" | "inactive";
   time_balance_seconds: number;
   joined_at: string;

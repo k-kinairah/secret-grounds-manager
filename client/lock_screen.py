@@ -127,7 +127,7 @@ class LockScreenController:
 
         self.root = tk.Tk()
         self.root.title("Secret Grounds")
-        self.root.configure(background="#111827")
+        self.root.configure(background="#030712")
         self.root.attributes("-fullscreen", True)
         self.root.attributes("-topmost", True)
         self.root.overrideredirect(True)
@@ -136,24 +136,35 @@ class LockScreenController:
         self.root.bind("<FocusOut>", lambda _: self._ensure_visible())
         self.root.bind("<Control-Shift-F12>", lambda _: self.use_development_escape())
 
-        container = tk.Frame(self.root, background="#111827")
+        container = tk.Frame(self.root, background="#030712")
         container.pack(expand=True, fill="both")
+
+        mark = tk.Label(
+            container,
+            text="SG",
+            font=("Segoe UI", 30, "bold"),
+            foreground="#020617",
+            background="#22D3EE",
+            padx=22,
+            pady=10,
+        )
+        mark.pack(pady=(96, 22))
 
         title = tk.Label(
             container,
             text="Secret Grounds",
-            font=("Segoe UI", 44, "bold"),
-            foreground="#F9FAFB",
-            background="#111827",
+            font=("Segoe UI", 48, "bold"),
+            foreground="#E0FAFF",
+            background="#030712",
         )
-        title.pack(pady=(120, 24))
+        title.pack(pady=(0, 22))
 
         unavailable = tk.Label(
             container,
             text="This computer is currently unavailable",
             font=("Segoe UI", 24),
             foreground="#F9FAFB",
-            background="#111827",
+            background="#030712",
         )
         unavailable.pack(pady=8)
 
@@ -161,17 +172,17 @@ class LockScreenController:
             container,
             text="Please ask the cashier to start a session",
             font=("Segoe UI", 18),
-            foreground="#D1D5DB",
-            background="#111827",
+            foreground="#A7B8D4",
+            background="#030712",
         )
         cashier.pack(pady=8)
 
         pc_label = tk.Label(
             container,
             text=f"PC name: {self.pc_name}",
-            font=("Segoe UI", 16),
-            foreground="#D1D5DB",
-            background="#111827",
+            font=("Segoe UI", 18, "bold"),
+            foreground="#67E8F9",
+            background="#030712",
         )
         pc_label.pack(pady=(36, 8))
 
@@ -180,7 +191,7 @@ class LockScreenController:
             text="Connection status: Offline",
             font=("Segoe UI", 16),
             foreground="#FCA5A5",
-            background="#111827",
+            background="#030712",
         )
         self.connection_label.pack(pady=8)
 

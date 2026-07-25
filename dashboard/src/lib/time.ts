@@ -59,6 +59,30 @@ export function formatRateDuration(totalSeconds: number): string {
   return `${minutes} min`;
 }
 
+export function formatNaturalDuration(totalSeconds: number | null): string {
+  if (totalSeconds === null || totalSeconds < 0) {
+    return "Unknown";
+  }
+
+  const seconds = Math.floor(totalSeconds);
+  if (seconds < 60) {
+    return `${seconds} sec`;
+  }
+
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (hours > 0 && minutes > 0) {
+    return `${hours} hr ${minutes} min`;
+  }
+
+  if (hours > 0) {
+    return `${hours} hr`;
+  }
+
+  return `${minutes} min`;
+}
+
 export function formatDateTime(value: string | null): string {
   if (value === null) {
     return "Not ended";

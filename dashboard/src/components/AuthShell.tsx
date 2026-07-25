@@ -149,13 +149,19 @@ export function AuthShell({ children }: { children: ReactNode }) {
   return (
     <>
       <nav className="appShell" aria-label="Main navigation">
+        <Link className="appShell__brand" href="/">
+          <span className="appShell__mark" aria-hidden="true">
+            SG
+          </span>
+          <span>Secret Grounds</span>
+        </Link>
         <div className="appShell__links">
-          <Link href="/">Dashboard</Link>
-          <Link href="/history">History</Link>
-          <Link href="/members">Members</Link>
-          <Link href="/shifts">Shifts</Link>
-          {canAccess(user, "admin") ? <Link href="/rates">Rates</Link> : null}
-          {canAccess(user, "owner") ? <Link href="/users">Users</Link> : null}
+          <Link className={pathname === "/" ? "appShell__linkActive" : ""} href="/">Dashboard</Link>
+          <Link className={pathname === "/history" ? "appShell__linkActive" : ""} href="/history">History</Link>
+          <Link className={pathname === "/members" ? "appShell__linkActive" : ""} href="/members">Members</Link>
+          <Link className={pathname === "/shifts" ? "appShell__linkActive" : ""} href="/shifts">Shifts</Link>
+          {canAccess(user, "admin") ? <Link className={pathname === "/rates" ? "appShell__linkActive" : ""} href="/rates">Rates</Link> : null}
+          {canAccess(user, "owner") ? <Link className={pathname === "/users" ? "appShell__linkActive" : ""} href="/users">Users</Link> : null}
         </div>
         <div className="appShell__account">
           {user ? (

@@ -40,6 +40,7 @@ def main() -> None:
             pc_registry,
             purchase_member_time,
             register_pc,
+            reset_member_pin,
             session_service,
             start_member_session,
             update_member_status,
@@ -47,6 +48,7 @@ def main() -> None:
         from server.schemas import (
             CommandAcknowledgement,
             MemberCreateRequest,
+            MemberPinResetRequest,
             MemberPurchaseRequest,
             MemberSessionStartRequest,
             MemberStatusUpdate,
@@ -103,6 +105,12 @@ def main() -> None:
         )
         assert purchase.member.time_balance_seconds == 6 * 60 * 60
         assert purchase.payment.change_given == Decimal("400.00")
+        secured_member = reset_member_pin(
+            member.member_id,
+            MemberPinResetRequest(pin="1234"),
+            cashier_user,
+        )
+        assert secured_member.has_pin is True
 
         pc_registry.clear()
         register_pc(PCRegistration(pc_name="PC-MEMBER", ip_address="127.0.0.1"))
@@ -115,12 +123,44 @@ def main() -> None:
             ]
 
         session_service.send_required_command = acknowledge_command
+        try:
+            asyncio.run(
+                start_member_session(
+                    MemberSessionStartRequest(
+                        pc_name="PC-MEMBER",
+                        member_id=member.member_id,
+                        duration_seconds=60 * 60,
+                    ),
+                    cashier_user,
+                )
+            )
+        except HTTPException as error:
+            assert error.status_code == 403
+        else:
+            raise AssertionError("Member PIN should be required when configured")
+        try:
+            asyncio.run(
+                start_member_session(
+                    MemberSessionStartRequest(
+                        pc_name="PC-MEMBER",
+                        member_id=member.member_id,
+                        duration_seconds=60 * 60,
+                        member_pin="9999",
+                    ),
+                    cashier_user,
+                )
+            )
+        except HTTPException as error:
+            assert error.status_code == 403
+        else:
+            raise AssertionError("Incorrect member PIN should be rejected")
         capped = asyncio.run(
             start_member_session(
                 MemberSessionStartRequest(
                     pc_name="PC-MEMBER",
                     member_id=member.member_id,
                     duration_seconds=60 * 60,
+                    member_pin="1234",
                 ),
                 cashier_user,
             )
@@ -134,6 +174,7 @@ def main() -> None:
                         pc_name="PC-MEMBER-2",
                         member_id=member.member_id,
                         duration_seconds=30 * 60,
+                        member_pin="1234",
                     ),
                     cashier_user,
                 )
@@ -158,6 +199,7 @@ def main() -> None:
                     pc_name="PC-MEMBER",
                     member_id=member.member_id,
                     duration_seconds=None,
+                    member_pin="1234",
                 ),
                 cashier_user,
             )
@@ -199,6 +241,7 @@ def main() -> None:
                         pc_name="PC-FAIL-MEMBER",
                         member_id=member.member_id,
                         duration_seconds=60 * 60,
+                        member_pin="1234",
                     ),
                     cashier_user,
                 )
@@ -221,6 +264,7 @@ def main() -> None:
                         pc_name="PC-FAIL-MEMBER",
                         member_id=member.member_id,
                         duration_seconds=60,
+                        member_pin="1234",
                     ),
                     cashier_user,
                 )

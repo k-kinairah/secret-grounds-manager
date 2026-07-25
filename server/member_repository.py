@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from server.billing_service import money
 from server.database import get_connection
 from server.payment_repository import PaymentRepository
+from server.passwords import hash_password, verify_password
 from server.schemas import (
     MemberCreateRequest,
     MemberPurchaseRequest,
@@ -42,6 +43,7 @@ def row_to_member(row: Any) -> MemberRecord:
         member_code=row["member_code"],
         full_name=row["full_name"],
         phone_number=row["phone_number"],
+        has_pin=bool(row["pin_hash"]) if "pin_hash" in row.keys() else False,
         status=row["status"],
         time_balance_seconds=row["time_balance_seconds"],
         joined_at=datetime.fromisoformat(row["joined_at"]),
@@ -143,6 +145,7 @@ class MemberRepository:
             member_code=normalize_code(request.member_code),
             full_name=request.full_name.strip(),
             phone_number=(request.phone_number or "").strip() or None,
+            has_pin=False,
             status="active",
             time_balance_seconds=0,
             joined_at=now,
@@ -233,6 +236,35 @@ class MemberRepository:
                 (request.status, updated_at.isoformat(), member_id),
             )
         return existing.model_copy(update={"status": request.status, "updated_at": updated_at})
+
+    def set_member_pin(self, member_id: str, pin: str | None) -> MemberRecord | None:
+        existing = self.get_member(member_id)
+        if existing is None:
+            return None
+
+        updated_at = current_utc_time()
+        pin_hash = hash_password(pin) if pin else None
+        with get_connection() as connection:
+            connection.execute(
+                "UPDATE members SET pin_hash = ?, updated_at = ? WHERE member_id = ?",
+                (pin_hash, updated_at.isoformat(), member_id),
+            )
+        return existing.model_copy(update={"has_pin": pin_hash is not None, "updated_at": updated_at})
+
+    def verify_member_pin_if_required(self, member_id: str, provided_pin: str | None) -> None:
+        with get_connection() as connection:
+            row = connection.execute(
+                "SELECT pin_hash FROM members WHERE member_id = ?",
+                (member_id,),
+            ).fetchone()
+
+        pin_hash = row["pin_hash"] if row else None
+        if not pin_hash:
+            return
+        if not provided_pin:
+            raise HTTPException(status_code=403, detail="Member PIN is required")
+        if not verify_password(provided_pin, pin_hash):
+            raise HTTPException(status_code=403, detail="Member PIN is incorrect")
 
     def list_products(self, include_inactive: bool = False) -> list[MembershipProductRecord]:
         with get_connection() as connection:

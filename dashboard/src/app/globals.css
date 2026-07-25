@@ -271,3 +271,119 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+
+:root {
+  color-scheme: dark;
+  --background: #060912;
+  --panel: #0d1424;
+  --panel-strong: #111b2d;
+  --text: #eef7ff;
+  --muted: #95a8c6;
+  --line: rgba(56, 189, 248, 0.18);
+  --active: #0ea5e9;
+  --accent: #22d3ee;
+  --available: #22c55e;
+  --warning: #fb923c;
+  --offline: #64748b;
+  --danger: #f43f5e;
+  --nav: #050811;
+  --nav-line: rgba(56, 189, 248, 0.24);
+  --shadow: 0 20px 60px rgb(0 0 0 / 0.34);
+  --shadow-hover: 0 26px 78px rgb(0 0 0 / 0.45), 0 0 32px rgb(14 165 233 / 0.14);
+  --focus: #67e8f9;
+}
+
+body {
+  background:
+    linear-gradient(135deg, rgb(34 211 238 / 0.08), transparent 26rem),
+    radial-gradient(circle at 86% 8%, rgb(14 165 233 / 0.18), transparent 22rem),
+    linear-gradient(180deg, #050811 0%, #07101e 46%, #050811 100%);
+  color: var(--text);
+}
+
+body::before {
+  background:
+    linear-gradient(rgba(56, 189, 248, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.03) 1px, transparent 1px);
+  background-size: 42px 42px;
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  z-index: -1;
+}
+
+input,
+select {
+  background: #08111f;
+  border-color: rgba(56, 189, 248, 0.22);
+  color: var(--text);
+}
+
+input::placeholder {
+  color: #7f92b0;
+  opacity: 1;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #eef7ff;
+  box-shadow: 0 0 0 1000px #08111f inset;
+  caret-color: #eef7ff;
+}
+
+.appShell {
+  background:
+    linear-gradient(90deg, #050811 0%, #0b1424 52%, #050811 100%);
+  box-shadow: 0 1px 0 rgba(56, 189, 248, 0.18), 0 12px 38px rgb(0 0 0 / 0.32);
+}
+
+.appShell__brand {
+  align-items: center;
+  display: inline-flex;
+  gap: 10px;
+  margin-right: 10px;
+}
+
+.appShell__mark {
+  align-items: center;
+  background: linear-gradient(135deg, #22d3ee, #2563eb);
+  border: 1px solid rgba(125, 211, 252, 0.82);
+  border-radius: 8px;
+  box-shadow: 0 0 24px rgb(34 211 238 / 0.32);
+  color: #020617;
+  display: inline-flex;
+  font-weight: 1000;
+  height: 34px;
+  justify-content: center;
+  width: 38px;
+}
+
+.appShell a.appShell__linkActive {
+  background: rgb(14 165 233 / 0.18);
+  border: 1px solid rgb(56 189 248 / 0.28);
+  color: #ffffff;
+}
+
+.shiftNotice,
+.shiftGate__message {
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.38);
+  color: #bbf7d0;
+}
+
+.shiftGate__panel {
+  background: linear-gradient(180deg, rgba(17, 27, 45, 0.98), rgba(7, 16, 30, 0.98));
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.shiftGate h1,
+.shiftGate label {
+  color: var(--text);
+}
+
+.shiftGate p {
+  color: var(--muted);
+}

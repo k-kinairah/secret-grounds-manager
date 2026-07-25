@@ -4,14 +4,94 @@ import { useEffect, useMemo, useState } from "react";
 import styles from "@/app/page.module.css";
 import {
   createMember,
+  fetchCurrentUser,
   fetchMemberLedger,
   fetchMembers,
   fetchMembershipProducts,
   purchaseMemberTime,
+  resetMemberPin,
   updateMemberStatus
 } from "@/lib/api";
-import { formatDateTime, formatMoney, formatRateDuration } from "@/lib/time";
-import type { MemberRecord, MembershipProduct, MemberTimeTransaction, PaymentMethod } from "@/lib/types";
+import { formatDateTime, formatMoney, formatNaturalDuration } from "@/lib/time";
+import type {
+  CurrentUser,
+  MemberRecord,
+  MembershipProduct,
+  MemberTimeTransaction,
+  PaymentMethod
+} from "@/lib/types";
+
+function describeActivity(transaction: MemberTimeTransaction): {
+  title: string;
+  detail: string;
+  amount: string | null;
+  isTechnical: boolean;
+} {
+  const delta = Math.abs(transaction.seconds_delta);
+  const balance = formatNaturalDuration(transaction.balance_after_seconds);
+
+  switch (transaction.transaction_type) {
+    case "membership_purchase":
+      return {
+        title: "Membership Purchased",
+        detail: `Added ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
+        amount: transaction.amount_paid,
+        isTechnical: false
+      };
+    case "promo_topup":
+      return {
+        title: "Member Promo Purchased",
+        detail: `Added ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
+        amount: transaction.amount_paid,
+        isTechnical: false
+      };
+    case "session_usage_finalized":
+      return {
+        title: "Played Session",
+        detail:
+          delta === 0
+            ? `No time deducted. Balance remains ${balance}.`
+            : `Used ${formatNaturalDuration(delta)}. Remaining balance: ${balance}.`,
+        amount: null,
+        isTechnical: false
+      };
+    case "session_refund":
+      return {
+        title: "Time Returned",
+        detail: `Returned ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
+        amount: null,
+        isTechnical: false
+      };
+    case "manual_adjustment":
+      return {
+        title: "Manual Balance Adjustment",
+        detail: `Adjusted by ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
+        amount: null,
+        isTechnical: false
+      };
+    case "expiration_adjustment":
+      return {
+        title: "Expired Time Adjustment",
+        detail: `Adjusted ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
+        amount: null,
+        isTechnical: false
+      };
+    case "session_reservation_released":
+      return {
+        title: "Session Reservation Released",
+        detail: `Held time was released. Balance: ${balance}.`,
+        amount: null,
+        isTechnical: true
+      };
+    default:
+      return {
+        title: "Session Reservation",
+        detail: `Temporarily held ${formatNaturalDuration(delta)}. Balance: ${balance}.`,
+        amount: null,
+        isTechnical: true
+      };
+  }
+}
 
 export function MembersManager() {
   const [members, setMembers] = useState<MemberRecord[]>([]);
@@ -21,7 +101,23 @@ export function MembersManager() {
   const [ledger, setLedger] = useState<MemberTimeTransaction[]>([]);
   const [message, setMessage] = useState<string | null>("Loading members...");
   const [isSaving, setIsSaving] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [selectedProductId, setSelectedProductId] = useState("");
+  const [showAdvancedActivity, setShowAdvancedActivity] = useState(false);
+
   const activeProducts = useMemo(() => products.filter((product) => product.is_active), [products]);
+  const selectedProduct =
+    activeProducts.find((product) => product.product_id === selectedProductId) ??
+    activeProducts[0] ??
+    null;
+  const visibleLedger = useMemo(
+    () =>
+      ledger
+        .map((transaction) => ({ transaction, activity: describeActivity(transaction) }))
+        .filter(({ activity }) => showAdvancedActivity || !activity.isTechnical),
+    [ledger, showAdvancedActivity]
+  );
+  const canManagePins = currentUser?.role === "owner";
 
   async function refresh(search = query) {
     const [nextMembers, nextProducts] = await Promise.all([
@@ -35,7 +131,7 @@ export function MembersManager() {
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
-      refresh().catch((error) => {
+      Promise.all([refresh(), fetchCurrentUser().then(setCurrentUser)]).catch((error) => {
         setMessage(error instanceof Error ? error.message : "Could not load members.");
       });
     }, 0);
@@ -62,21 +158,25 @@ export function MembersManager() {
 
   async function handleSelect(member: MemberRecord) {
     setSelectedMember(member);
+    setSelectedProductId(activeProducts[0]?.product_id ?? "");
+    setShowAdvancedActivity(false);
     setLedger(await fetchMemberLedger(member.member_id));
   }
 
   async function handlePurchase(formData: FormData) {
-    if (!selectedMember) {
+    if (!selectedMember || selectedProduct === null) {
       return;
     }
     setIsSaving(true);
     try {
       const paymentMethod = String(formData.get("paymentMethod") ?? "cash") as PaymentMethod;
       const response = await purchaseMemberTime(selectedMember.member_id, {
-        product_id: String(formData.get("productId") ?? ""),
+        product_id: selectedProduct.product_id,
         payment_method: paymentMethod,
-        cash_received: paymentMethod === "cash" ? String(formData.get("cashReceived") ?? "") : undefined,
-        reference_number: paymentMethod !== "cash" ? String(formData.get("referenceNumber") ?? "") : undefined
+        cash_received:
+          paymentMethod === "cash" ? String(formData.get("cashReceived") ?? "") : undefined,
+        reference_number:
+          paymentMethod !== "cash" ? String(formData.get("referenceNumber") ?? "") : undefined
       });
       setSelectedMember(response.member);
       setLedger(await fetchMemberLedger(selectedMember.member_id));
@@ -84,6 +184,25 @@ export function MembersManager() {
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not process purchase.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handlePinReset(formData: FormData) {
+    if (!selectedMember) {
+      return;
+    }
+
+    const pin = String(formData.get("memberPin") ?? "").trim();
+    setIsSaving(true);
+    try {
+      const updated = await resetMemberPin(selectedMember.member_id, pin || null);
+      setSelectedMember(updated);
+      await refresh();
+      setMessage(pin ? "Member PIN updated." : "Member PIN removed.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not update member PIN.");
     } finally {
       setIsSaving(false);
     }
@@ -107,7 +226,7 @@ export function MembersManager() {
       <div className={styles.topBar}>
         <div className={styles.brandBlock}>
           <h1>Members</h1>
-          <p>Reusable digital time balances and membership purchase history.</p>
+          <p>Member play balances, purchases, and activity history.</p>
         </div>
       </div>
 
@@ -129,7 +248,9 @@ export function MembersManager() {
               value={query}
             />
           </label>
-          <button className={styles.secondaryButton} type="submit">Search</button>
+          <button className={styles.secondaryButton} type="submit">
+            Search
+          </button>
         </form>
         <form
           className={styles.optionGrid}
@@ -158,7 +279,7 @@ export function MembersManager() {
       </section>
 
       <section className={styles.pcGrid}>
-        {members.length === 0 ? <div className={styles.emptyState}>No members found.</div> : null}
+        {members.length === 0 ? <div className={styles.emptyState}>No members yet.</div> : null}
         {members.map((member) => (
           <article className={styles.pcCard} key={member.member_id}>
             <div className={styles.pcHeader}>
@@ -166,18 +287,26 @@ export function MembersManager() {
                 <div className={styles.pcName}>{member.member_code}</div>
                 <p>{member.full_name}</p>
               </div>
-              <span className={`${styles.statusPill} ${member.status === "active" ? styles.badgeOnline : styles.badgeOffline}`}>
+              <span
+                className={`${styles.statusPill} ${
+                  member.status === "active" ? styles.badgeOnline : styles.badgeOffline
+                }`}
+              >
                 {member.status}
               </span>
             </div>
             <dl className={styles.detailList}>
               <div className={styles.detailRow}>
                 <span>Balance</span>
-                <strong>{formatRateDuration(member.time_balance_seconds)}</strong>
+                <strong>{formatNaturalDuration(member.time_balance_seconds)}</strong>
               </div>
               <div className={styles.detailRow}>
                 <span>Phone</span>
                 <strong>{member.phone_number ?? "None"}</strong>
+              </div>
+              <div className={styles.detailRow}>
+                <span>PIN</span>
+                <strong>{member.has_pin ? "Enabled" : "Not set"}</strong>
               </div>
               <div className={styles.detailRow}>
                 <span>Joined</span>
@@ -185,10 +314,19 @@ export function MembersManager() {
               </div>
             </dl>
             <div className={styles.actions}>
-              <button className={styles.secondaryButton} onClick={() => void handleSelect(member)} type="button">
-                View Ledger
+              <button
+                className={styles.secondaryButton}
+                onClick={() => void handleSelect(member)}
+                type="button"
+              >
+                View Activity
               </button>
-              <button className={styles.dangerButton} disabled={isSaving} onClick={() => void toggleStatus(member)} type="button">
+              <button
+                className={styles.dangerButton}
+                disabled={isSaving}
+                onClick={() => void toggleStatus(member)}
+                type="button"
+              >
                 {member.status === "active" ? "Disable" : "Enable"}
               </button>
             </div>
@@ -198,11 +336,18 @@ export function MembersManager() {
 
       {selectedMember ? (
         <div className={styles.overlay} role="presentation">
-          <section className={styles.dialog} role="dialog" aria-label="Member detail" aria-modal="true">
-            <h2>{selectedMember.member_code} - {selectedMember.full_name}</h2>
+          <section
+            className={styles.dialog}
+            role="dialog"
+            aria-label="Member detail"
+            aria-modal="true"
+          >
+            <h2>
+              {selectedMember.member_code} - {selectedMember.full_name}
+            </h2>
             <div className={styles.paymentSummary}>
               <span>Current balance</span>
-              <strong>{formatRateDuration(selectedMember.time_balance_seconds)}</strong>
+              <strong>{formatNaturalDuration(selectedMember.time_balance_seconds)}</strong>
             </div>
             <form
               className={styles.paymentBox}
@@ -211,16 +356,38 @@ export function MembersManager() {
                 void handlePurchase(new FormData(event.currentTarget));
               }}
             >
-              <label className={styles.field}>
-                Product
-                <select name="productId">
-                  {activeProducts.map((product) => (
-                    <option key={product.product_id} value={product.product_id}>
-                      {product.name} - {formatRateDuration(product.time_seconds)} - {formatMoney(product.price)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className={styles.optionGrid}>
+                {activeProducts.map((product) => (
+                  <button
+                    className={`${styles.rateOption} ${
+                      selectedProduct?.product_id === product.product_id
+                        ? styles.rateOptionSelected
+                        : ""
+                    }`}
+                    key={product.product_id}
+                    onClick={() => setSelectedProductId(product.product_id)}
+                    type="button"
+                  >
+                    <span className={styles.rateTitle}>{product.name}</span>
+                    <span className={styles.rateDuration}>
+                      Adds {formatNaturalDuration(product.time_seconds)}
+                    </span>
+                    <span className={styles.ratePrice}>{formatMoney(product.price)}</span>
+                  </button>
+                ))}
+              </div>
+              {selectedProduct ? (
+                <div className={styles.amountPreview}>
+                  <span>Balance preview</span>
+                  <strong>
+                    {formatNaturalDuration(selectedMember.time_balance_seconds)} +{" "}
+                    {formatNaturalDuration(selectedProduct.time_seconds)} ={" "}
+                    {formatNaturalDuration(
+                      selectedMember.time_balance_seconds + selectedProduct.time_seconds
+                    )}
+                  </strong>
+                </div>
+              ) : null}
               <label className={styles.field}>
                 Payment method
                 <select name="paymentMethod">
@@ -238,19 +405,79 @@ export function MembersManager() {
                 Add Member Time
               </button>
             </form>
-            <div className={styles.detailList}>
-              {ledger.map((transaction) => (
-                <div className={styles.detailRow} key={transaction.transaction_id}>
-                  <span>{transaction.transaction_type}</span>
+
+            {canManagePins ? (
+              <form
+                className={styles.paymentBox}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handlePinReset(new FormData(event.currentTarget));
+                  event.currentTarget.reset();
+                }}
+              >
+                <div className={styles.amountPreview}>
+                  <span>Member PIN</span>
                   <strong>
-                    {formatRateDuration(Math.abs(transaction.seconds_delta))} →{" "}
-                    {formatRateDuration(transaction.balance_after_seconds)}
+                    {selectedMember.has_pin
+                      ? "PIN enabled. Enter a new PIN to reset it, or leave blank to remove it."
+                      : "Optional 4-6 digit PIN. Required only when this member starts play."}
+                  </strong>
+                </div>
+                <label className={styles.field}>
+                  New PIN
+                  <input
+                    inputMode="numeric"
+                    maxLength={6}
+                    minLength={4}
+                    name="memberPin"
+                    placeholder="4-6 digits, blank removes"
+                    type="password"
+                  />
+                </label>
+                <button className={styles.secondaryButton} disabled={isSaving} type="submit">
+                  {selectedMember.has_pin ? "Reset PIN" : "Set PIN"}
+                </button>
+              </form>
+            ) : null}
+
+            <div className={styles.sectionHeader}>
+              <div>
+                <h2>Activity</h2>
+                <p className={styles.panelText}>Purchases and actual play time deducted.</p>
+              </div>
+              {currentUser?.role === "admin" || currentUser?.role === "owner" ? (
+                <button
+                  className={styles.secondaryButton}
+                  onClick={() => setShowAdvancedActivity((value) => !value)}
+                  type="button"
+                >
+                  {showAdvancedActivity ? "Hide Technical" : "Show Technical"}
+                </button>
+              ) : null}
+            </div>
+            <div className={styles.detailList}>
+              {visibleLedger.length === 0 ? (
+                <div className={styles.emptyState}>No member activity yet.</div>
+              ) : null}
+              {visibleLedger.map(({ transaction, activity }) => (
+                <div className={styles.detailRow} key={transaction.transaction_id}>
+                  <span>
+                    {activity.title}
+                    <small>{formatDateTime(transaction.created_at)}</small>
+                  </span>
+                  <strong>
+                    {activity.amount ? `${formatMoney(activity.amount)} - ` : ""}
+                    {activity.detail}
                   </strong>
                 </div>
               ))}
             </div>
             <div className={styles.dialogActions}>
-              <button className={styles.secondaryButton} onClick={() => setSelectedMember(null)} type="button">
+              <button
+                className={styles.secondaryButton}
+                onClick={() => setSelectedMember(null)}
+                type="button"
+              >
                 Close
               </button>
             </div>

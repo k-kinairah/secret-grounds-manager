@@ -3,7 +3,7 @@ import styles from "@/app/page.module.css";
 import { fetchMembers } from "@/lib/api";
 import { calculateCashChange } from "@/lib/paymentSelection";
 import { calculatePreviewSeconds } from "@/lib/sessionSelection";
-import { formatMoney, formatRateDuration, minutesToSeconds } from "@/lib/time";
+import { formatMoney, formatNaturalDuration, formatRateDuration, minutesToSeconds } from "@/lib/time";
 import type { MemberRecord, MemberSessionSelection, PaymentMethod, PcSummary, PrepaidSessionSelection, RateProfile } from "@/lib/types";
 
 type DialogMode = "start" | "add";
@@ -44,6 +44,7 @@ export function SessionDialog({
   const [members, setMembers] = useState<MemberRecord[]>([]);
   const [memberQuery, setMemberQuery] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [memberPin, setMemberPin] = useState("");
   const [useMemberCap, setUseMemberCap] = useState(false);
   const [memberMinutes, setMemberMinutes] = useState("60");
   const title = mode === "start" ? `Start ${pc.pc_name}` : `Add time to ${pc.pc_name}`;
@@ -114,6 +115,7 @@ export function SessionDialog({
     if (activeTab === "member") {
       if (
         !selectedMember ||
+        (selectedMember.has_pin && (memberPin.length < 4 || memberPin.length > 6)) ||
         (useMemberCap && memberDurationSeconds <= 0) ||
         memberBalanceAfter === null ||
         memberBalanceAfter < 0
@@ -123,7 +125,8 @@ export function SessionDialog({
       onConfirm({
         sessionMode: "member_balance",
         memberId: selectedMember.member_id,
-        durationSeconds: useMemberCap ? memberDurationSeconds : undefined
+        durationSeconds: useMemberCap ? memberDurationSeconds : undefined,
+        memberPin: selectedMember.has_pin ? memberPin : undefined
       });
       return;
     }
@@ -220,11 +223,25 @@ export function SessionDialog({
               >
                 {members.map((member) => (
                   <option key={member.member_id} value={member.member_id}>
-                    {member.member_code} - {member.full_name} ({formatRateDuration(member.time_balance_seconds)})
+                    {member.member_code} - {member.full_name} ({formatNaturalDuration(member.time_balance_seconds)})
                   </option>
                 ))}
               </select>
             </label>
+            {selectedMember?.has_pin ? (
+              <label className={styles.field}>
+                Member PIN
+                <input
+                  inputMode="numeric"
+                  maxLength={6}
+                  minLength={4}
+                  onChange={(event) => setMemberPin(event.target.value)}
+                  placeholder="4-6 digits"
+                  type="password"
+                  value={memberPin}
+                />
+              </label>
+            ) : null}
             <div className={styles.amountPreview}>
               <span>Member Open Time</span>
               <strong>Only the time actually used will be deducted.</strong>
@@ -267,14 +284,14 @@ export function SessionDialog({
               <strong>
                 {selectedMember
                   ? useMemberCap
-                    ? `Current balance: ${formatRateDuration(
+                    ? `Current balance: ${formatNaturalDuration(
                         selectedMember.time_balance_seconds
-                      )}. Maximum session: ${formatRateDuration(memberDurationSeconds)}. ${
+                      )}. Maximum session: ${formatNaturalDuration(memberDurationSeconds)}. ${
                         memberBalanceAfter !== null && memberBalanceAfter >= 0
                           ? "Unused time remains in the account."
                           : "Insufficient balance"
                       }`
-                    : `Current balance: ${formatRateDuration(
+                    : `Current balance: ${formatNaturalDuration(
                         selectedMember.time_balance_seconds
                       )}. Session can continue until ended or balance is exhausted.`
                   : "Select a member"}
