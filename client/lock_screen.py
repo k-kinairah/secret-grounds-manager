@@ -29,10 +29,12 @@ class LockScreenController:
         pc_name: str,
         enable_gui: bool,
         enable_dev_escape: bool,
+        open_setup_wizard: Callable[[], None] | None = None,
     ) -> None:
         self.pc_name = pc_name
         self.enable_gui = enable_gui
         self.enable_dev_escape = enable_dev_escape
+        self.open_setup_wizard = open_setup_wizard
         self.state = LockScreenState()
         self.state_lock = Lock()
         self.stop_event = Event()
@@ -138,6 +140,24 @@ class LockScreenController:
 
         container = tk.Frame(self.root, background="#030712")
         container.pack(expand=True, fill="both")
+
+        if self.open_setup_wizard is not None:
+            menu_button = tk.Menubutton(
+                self.root,
+                text="Client Menu",
+                font=("Segoe UI", 10),
+                foreground="#CBD5E1",
+                background="#111827",
+                activeforeground="#F9FAFB",
+                activebackground="#1F2937",
+                relief="flat",
+                padx=12,
+                pady=6,
+            )
+            menu = tk.Menu(menu_button, tearoff=False)
+            menu.add_command(label="Setup...", command=self.open_setup_wizard)
+            menu_button.configure(menu=menu)
+            menu_button.place(relx=1.0, x=-18, y=18, anchor="ne")
 
         mark = tk.Label(
             container,

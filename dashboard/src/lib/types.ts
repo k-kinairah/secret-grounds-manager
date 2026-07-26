@@ -14,11 +14,27 @@ export type BillingPaymentStatus = "unpaid" | "partially_paid" | "paid" | "overp
 export type SessionMode = "prepaid" | "open_time";
 export type ExtendedSessionMode = SessionMode | "member_balance";
 export type UserRole = "owner" | "admin" | "cashier";
+export type RemoteCommandType =
+  | "shutdown"
+  | "restart"
+  | "sleep"
+  | "show_message"
+  | "show_announcement"
+  | "wake_on_lan";
+export type RemoteCommandStatus =
+  | "pending"
+  | "received"
+  | "completed"
+  | "failed"
+  | "rejected"
+  | "timed_out";
+export type MessageSeverity = "info" | "warning" | "urgent";
 
 export interface PcSummary {
   pc_name: string;
   ip_address: string;
   connection_status: ConnectionStatus;
+  has_command_connection: boolean;
   last_seen: string;
   session_status: DashboardSessionStatus;
   active_session_id: string | null;
@@ -48,6 +64,7 @@ export interface PcSummary {
   member_name_snapshot: string | null;
   member_balance_before_seconds: number | null;
   member_balance_after_seconds: number | null;
+  mac_address: string | null;
 }
 
 export interface SessionRecord {
@@ -118,6 +135,33 @@ export interface DashboardSummary {
   inUse: number;
   available: number;
   offline: number;
+}
+
+export interface RemoteCommandRecord {
+  command_id: string;
+  pc_name: string;
+  command_type: RemoteCommandType;
+  payload_json: string | null;
+  status: RemoteCommandStatus;
+  requested_by_user_id: string | null;
+  requested_by_display_name: string | null;
+  requested_at: string;
+  received_at: string | null;
+  completed_at: string | null;
+  failed_at: string | null;
+  failure_reason: string | null;
+  client_response: string | null;
+  forced: boolean;
+  force_reason: string | null;
+}
+
+export interface RemoteCommandResponse {
+  command: RemoteCommandRecord;
+  acknowledgements: Array<{
+    command_id: string;
+    status: "received" | "completed" | "failed";
+    message: string | null;
+  }>;
 }
 
 export interface RateProfile {

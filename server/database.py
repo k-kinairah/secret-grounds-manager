@@ -649,6 +649,54 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS pc_metadata (
+                pc_name TEXT PRIMARY KEY,
+                mac_address TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS remote_commands (
+                command_id TEXT PRIMARY KEY,
+                pc_name TEXT NOT NULL,
+                command_type TEXT NOT NULL CHECK (
+                    command_type IN (
+                        'shutdown',
+                        'restart',
+                        'sleep',
+                        'show_message',
+                        'show_announcement',
+                        'wake_on_lan'
+                    )
+                ),
+                payload_json TEXT,
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'pending',
+                        'received',
+                        'completed',
+                        'failed',
+                        'rejected',
+                        'timed_out'
+                    )
+                ),
+                requested_by_user_id TEXT,
+                requested_at TEXT NOT NULL,
+                received_at TEXT,
+                completed_at TEXT,
+                failed_at TEXT,
+                failure_reason TEXT,
+                client_response TEXT,
+                forced INTEGER NOT NULL DEFAULT 0,
+                force_reason TEXT,
+                FOREIGN KEY (requested_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
                 pc_name TEXT NOT NULL,
@@ -984,6 +1032,18 @@ def initialize_database() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_membership_products_active_sort
             ON membership_products (is_active, sort_order)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_remote_commands_requested_at
+            ON remote_commands (requested_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_remote_commands_pc
+            ON remote_commands (pc_name, requested_at)
             """
         )
         connection.execute(

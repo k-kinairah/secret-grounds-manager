@@ -2,23 +2,27 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock, Thread
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote
 
 import requests
 
 from client.config import (
+    ClientConfig,
+    ClientConfigError,
     ENABLE_DEV_ESCAPE,
     ENABLE_LOCK_SCREEN,
     HEARTBEAT_INTERVAL_SECONDS,
-    PC_NAME,
     REQUEST_TIMEOUT_SECONDS,
     SESSION_RECOVERY_PATH,
-    SERVER_URL,
+    get_client_config_path,
+    load_client_config,
 )
 from client.lock_screen import LockScreenController
+from client.remote_controls import RemoteControlHandler
 from client.session_recovery import SessionRecoveryStore
-from client.utils import get_local_ip
+from client.setup_wizard import show_setup_wizard
+from client.utils import get_local_ip, get_local_mac_address
 from client.websocket_transport import SimpleWebSocketClient
 
 
@@ -45,6 +49,7 @@ class SecretGroundsClient:
         recovery_store: SessionRecoveryStore | None = None,
         enable_lock_screen: bool = ENABLE_LOCK_SCREEN,
         enable_dev_escape: bool = ENABLE_DEV_ESCAPE,
+        open_setup_wizard: Callable[[], None] | None = None,
     ) -> None:
         self.server_url = server_url.rstrip("/")
         self.pc_name = pc_name
@@ -55,24 +60,29 @@ class SecretGroundsClient:
         self.active_session: LocalSession | None = None
         self.active_session_lock = Lock()
         self.processed_command_ids: set[str] = set()
+        self.remote_controls = RemoteControlHandler(pc_name)
         self.websocket_lock = Lock()
         self.current_websocket: SimpleWebSocketClient | None = None
         self.lock_screen = lock_screen or LockScreenController(
             pc_name=pc_name,
             enable_gui=enable_lock_screen,
             enable_dev_escape=enable_dev_escape,
+            open_setup_wizard=open_setup_wizard,
         )
         self.recovery_store = recovery_store or SessionRecoveryStore(
             SESSION_RECOVERY_PATH
         )
         self.lock_screen.start()
 
-    def build_payload(self) -> dict[str, str]:
+    def build_payload(self, include_mac: bool = False) -> dict[str, str | None]:
         # Keep payload creation centralized so future client metadata is easy to add.
-        return {
+        payload: dict[str, str | None] = {
             "pc_name": self.pc_name,
             "ip_address": get_local_ip(),
         }
+        if include_mac:
+            payload["mac_address"] = get_local_mac_address()
+        return payload
 
     def post(self, path: str) -> requests.Response:
         return self.session.post(
@@ -83,7 +93,11 @@ class SecretGroundsClient:
 
     def register_once(self) -> bool:
         try:
-            response = self.post("/register")
+            response = self.session.post(
+                f"{self.server_url}/register",
+                json=self.build_payload(include_mac=True),
+                timeout=self.request_timeout,
+            )
             response.raise_for_status()
             print("Connected to Secret Grounds Server!")
             print(response.json())
@@ -216,11 +230,46 @@ class SecretGroundsClient:
         if command_type == "end_session":
             return self.end_local_session(command)
 
+        if command_type in {"shutdown", "restart", "sleep"}:
+            return self.handle_remote_power_command(command)
+
+        if command_type in {"show_message", "show_announcement"}:
+            return self.handle_remote_message_command(command)
+
         return self.build_acknowledgement(
             command_id=command_id,
             status="failed",
             message=f"Unsupported command type: {command_type}",
         )
+
+    def handle_remote_power_command(self, command: dict[str, Any]) -> dict[str, str | None]:
+        command_id = str(command.get("command_id", ""))
+        command_type = str(command.get("type", ""))
+        payload = command.get("payload")
+        if not isinstance(payload, dict):
+            return self.build_acknowledgement(command_id, "failed", "invalid_payload")
+        try:
+            message = self.remote_controls.handle_power_command(command_type, payload)
+            return self.build_acknowledgement(command_id, "completed", message)
+        except Exception as error:
+            print(f"Remote {command_type} rejected: {error}")
+            return self.build_acknowledgement(command_id, "failed", str(error))
+
+    def handle_remote_message_command(self, command: dict[str, Any]) -> dict[str, str | None]:
+        command_id = str(command.get("command_id", ""))
+        command_type = str(command.get("type", ""))
+        payload = command.get("payload")
+        if not isinstance(payload, dict):
+            return self.build_acknowledgement(command_id, "failed", "invalid_payload")
+        try:
+            message = self.remote_controls.show_message(
+                payload,
+                announcement=command_type == "show_announcement",
+            )
+            return self.build_acknowledgement(command_id, "completed", message)
+        except Exception as error:
+            print(f"Remote message rejected: {error}")
+            return self.build_acknowledgement(command_id, "failed", str(error))
 
     def initialize_local_session(
         self,
@@ -229,9 +278,47 @@ class SecretGroundsClient:
         scheduled_end_at: str,
         session_mode: str = "prepaid",
     ) -> bool:
+        old_stop_event: Event | None = None
         with self.active_session_lock:
+            local_session_id = (
+                self.active_session.session_id
+                if self.active_session is not None
+                else None
+            )
+            print(
+                "Initializing local session: "
+                f"server_session_id={session_id}, local_session_id={local_session_id}, "
+                f"session_mode={session_mode}"
+            )
             if self.active_session is not None:
-                return False
+                if self.active_session.session_id == session_id:
+                    self.recovery_store.save(
+                        session_id=session_id,
+                        pc_name=self.pc_name,
+                        scheduled_end_at=scheduled_end_at
+                        or datetime.now(timezone.utc).isoformat(),
+                        state="active",
+                        session_mode=session_mode,
+                    )
+                    try:
+                        self.lock_screen.hide_for_session()
+                    except Exception as error:
+                        print(
+                            "Lock screen hide failed for already-active "
+                            f"session_id={session_id}: {error}"
+                        )
+                        return False
+                    print(
+                        "Local session already active; refreshed persisted state "
+                        f"and hid lock screen for session_id={session_id}."
+                    )
+                    print(f"Local session {session_id} is already active.")
+                    return True
+                old_stop_event = self.active_session.stop_event
+                print(
+                    "Replacing stale local session "
+                    f"{self.active_session.session_id} with server session {session_id}."
+                )
 
             stop_event = Event()
             deadline_monotonic = time.monotonic() + (duration_seconds or 0)
@@ -252,14 +339,26 @@ class SecretGroundsClient:
                 timer_thread=timer_thread,
                 session_mode=session_mode,
             )
-            self.lock_screen.hide_for_session()
-            if session_mode != "open_time":
-                self.recovery_store.save(
-                    session_id=session_id,
-                    pc_name=self.pc_name,
-                    scheduled_end_at=scheduled_end_at,
-                    state="active",
-                )
+            self.recovery_store.save(
+                session_id=session_id,
+                pc_name=self.pc_name,
+                scheduled_end_at=scheduled_end_at
+                or datetime.now(timezone.utc).isoformat(),
+                state="active",
+                session_mode=session_mode,
+            )
+            print(f"Local session persisted: session_id={session_id}, state=active.")
+            if old_stop_event is not None:
+                old_stop_event.set()
+            try:
+                self.lock_screen.hide_for_session()
+                print(f"Lock screen hidden for session_id={session_id}.")
+            except Exception as error:
+                self.active_session.stop_event.set()
+                self.active_session = None
+                self.recovery_store.clear()
+                print(f"Lock screen hide failed for session_id={session_id}: {error}")
+                return False
             print(f"Session {session_id} unlocked.")
             if timer_thread is not None:
                 timer_thread.start()
@@ -281,6 +380,11 @@ class SecretGroundsClient:
         session_mode = payload.get("session_mode", "prepaid")
         duration_seconds = payload.get("duration_seconds")
         scheduled_end_at = payload.get("scheduled_end_at")
+        print(
+            "start_session received: "
+            f"server_session_id={session_id}, session_mode={session_mode}, "
+            f"duration_seconds={duration_seconds}, scheduled_end_at={scheduled_end_at}"
+        )
 
         if session_mode == "open_time":
             if not isinstance(session_id, str):
@@ -288,7 +392,7 @@ class SecretGroundsClient:
             initialized = self.initialize_local_session(
                 session_id=session_id,
                 duration_seconds=None,
-                scheduled_end_at="",
+                scheduled_end_at=str(payload.get("started_at") or ""),
                 session_mode="open_time",
             )
             if not initialized:
@@ -393,6 +497,32 @@ class SecretGroundsClient:
         session_id = payload.get("session_id")
 
         with self.active_session_lock:
+            local_session_id = (
+                self.active_session.session_id
+                if self.active_session is not None
+                else None
+            )
+        print(
+            "end_session received: "
+            f"server_session_id={session_id}, local_session_id={local_session_id}"
+        )
+
+        should_reconcile = False
+        with self.active_session_lock:
+            if (
+                self.active_session is None
+                or self.active_session.session_id != session_id
+            ):
+                should_reconcile = True
+
+        if should_reconcile and isinstance(session_id, str):
+            print(
+                "end_session local cache miss; reconciling before rejection: "
+                f"server_session_id={session_id}, local_session_id={local_session_id}"
+            )
+            self.reconcile_session_state()
+
+        with self.active_session_lock:
             if (
                 self.active_session is None
                 or self.active_session.session_id != session_id
@@ -400,7 +530,7 @@ class SecretGroundsClient:
                 if self.active_session is None:
                     print(
                         "Rejecting end_session command: "
-                        f"no local session for target {session_id}."
+                        f"no local session for target {session_id} after reconciliation."
                     )
                     return self.build_acknowledgement(
                         command_id,
@@ -410,7 +540,8 @@ class SecretGroundsClient:
 
                 print(
                     "Rejecting end_session command: local session "
-                    f"{self.active_session.session_id} does not match target {session_id}."
+                    f"{self.active_session.session_id} does not match target "
+                    f"{session_id} after reconciliation."
                 )
                 return self.build_acknowledgement(
                     command_id,
@@ -422,6 +553,7 @@ class SecretGroundsClient:
             self.active_session = None
             self.recovery_store.clear()
             self.lock_screen.show_locked("Session locked after manual end.")
+            print(f"Lock screen shown after end_session for session_id={session_id}.")
 
         print(f"Session {session_id} ended manually.")
         return self.build_acknowledgement(command_id, "completed", "Session ended")
@@ -458,6 +590,7 @@ class SecretGroundsClient:
                     pc_name=self.pc_name,
                     scheduled_end_at=scheduled_end_at
                     or datetime.now(timezone.utc).isoformat(),
+                    session_mode="prepaid",
                 )
                 sent = self.send_client_event(
                     {
@@ -585,10 +718,84 @@ class SecretGroundsClient:
             }
         )
 
+    def clear_local_session_state(self, reason: str) -> None:
+        with self.active_session_lock:
+            if self.active_session is not None:
+                print(
+                    "Clearing local active session: "
+                    f"local_session_id={self.active_session.session_id}, reason={reason}"
+                )
+                self.active_session.stop_event.set()
+                self.active_session = None
+        self.recovery_store.clear()
+
+    def adopt_server_session(
+        self,
+        server_state: dict[str, Any],
+        server_session: dict[str, Any],
+    ) -> bool:
+        session_id = server_session.get("session_id")
+        session_mode = server_session.get("session_mode", "prepaid")
+        scheduled_end_at = server_session.get("scheduled_end_at")
+        server_time = server_state.get("server_time")
+
+        if not isinstance(session_id, str):
+            print("Reconciliation failed: server session is missing session_id.")
+            return False
+
+        session_mode = session_mode if isinstance(session_mode, str) else "prepaid"
+        print(
+            "Reconciliation adopting server session: "
+            f"server_session_id={session_id}, session_mode={session_mode}"
+        )
+
+        if session_mode == "open_time":
+            return self.initialize_local_session(
+                session_id=session_id,
+                duration_seconds=None,
+                scheduled_end_at=str(scheduled_end_at or server_time or ""),
+                session_mode="open_time",
+            )
+
+        if not isinstance(scheduled_end_at, str):
+            print(
+                "Reconciliation failed: countdown server session is missing "
+                f"scheduled_end_at for session_id={session_id}."
+            )
+            return False
+
+        remaining_seconds = self.calculate_remaining_seconds(
+            scheduled_end_at,
+            str(server_time) if server_time is not None else None,
+        )
+        if remaining_seconds <= 0:
+            print(
+                "Reconciliation: authoritative server session has expired locally; "
+                f"session_id={session_id}."
+            )
+            self.lock_screen.show_locked()
+            print(f"Lock screen shown for expired session_id={session_id}.")
+            self.recovery_store.mark_pending_completion(
+                session_id=session_id,
+                pc_name=self.pc_name,
+                scheduled_end_at=scheduled_end_at,
+                session_mode=session_mode,
+            )
+            self.flush_pending_completion()
+            return False
+
+        return self.initialize_local_session(
+            session_id=session_id,
+            duration_seconds=remaining_seconds,
+            scheduled_end_at=scheduled_end_at,
+            session_mode=session_mode,
+        )
+
     def reconcile_session_state(self) -> None:
         recovery_record = self.recovery_store.load()
         server_state = self.get_server_session_state()
         if server_state is None:
+            print("Reconciliation skipped: server state unavailable.")
             return
 
         server_session = server_state.get("session")
@@ -600,6 +807,21 @@ class SecretGroundsClient:
                 if self.active_session is not None
                 else None
             )
+        recovery_session_id = (
+            recovery_record.session_id if recovery_record is not None else None
+        )
+        server_session_id = (
+            server_session.get("session_id")
+            if isinstance(server_session, dict)
+            else None
+        )
+        print(
+            "Reconciliation result input: "
+            f"server_has_active={has_server_active_session}, "
+            f"server_session_id={server_session_id}, "
+            f"local_session_id={active_session_id}, "
+            f"recovery_session_id={recovery_session_id}"
+        )
 
         if (
             active_session_id is not None
@@ -610,84 +832,41 @@ class SecretGroundsClient:
             print(f"Reconciliation kept running local session: {active_session_id}")
             return
 
-        if recovery_record is None and not has_server_active_session:
-            print("Reconciliation: no local or server active session; staying locked.")
-            self.lock_screen.show_locked()
-            return
-
-        if recovery_record is None and has_server_active_session:
-            print("Reconciliation unresolved: server-only active session found.")
-            if isinstance(server_session, dict):
-                self.send_client_event(
-                    {
-                        "event_type": "reconciliation_unresolved",
-                        "session_id": server_session.get("session_id"),
-                        "reason": "server_only_active_session",
-                    }
-                )
-            self.lock_screen.show_locked()
-            return
-
-        if recovery_record is None:
-            return
-
-        if recovery_record.pc_name != self.pc_name:
-            print("Reconciliation mismatch: recovery record belongs to another PC.")
-            self.lock_screen.show_locked()
-            return
-
-        if recovery_record.state == "pending_completion":
-            if has_server_active_session:
-                self.flush_pending_completion()
-            else:
-                print("Reconciliation: pending completion already resolved on server.")
-                self.recovery_store.clear()
-            self.lock_screen.show_locked()
-            return
-
         if not has_server_active_session:
-            print("Reconciliation: clearing stale local recovery record.")
-            self.recovery_store.clear()
+            print("Reconciliation: server has no active session; clearing local state.")
+            self.clear_local_session_state("server_has_no_active_session")
             self.lock_screen.show_locked()
+            print("Lock screen shown after reconciliation found no server session.")
             return
 
         if not isinstance(server_session, dict):
+            print("Reconciliation: server reported active session without details.")
             self.lock_screen.show_locked()
             return
 
-        if server_session.get("session_id") != recovery_record.session_id:
+        if recovery_record is not None and recovery_record.pc_name != self.pc_name:
+            print("Reconciliation mismatch: recovery record belongs to another PC.")
+            self.recovery_store.clear()
+
+        if (
+            recovery_record is not None
+            and recovery_record.session_id != server_session.get("session_id")
+        ):
             print(
-                "Reconciliation mismatch: local session "
+                "Reconciliation replacing stale recovery session "
                 f"{recovery_record.session_id} does not match server session "
                 f"{server_session.get('session_id')}."
             )
-            self.lock_screen.show_locked()
-            return
 
-        remaining_seconds = self.calculate_remaining_seconds(
-            recovery_record.scheduled_end_at,
-            str(server_state.get("server_time")),
-        )
-        if remaining_seconds > 0:
+        if self.adopt_server_session(server_state, server_session):
             print(
-                "Reconciliation: restoring local session "
-                f"{recovery_record.session_id} with {remaining_seconds} seconds."
-            )
-            self.initialize_local_session(
-                session_id=recovery_record.session_id,
-                duration_seconds=remaining_seconds,
-                scheduled_end_at=recovery_record.scheduled_end_at,
+                "Reconciliation adopted active server session: "
+                f"session_id={server_session.get('session_id')}."
             )
             return
 
-        print("Reconciliation: recovered session has expired; staying locked.")
+        print("Reconciliation failed to adopt server session; staying locked.")
         self.lock_screen.show_locked()
-        self.recovery_store.mark_pending_completion(
-            session_id=recovery_record.session_id,
-            pc_name=self.pc_name,
-            scheduled_end_at=recovery_record.scheduled_end_at,
-        )
-        self.flush_pending_completion()
 
     def handle_websocket_offline(self) -> None:
         self.set_current_websocket(None)
@@ -703,14 +882,68 @@ class SecretGroundsClient:
             self.lock_screen.show_locked()
 
 
+def open_setup_wizard_async() -> None:
+    def run_wizard() -> None:
+        try:
+            saved_config = show_setup_wizard(
+                get_client_config_path(),
+                title="Secret Grounds Client Setup",
+                allow_cancel=True,
+            )
+            if saved_config is not None:
+                print(
+                    "Secret Grounds configuration saved. "
+                    "Restart the client to use the new server settings."
+                )
+        except ClientConfigError as error:
+            print(f"Could not open setup wizard: {error}")
+
+    Thread(target=run_wizard, daemon=True).start()
+
+
+def load_runtime_config() -> ClientConfig:
+    config_path = get_client_config_path()
+    if not config_path.exists():
+        print(f"First run detected. Opening setup wizard for {config_path}.")
+        try:
+            runtime_config = show_setup_wizard(
+                config_path,
+                title="Secret Grounds First-Run Setup",
+                allow_cancel=False,
+            )
+        except ClientConfigError as error:
+            print("Secret Grounds client configuration needs attention.")
+            print(f"Config file: {config_path}")
+            print(f"Problem: {error}")
+            raise SystemExit(1) from error
+        if runtime_config is None:
+            raise SystemExit(1)
+        return runtime_config
+
+    try:
+        return load_client_config(config_path)
+    except ClientConfigError as error:
+        print("Secret Grounds client configuration needs attention.")
+        print(f"Config file: {config_path}")
+        print(f"Problem: {error}")
+        raise SystemExit(1) from error
+
+
 def main() -> None:
+    runtime_config = load_runtime_config()
+
+    print(
+        "Secret Grounds client attempting to connect to "
+        f"{runtime_config.server_url} as {runtime_config.pc_name}."
+    )
     client = SecretGroundsClient(
-        server_url=SERVER_URL,
-        pc_name=PC_NAME,
+        server_url=runtime_config.server_url,
+        pc_name=runtime_config.pc_name,
         heartbeat_interval=HEARTBEAT_INTERVAL_SECONDS,
         request_timeout=REQUEST_TIMEOUT_SECONDS,
         enable_lock_screen=ENABLE_LOCK_SCREEN,
         enable_dev_escape=ENABLE_DEV_ESCAPE,
+        open_setup_wizard=open_setup_wizard_async,
     )
 
     try:
@@ -721,9 +954,15 @@ def main() -> None:
 
 
 def register_with_server() -> None:
+    runtime_config = load_runtime_config()
+
+    print(
+        "Secret Grounds client attempting to connect to "
+        f"{runtime_config.server_url} as {runtime_config.pc_name}."
+    )
     client = SecretGroundsClient(
-        server_url=SERVER_URL,
-        pc_name=PC_NAME,
+        server_url=runtime_config.server_url,
+        pc_name=runtime_config.pc_name,
         heartbeat_interval=HEARTBEAT_INTERVAL_SECONDS,
         request_timeout=REQUEST_TIMEOUT_SECONDS,
         enable_lock_screen=ENABLE_LOCK_SCREEN,

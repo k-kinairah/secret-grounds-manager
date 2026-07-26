@@ -158,6 +158,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
         <div className="appShell__links">
           <Link className={pathname === "/" ? "appShell__linkActive" : ""} href="/">Dashboard</Link>
           <Link className={pathname === "/history" ? "appShell__linkActive" : ""} href="/history">History</Link>
+          <Link className={pathname === "/remote-commands" ? "appShell__linkActive" : ""} href="/remote-commands">Commands</Link>
           <Link className={pathname === "/members" ? "appShell__linkActive" : ""} href="/members">Members</Link>
           <Link className={pathname === "/shifts" ? "appShell__linkActive" : ""} href="/shifts">Shifts</Link>
           {canAccess(user, "admin") ? <Link className={pathname === "/rates" ? "appShell__linkActive" : ""} href="/rates">Rates</Link> : null}

@@ -15,6 +15,8 @@ import {
   recordPayment,
   resetMemberPin,
   resetUserPassword,
+  sendPcMessage,
+  sendPowerCommand,
   startMemberSession,
   startSession,
   toCashierMessage,
@@ -45,6 +47,7 @@ function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
     pc_name: "PC-01",
     ip_address: "127.0.0.1",
     connection_status: "online",
+    has_command_connection: true,
     last_seen: "2026-07-23T00:00:00+00:00",
     session_status: "idle",
     active_session_id: null,
@@ -74,6 +77,7 @@ function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
     member_name_snapshot: null,
     member_balance_before_seconds: null,
     member_balance_after_seconds: null,
+    mac_address: null,
     ...overrides
   };
 }
@@ -323,6 +327,13 @@ async function runAsyncAssertions() {
       memberPin: "1234"
     });
     await startSession("PC-01", { amount: "20.00" });
+    await sendPcMessage("PC-01", {
+      title: "Secret Grounds",
+      message: "Please return to the cashier.",
+      severity: "info",
+      require_acknowledgement: false
+    });
+    await sendPowerCommand("PC-01", "sleep", {});
     await addTime("session-1", { amount: "5.00" });
     await forceEndSession("session-1");
     await recordPayment("session-1", {
@@ -350,6 +361,8 @@ async function runAsyncAssertions() {
         { method: "PATCH", url: "http://127.0.0.1:8000/rates/rate-30/status" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/start-member" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/start" },
+        { method: "POST", url: "http://127.0.0.1:8000/pcs/PC-01/message" },
+        { method: "POST", url: "http://127.0.0.1:8000/pcs/PC-01/power/sleep" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/add-time" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/force-end" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/payments" }
@@ -379,10 +392,17 @@ async function runAsyncAssertions() {
       amount: "20.00"
     });
     assert.deepEqual(fetchCalls[16].body, {
+      title: "Secret Grounds",
+      message: "Please return to the cashier.",
+      severity: "info",
+      require_acknowledgement: false
+    });
+    assert.deepEqual(fetchCalls[17].body, {});
+    assert.deepEqual(fetchCalls[18].body, {
       amount: "5.00"
     });
-    assert.deepEqual(fetchCalls[17].body, null);
-    assert.deepEqual(fetchCalls[18].body, {
+    assert.deepEqual(fetchCalls[19].body, null);
+    assert.deepEqual(fetchCalls[20].body, {
       payment_method: "cash",
       amount: "20.00",
       cash_received: "50.00"

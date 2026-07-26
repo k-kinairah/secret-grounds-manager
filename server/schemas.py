@@ -20,6 +20,21 @@ def normalize_positive_money(value: Decimal) -> Decimal:
     return normalized_value
 
 
+def normalize_mac_address(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+
+    normalized = cleaned.replace("-", "").replace(":", "").replace(".", "")
+    if len(normalized) != 12 or any(character not in "0123456789abcdefABCDEF" for character in normalized):
+        raise ValueError("MAC address must use a standard 12-digit hexadecimal format")
+
+    return ":".join(normalized[index : index + 2].upper() for index in range(0, 12, 2))
+
+
 RateType = Literal["metered", "package"]
 PaymentMethod = Literal["cash", "gcash", "maya", "other"]
 PaymentStatus = Literal["completed", "voided"]
@@ -40,11 +55,29 @@ MemberTransactionType = Literal[
     "manual_adjustment",
     "expiration_adjustment",
 ]
+RemoteCommandType = Literal[
+    "shutdown",
+    "restart",
+    "sleep",
+    "show_message",
+    "show_announcement",
+    "wake_on_lan",
+]
+RemoteCommandStatus = Literal[
+    "pending",
+    "received",
+    "completed",
+    "failed",
+    "rejected",
+    "timed_out",
+]
+MessageSeverity = Literal["info", "warning", "urgent"]
 
 
 class PCRegistration(BaseModel):
     pc_name: str = Field(..., min_length=1)
     ip_address: str = Field(..., min_length=1)
+    mac_address: str | None = None
 
 
 class PCHeartbeat(BaseModel):
@@ -57,12 +90,14 @@ class PCRecord(BaseModel):
     ip_address: str
     status: str
     last_seen: datetime
+    mac_address: str | None = None
 
 
 class PCDashboardRecord(BaseModel):
     pc_name: str
     ip_address: str
     connection_status: Literal["online", "offline"]
+    has_command_connection: bool = False
     last_seen: datetime
     session_status: Literal["idle", "active", "ending", "settlement_pending", "unknown"]
     active_session_id: str | None = None
@@ -92,6 +127,7 @@ class PCDashboardRecord(BaseModel):
     member_name_snapshot: str | None = None
     member_balance_before_seconds: int | None = None
     member_balance_after_seconds: int | None = None
+    mac_address: str | None = None
 
 
 class PCRegistrationResponse(PCRecord):
@@ -100,7 +136,17 @@ class PCRegistrationResponse(PCRecord):
 
 class ClientCommand(BaseModel):
     command_id: str
-    type: Literal["ping", "start_session", "add_time", "end_session"]
+    type: Literal[
+        "ping",
+        "start_session",
+        "add_time",
+        "end_session",
+        "shutdown",
+        "restart",
+        "sleep",
+        "show_message",
+        "show_announcement",
+    ]
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
 
@@ -118,6 +164,75 @@ class TestCommandRequest(BaseModel):
 class TestCommandResponse(BaseModel):
     command: ClientCommand
     acknowledgements: list[CommandAcknowledgement]
+
+
+class PCMacAddressUpdate(BaseModel):
+    mac_address: str | None = None
+
+    @field_validator("mac_address")
+    @classmethod
+    def validate_mac_address(cls, value: str | None) -> str | None:
+        return normalize_mac_address(value)
+
+
+class RemoteCommandRecord(BaseModel):
+    command_id: str
+    pc_name: str
+    command_type: RemoteCommandType
+    payload_json: str | None = None
+    status: RemoteCommandStatus
+    requested_by_user_id: str | None = None
+    requested_by_display_name: str | None = None
+    requested_at: datetime
+    received_at: datetime | None = None
+    completed_at: datetime | None = None
+    failed_at: datetime | None = None
+    failure_reason: str | None = None
+    client_response: str | None = None
+    forced: bool = False
+    force_reason: str | None = None
+
+
+class RemoteCommandResponse(BaseModel):
+    command: RemoteCommandRecord
+    acknowledgements: list[CommandAcknowledgement] = Field(default_factory=list)
+
+
+class PowerCommandRequest(BaseModel):
+    force: bool = False
+    reason: str | None = None
+    confirm: bool = False
+
+
+class MessageCommandRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=80)
+    message: str = Field(..., min_length=1, max_length=500)
+    severity: MessageSeverity = "info"
+    duration_seconds: int | None = Field(default=None, ge=5, le=3600)
+    require_acknowledgement: bool = False
+
+    @field_validator("title", "message")
+    @classmethod
+    def clean_message_text(cls, value: str) -> str:
+        cleaned = " ".join(value.replace("\x00", "").split())
+        if not cleaned:
+            raise ValueError("Message text must not be blank")
+        return cleaned
+
+
+class BroadcastCommandRequest(MessageCommandRequest):
+    pc_names: list[str] | None = None
+
+
+class BroadcastCommandResponse(BaseModel):
+    commands: list[RemoteCommandRecord]
+    offline_targets: list[str] = Field(default_factory=list)
+    failed_targets: dict[str, str] = Field(default_factory=dict)
+
+
+class WakeCommandResponse(BaseModel):
+    command: RemoteCommandRecord
+    message: str
 
 
 SessionStatus = Literal[
@@ -289,6 +404,7 @@ class ClientEvent(BaseModel):
 class SessionStateSummary(BaseModel):
     session_id: str
     status: SessionStatus
+    started_at: datetime
     scheduled_end_at: datetime
     total_seconds: int
     session_mode: SessionMode = "prepaid"

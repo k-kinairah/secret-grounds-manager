@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "@/app/page.module.css";
 import {
+  broadcastAnnouncement,
   endSession,
   fetchPcs,
   fetchCurrentUser,
@@ -18,7 +19,7 @@ import {
 } from "@/lib/api";
 import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
 import { calculateOpenTimeEstimate, secondsFromScheduledEnd } from "@/lib/time";
-import type { CurrentUser, PcSummary, RateProfile } from "@/lib/types";
+import type { CurrentUser, MessageSeverity, PcSummary, RateProfile } from "@/lib/types";
 import { DashboardSummary } from "./DashboardSummary";
 import { EndSessionDialog } from "./EndSessionDialog";
 import { PcCard } from "./PcCard";
@@ -33,6 +34,7 @@ type DialogState =
   | { type: "resolve"; pc: PcSummary }
   | { type: "details"; pc: PcSummary }
   | { type: "payment"; pc: PcSummary }
+  | { type: "announcement" }
   | null;
 
 export function DashboardClient() {
@@ -258,6 +260,9 @@ export function DashboardClient() {
           >
             Server {isConnected ? "Connected" : "Disconnected"}
           </div>
+          <button className={styles.secondaryButton} onClick={() => setDialog({ type: "announcement" })} type="button">
+            Announcement
+          </button>
         </div>
       </header>
 
@@ -370,7 +375,12 @@ export function DashboardClient() {
       ) : null}
 
       {dialog?.type === "details" ? (
-        <PcDetailsPanel pc={findCurrentPc(dialog.pc)} onClose={() => setDialog(null)} />
+        <PcDetailsPanel
+          currentUserRole={currentUser?.role ?? null}
+          onActionComplete={() => void refresh()}
+          pc={findCurrentPc(dialog.pc)}
+          onClose={() => setDialog(null)}
+        />
       ) : null}
 
       {dialog?.type === "payment" ? (
@@ -397,6 +407,98 @@ export function DashboardClient() {
           pc={findCurrentPc(dialog.pc)}
         />
       ) : null}
+
+      {dialog?.type === "announcement" ? (
+        <AnnouncementDialog
+          isLoading={isMutating}
+          onCancel={() => setDialog(null)}
+          onConfirm={(input) =>
+            void runAction(
+              () => broadcastAnnouncement(input),
+              "Announcement sent."
+            )
+          }
+        />
+      ) : null}
     </main>
+  );
+}
+
+function AnnouncementDialog({
+  isLoading,
+  onCancel,
+  onConfirm
+}: {
+  isLoading: boolean;
+  onCancel: () => void;
+  onConfirm: (input: {
+    title: string;
+    message: string;
+    severity: MessageSeverity;
+    duration_seconds?: number;
+    require_acknowledgement: boolean;
+  }) => void;
+}) {
+  const [title, setTitle] = useState("Secret Grounds");
+  const [message, setMessage] = useState("");
+  const [severity, setSeverity] = useState<MessageSeverity>("info");
+  const [duration, setDuration] = useState("30");
+
+  return (
+    <div className={styles.overlay} role="presentation">
+      <section className={styles.dialog} role="dialog" aria-modal="true" aria-label="Broadcast announcement">
+        <h2>Broadcast Announcement</h2>
+        <div className={styles.amountPreview}>
+          <span>Targets</span>
+          <strong>All online PCs with active command connections.</strong>
+        </div>
+        <label className={styles.field}>
+          Title
+          <input maxLength={80} onChange={(event) => setTitle(event.target.value)} value={title} />
+        </label>
+        <label className={styles.field}>
+          Message
+          <input
+            maxLength={500}
+            onChange={(event) => setMessage(event.target.value)}
+            placeholder="Please save your work. The shop is closing soon."
+            value={message}
+          />
+        </label>
+        <label className={styles.field}>
+          Severity
+          <select onChange={(event) => setSeverity(event.target.value as MessageSeverity)} value={severity}>
+            <option value="info">Info</option>
+            <option value="warning">Warning</option>
+            <option value="urgent">Urgent</option>
+          </select>
+        </label>
+        <label className={styles.field}>
+          Display seconds
+          <input inputMode="numeric" onChange={(event) => setDuration(event.target.value)} value={duration} />
+        </label>
+        <div className={styles.dialogActions}>
+          <button className={styles.secondaryButton} disabled={isLoading} onClick={onCancel} type="button">
+            Cancel
+          </button>
+          <button
+            className={styles.primaryButton}
+            disabled={isLoading || !message.trim()}
+            onClick={() =>
+              onConfirm({
+                title,
+                message,
+                severity,
+                duration_seconds: Number(duration) || undefined,
+                require_acknowledgement: severity === "urgent"
+              })
+            }
+            type="button"
+          >
+            {isLoading ? "Sending..." : "Send Announcement"}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }

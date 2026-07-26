@@ -53,6 +53,7 @@ def create_client(temp_directory: str) -> SecretGroundsClient:
 def server_state(
     session_id: str | None,
     scheduled_end_at: str | None = None,
+    session_mode: str = "prepaid",
 ) -> dict[str, object]:
     return {
         "pc_name": "PC-RECOVERY",
@@ -61,8 +62,10 @@ def server_state(
             {
                 "session_id": session_id,
                 "status": "active",
+                "started_at": datetime.now(timezone.utc).isoformat(),
                 "scheduled_end_at": scheduled_end_at or iso_in(60),
                 "total_seconds": 60,
+                "session_mode": session_mode,
             }
             if session_id is not None
             else None
@@ -139,32 +142,127 @@ def test_stale_local_record_cleared(temp_directory: str) -> None:
     client.stop()
 
 
-def test_server_only_session_stays_locked(temp_directory: str) -> None:
+def test_server_only_session_is_adopted(temp_directory: str) -> None:
     client = create_client(temp_directory)
     websocket = CapturingWebSocket()
     client.set_current_websocket(websocket)
     client.get_server_session_state = lambda: server_state("server-only", iso_in(60))
     client.reconcile_session_state()
-    assert client.lock_screen.is_locked()
-    assert client.active_session is None
-    assert websocket.sent_messages[-1] == {
-        "event_type": "reconciliation_unresolved",
-        "session_id": "server-only",
-        "reason": "server_only_active_session",
-    }
+    assert not client.lock_screen.is_locked()
+    assert client.active_session is not None
+    assert client.active_session.session_id == "server-only"
+    assert websocket.sent_messages == []
     acknowledgement = client.end_local_session(end_command("server-only"))
-    assert acknowledgement["status"] == "failed"
-    assert acknowledgement["message"] == "no_matching_local_session"
+    assert acknowledgement["status"] == "completed"
+    assert client.lock_screen.is_locked()
     client.stop()
 
 
-def test_mismatched_session_ids_stay_locked(temp_directory: str) -> None:
+def test_mismatched_session_ids_adopt_server_session(temp_directory: str) -> None:
     client = create_client(temp_directory)
     client.recovery_store.save("local-session", "PC-RECOVERY", iso_in(60), "active")
     client.get_server_session_state = lambda: server_state("server-session", iso_in(60))
     client.reconcile_session_state()
+    assert not client.lock_screen.is_locked()
+    assert client.active_session is not None
+    assert client.active_session.session_id == "server-session"
+    loaded = client.recovery_store.load()
+    assert loaded is not None
+    assert loaded.session_id == "server-session"
+    client.stop()
+
+
+def test_end_reconciles_missing_local_cache(temp_directory: str) -> None:
+    client = create_client(temp_directory)
+    client.get_server_session_state = lambda: server_state("server-end", iso_in(60))
+    acknowledgement = client.end_local_session(end_command("server-end"))
+    assert acknowledgement["status"] == "completed"
     assert client.lock_screen.is_locked()
-    assert client.recovery_store.load() is not None
+    assert client.active_session is None
+    client.stop()
+
+
+def test_end_reconciles_stale_local_session_id(temp_directory: str) -> None:
+    client = create_client(temp_directory)
+    websocket = CapturingWebSocket()
+    client.start_local_session(start_command("old-session", 30, iso_in(30)), websocket)
+    client.get_server_session_state = lambda: server_state("new-session", iso_in(60))
+    acknowledgement = client.end_local_session(end_command("new-session"))
+    assert acknowledgement["status"] == "completed"
+    assert client.lock_screen.is_locked()
+    assert client.active_session is None
+    client.stop()
+
+
+def test_start_end_start_end_replaces_old_state(temp_directory: str) -> None:
+    client = create_client(temp_directory)
+    websocket = CapturingWebSocket()
+    first_end_at = iso_in(30)
+    second_end_at = iso_in(30)
+    assert client.start_local_session(
+        start_command("first-session", 30, first_end_at),
+        websocket,
+    )["status"] == "completed"
+    assert client.end_local_session(end_command("first-session"))["status"] == "completed"
+    assert client.start_local_session(
+        start_command("second-session", 30, second_end_at),
+        websocket,
+    )["status"] == "completed"
+    assert not client.lock_screen.is_locked()
+    assert client.active_session is not None
+    assert client.active_session.session_id == "second-session"
+    assert client.end_local_session(end_command("second-session"))["status"] == "completed"
+    assert client.lock_screen.is_locked()
+    client.stop()
+
+
+def test_sleep_wake_reconcile_then_end(temp_directory: str) -> None:
+    client = create_client(temp_directory)
+    websocket = CapturingWebSocket()
+    end_at = iso_in(60)
+    client.start_local_session(start_command("sleep-session", 60, end_at), websocket)
+    client.handle_websocket_offline()
+    assert not client.lock_screen.is_locked()
+    assert client.active_session is not None
+    client.get_server_session_state = lambda: server_state("sleep-session", end_at)
+    client.reconcile_session_state()
+    assert client.active_session is not None
+    assert client.active_session.session_id == "sleep-session"
+    assert client.end_local_session(end_command("sleep-session"))["status"] == "completed"
+    assert client.lock_screen.is_locked()
+    client.stop()
+
+
+def test_open_time_server_session_is_adopted(temp_directory: str) -> None:
+    client = create_client(temp_directory)
+    started_at = datetime.now(timezone.utc).isoformat()
+    client.get_server_session_state = lambda: server_state(
+        "open-time-server",
+        started_at,
+        "open_time",
+    )
+    client.reconcile_session_state()
+    assert not client.lock_screen.is_locked()
+    assert client.active_session is not None
+    assert client.active_session.session_id == "open-time-server"
+    assert client.active_session.session_mode == "open_time"
+    client.end_local_session(end_command("open-time-server"))
+    client.stop()
+
+
+def test_duplicate_command_executes_once(temp_directory: str) -> None:
+    client = create_client(temp_directory)
+    websocket = CapturingWebSocket()
+    command = start_command("duplicate-command-session", 30, iso_in(30))
+    command["command_id"] = "duplicate-start-command"
+    first = client.execute_command(command, websocket)  # type: ignore[arg-type]
+    second = client.execute_command(command, websocket)  # type: ignore[arg-type]
+    assert first["status"] == "completed"
+    assert second["status"] == "completed"
+    assert second["message"] == "Duplicate command ignored"
+    assert client.active_session is not None
+    assert client.active_session.session_id == "duplicate-command-session"
+    client.end_local_session(end_command("duplicate-command-session"))
     client.stop()
 
 
@@ -365,8 +463,14 @@ def main() -> None:
         test_matching_recovery_resumes(temp_directory)
         test_expired_recovery_locks_and_marks_pending(temp_directory)
         test_stale_local_record_cleared(temp_directory)
-        test_server_only_session_stays_locked(temp_directory)
-        test_mismatched_session_ids_stay_locked(temp_directory)
+        test_server_only_session_is_adopted(temp_directory)
+        test_mismatched_session_ids_adopt_server_session(temp_directory)
+        test_end_reconciles_missing_local_cache(temp_directory)
+        test_end_reconciles_stale_local_session_id(temp_directory)
+        test_start_end_start_end_replaces_old_state(temp_directory)
+        test_sleep_wake_reconcile_then_end(temp_directory)
+        test_open_time_server_session_is_adopted(temp_directory)
+        test_duplicate_command_executes_once(temp_directory)
         test_add_time_updates_recovery(temp_directory)
         test_manual_end_clears_recovery(temp_directory)
         test_expiration_offline_creates_pending_completion(temp_directory)

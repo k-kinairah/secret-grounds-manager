@@ -21,6 +21,7 @@ class RecoverableSessionState:
     scheduled_end_at: str
     saved_at: str
     state: RecoveryState
+    session_mode: str = "prepaid"
 
 
 class SessionRecoveryStore:
@@ -44,6 +45,7 @@ class SessionRecoveryStore:
                     scheduled_end_at=str(payload["scheduled_end_at"]),
                     saved_at=str(payload["saved_at"]),
                     state=payload["state"],
+                    session_mode=str(payload.get("session_mode", "prepaid")),
                 )
             except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
                 print(f"Invalid recovery record ignored: {error}")
@@ -55,6 +57,7 @@ class SessionRecoveryStore:
         pc_name: str,
         scheduled_end_at: str,
         state: RecoveryState = "active",
+        session_mode: str = "prepaid",
     ) -> RecoverableSessionState:
         record = RecoverableSessionState(
             session_id=session_id,
@@ -62,6 +65,7 @@ class SessionRecoveryStore:
             scheduled_end_at=scheduled_end_at,
             saved_at=current_utc_iso(),
             state=state,
+            session_mode=session_mode,
         )
         self.save_record(record)
         return record
@@ -84,12 +88,14 @@ class SessionRecoveryStore:
         session_id: str,
         pc_name: str,
         scheduled_end_at: str,
+        session_mode: str = "prepaid",
     ) -> RecoverableSessionState:
         return self.save(
             session_id=session_id,
             pc_name=pc_name,
             scheduled_end_at=scheduled_end_at,
             state="pending_completion",
+            session_mode=session_mode,
         )
 
     def clear(self) -> None:

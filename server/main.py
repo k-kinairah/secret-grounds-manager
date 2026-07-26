@@ -1,5 +1,6 @@
 import asyncio
 import os
+import socket
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 from uuid import uuid4
@@ -18,10 +19,16 @@ from server.schemas import (
     CalculateTimeRequest,
     ClientEvent,
     ClientCommand,
+    CommandAcknowledgement,
+    BroadcastCommandRequest,
+    BroadcastCommandResponse,
     ForceEndSessionResponse,
+    MessageCommandRequest,
+    PCMacAddressUpdate,
     PCHeartbeat,
     PCDashboardRecord,
     PCRecord,
+    PowerCommandRequest,
     PCRegistration,
     PCRegistrationResponse,
     PCSessionStateResponse,
@@ -44,6 +51,9 @@ from server.schemas import (
     PrepaidAddTimeRequest,
     PrepaidStartSessionRequest,
     OpenTimeStartRequest,
+    RemoteCommandRecord,
+    RemoteCommandResponse,
+    RemoteCommandType,
     RateProfile,
     RateProfileCreate,
     RateProfileUpdate,
@@ -56,6 +66,7 @@ from server.schemas import (
     StartSessionRequest,
     TestCommandRequest,
     TestCommandResponse,
+    WakeCommandResponse,
     VoidPaymentRequest,
     UserAdminRecord,
     UserCreateRequest,
@@ -80,6 +91,7 @@ from server.billing_service import BillingService
 from server.member_repository import MemberRepository
 from server.payment_repository import PaymentRepository
 from server.rate_calculator import calculate_metered_time
+from server.remote_command_repository import PCMetadataRepository, RemoteCommandRepository
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
@@ -94,6 +106,8 @@ session_repository = SessionRepository()
 payment_repository = PaymentRepository()
 shift_repository = ShiftRepository()
 member_repository = MemberRepository(payment_repository, shift_repository)
+remote_command_repository = RemoteCommandRepository()
+pc_metadata_repository = PCMetadataRepository()
 billing_service = BillingService(session_repository, payment_repository, shift_repository, user_repository)
 rate_repository = RateRepository()
 session_service = SessionService(
@@ -140,6 +154,7 @@ def touch_pc(pc_name: str, ip_address: str) -> PCRecord:
         ip_address=ip_address,
         status="online",
         last_seen=current_utc_time(),
+        mac_address=pc_metadata_repository.get_mac_address(pc_name),
     )
     pc_registry[pc_name] = registered_pc
     return registered_pc
@@ -158,6 +173,7 @@ def mark_stale_pcs_offline() -> None:
                 ip_address=pc.ip_address,
                 status="offline",
                 last_seen=pc.last_seen,
+                mac_address=pc.mac_address,
             )
 
 
@@ -443,6 +459,8 @@ def reset_user_password(
 @app.post("/register", response_model=PCRegistrationResponse)
 def register_pc(pc: PCRegistration) -> PCRegistrationResponse:
     pc_name, ip_address = clean_pc_payload(pc.pc_name, pc.ip_address)
+    if pc.mac_address:
+        pc_metadata_repository.set_mac_address(pc_name, pc.mac_address)
     registered_pc = touch_pc(pc_name, ip_address)
 
     return PCRegistrationResponse(
@@ -451,6 +469,7 @@ def register_pc(pc: PCRegistration) -> PCRegistrationResponse:
         ip_address=registered_pc.ip_address,
         status=registered_pc.status,
         last_seen=registered_pc.last_seen,
+        mac_address=registered_pc.mac_address,
     )
 
 
@@ -469,9 +488,13 @@ def heartbeat(pc: PCHeartbeat) -> PCRecord:
 
 @app.websocket("/ws/{pc_name}")
 async def client_websocket(websocket: WebSocket, pc_name: str) -> None:
-    cleaned_pc_name = pc_name.strip()
+    cleaned_pc_name = connection_manager.normalize_pc_name(pc_name)
 
     if not cleaned_pc_name or cleaned_pc_name not in pc_registry:
+        print(
+            "Command WebSocket rejected: "
+            f"pc_name={cleaned_pc_name!r}, registered_pc_names={sorted(pc_registry)}"
+        )
         await websocket.close(code=1008)
         return
 
@@ -554,6 +577,7 @@ def get_registered_pcs(
                 pc_name=pc.pc_name,
                 ip_address=pc.ip_address,
                 connection_status=connection_status,
+                has_command_connection=connection_manager.is_connected(pc.pc_name),
                 last_seen=pc.last_seen,
                 session_status=session_status,
                 active_session_id=(
@@ -663,6 +687,7 @@ def get_registered_pcs(
                     if display_session is not None
                     else None
                 ),
+                mac_address=pc.mac_address,
             )
         )
 
@@ -685,6 +710,7 @@ def get_pc_session_state(pc_name: str) -> PCSessionStateResponse:
             SessionStateSummary(
                 session_id=active_session.session_id,
                 status=active_session.status,
+                started_at=active_session.started_at,
                 scheduled_end_at=active_session.scheduled_end_at,
                 total_seconds=active_session.total_seconds,
                 session_mode=active_session.session_mode,
@@ -741,6 +767,298 @@ async def send_test_ping_command(
     return TestCommandResponse(
         command=command,
         acknowledgements=acknowledgements,
+    )
+
+
+POWER_COMMAND_TYPES: set[str] = {"shutdown", "restart", "sleep"}
+EXPECTED_DISCONNECT_COMMANDS: set[str] = {"shutdown", "restart"}
+REMOTE_MESSAGE_COMMAND_TYPES: set[str] = {"show_message", "show_announcement"}
+
+
+def require_remote_command_permission(command_type: str, current_user: object) -> None:
+    role = getattr(current_user, "role", None)
+    if command_type in POWER_COMMAND_TYPES or command_type == "wake_on_lan":
+        if role not in {"owner", "admin"}:
+            raise HTTPException(status_code=403, detail="Only owner/admin can use PC power controls")
+        return
+    if command_type in REMOTE_MESSAGE_COMMAND_TYPES:
+        if role not in {"owner", "admin", "cashier"}:
+            raise HTTPException(status_code=403, detail="You cannot send remote messages")
+        return
+    raise HTTPException(status_code=400, detail="Unsupported remote command type")
+
+
+def get_registered_pc_or_404(pc_name: str) -> PCRecord:
+    cleaned_pc_name = pc_name.strip()
+    pc = pc_registry.get(cleaned_pc_name)
+    if pc is None:
+        raise HTTPException(status_code=404, detail="PC is not registered")
+    return pc
+
+
+def send_wake_on_lan_packet(mac_address: str) -> None:
+    mac_bytes = bytes.fromhex(mac_address.replace(":", ""))
+    packet = b"\xff" * 6 + mac_bytes * 16
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as wol_socket:
+        wol_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        wol_socket.sendto(packet, ("255.255.255.255", 9))
+
+
+async def deliver_remote_command(
+    pc_name: str,
+    command_id: str,
+    command_type: RemoteCommandType,
+    payload: dict[str, object],
+) -> list[CommandAcknowledgement]:
+    command = ClientCommand(
+        command_id=command_id,
+        type=command_type,  # type: ignore[arg-type]
+        payload=payload,
+        created_at=current_utc_time(),
+    )
+    def record_acknowledgement(acknowledgement: CommandAcknowledgement) -> None:
+        if acknowledgement.status == "received":
+            remote_command_repository.mark_received(command_id, acknowledgement.message)
+        elif acknowledgement.status == "completed":
+            remote_command_repository.mark_completed(command_id, acknowledgement.message)
+        elif acknowledgement.status == "failed":
+            remote_command_repository.mark_failed(
+                command_id,
+                "failed",
+                acknowledgement.message or "Client command failed",
+                acknowledgement.message,
+            )
+
+    try:
+        acknowledgements = await asyncio.wait_for(
+            connection_manager.send_command(pc_name, command, record_acknowledgement),
+            timeout=COMMAND_ACK_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        record = remote_command_repository.get(command_id)
+        if command_type in EXPECTED_DISCONNECT_COMMANDS and record is not None and record.received_at is not None:
+            remote_command_repository.mark_completed(command_id, "Expected disconnect after received acknowledgement")
+            return [
+                CommandAcknowledgement(
+                    command_id=command_id,
+                    status="completed",
+                    message="Expected disconnect after received acknowledgement",
+                )
+            ]
+        remote_command_repository.mark_failed(command_id, "timed_out", "Client command timed out")
+        raise HTTPException(status_code=504, detail="The client did not finish the remote command")
+    except Exception as error:
+        remote_command_repository.mark_failed(command_id, "failed", str(error))
+        raise HTTPException(status_code=502, detail=f"Command delivery failed: {error}") from error
+
+    return acknowledgements
+
+
+async def create_and_send_remote_command(
+    pc_name: str,
+    command_type: RemoteCommandType,
+    payload: dict[str, object],
+    current_user: object,
+    forced: bool = False,
+    force_reason: str | None = None,
+) -> RemoteCommandResponse:
+    require_remote_command_permission(command_type, current_user)
+    pc = get_registered_pc_or_404(pc_name)
+
+    if pc.status == "offline":
+        raise HTTPException(status_code=409, detail="This PC is offline")
+    if not connection_manager.is_connected(pc.pc_name):
+        raise HTTPException(status_code=409, detail="This PC has no active command connection")
+
+    command_id = str(uuid4())
+    record = remote_command_repository.create(
+        command_id=command_id,
+        pc_name=pc.pc_name,
+        command_type=command_type,
+        payload=payload,
+        requested_by_user_id=get_actor_user_id(current_user),
+        forced=forced,
+        force_reason=force_reason,
+    )
+    acknowledgements = await deliver_remote_command(pc.pc_name, command_id, command_type, payload)
+    updated = remote_command_repository.get(command_id) or record
+    return RemoteCommandResponse(command=updated, acknowledgements=acknowledgements)
+
+
+@app.put("/pcs/{pc_name}/mac", response_model=PCRecord)
+def update_pc_mac_address(
+    pc_name: str,
+    request: PCMacAddressUpdate,
+    _: object = Depends(require_role("admin")),
+) -> PCRecord:
+    pc = get_registered_pc_or_404(pc_name)
+    mac_address = pc_metadata_repository.set_mac_address(pc.pc_name, request.mac_address)
+    updated = pc.model_copy(update={"mac_address": mac_address})
+    pc_registry[pc.pc_name] = updated
+    return updated
+
+
+@app.post("/pcs/{pc_name}/message", response_model=RemoteCommandResponse)
+async def send_pc_message(
+    pc_name: str,
+    request: MessageCommandRequest,
+    current_user: object = Depends(require_role("cashier")),
+) -> RemoteCommandResponse:
+    return await create_and_send_remote_command(
+        pc_name,
+        "show_message",
+        request.model_dump(mode="json"),
+        current_user,
+    )
+
+
+@app.post("/pcs/{pc_name}/power/{command_type}", response_model=RemoteCommandResponse)
+async def send_power_command(
+    pc_name: str,
+    command_type: str,
+    request: PowerCommandRequest,
+    current_user: object = Depends(require_role("admin")),
+) -> RemoteCommandResponse:
+    if command_type not in POWER_COMMAND_TYPES:
+        raise HTTPException(status_code=404, detail="Unsupported power command")
+
+    pc = get_registered_pc_or_404(pc_name)
+    active_session = session_repository.get_active_session_for_pc(pc.pc_name)
+    if active_session is not None and active_session.status == "active":
+        if not request.force:
+            rejected_id = str(uuid4())
+            remote_command_repository.create(
+                command_id=rejected_id,
+                pc_name=pc.pc_name,
+                command_type=command_type,  # type: ignore[arg-type]
+                payload=request.model_dump(mode="json"),
+                requested_by_user_id=get_actor_user_id(current_user),
+                status="rejected",
+            )
+            remote_command_repository.mark_failed(
+                rejected_id,
+                "rejected",
+                "Active session power command rejected without force confirmation",
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Active sessions require force=true, confirmation, and a reason before power control",
+            )
+        if not request.confirm or not request.reason or not request.reason.strip():
+            rejected_id = str(uuid4())
+            remote_command_repository.create(
+                command_id=rejected_id,
+                pc_name=pc.pc_name,
+                command_type=command_type,  # type: ignore[arg-type]
+                payload=request.model_dump(mode="json"),
+                requested_by_user_id=get_actor_user_id(current_user),
+                forced=request.force,
+                force_reason=request.reason,
+                status="rejected",
+            )
+            remote_command_repository.mark_failed(
+                rejected_id,
+                "rejected",
+                "Forced power command rejected without confirmation reason",
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Forced power commands require confirmation and a reason",
+            )
+        recovery_flags[pc.pc_name] = {
+            "session_id": active_session.session_id,
+            "reason": f"forced_{command_type}",
+        }
+
+    return await create_and_send_remote_command(
+        pc.pc_name,
+        command_type,  # type: ignore[arg-type]
+        {
+            "force": request.force,
+            "reason": request.reason,
+            "confirm": request.confirm,
+        },
+        current_user,
+        forced=request.force,
+        force_reason=request.reason,
+    )
+
+
+@app.post("/pcs/{pc_name}/wake", response_model=WakeCommandResponse)
+def wake_pc(
+    pc_name: str,
+    current_user: object = Depends(require_role("admin")),
+) -> WakeCommandResponse:
+    require_remote_command_permission("wake_on_lan", current_user)
+    pc = get_registered_pc_or_404(pc_name)
+    if not pc.mac_address:
+        raise HTTPException(status_code=409, detail="This PC does not have a saved MAC address")
+
+    command_id = str(uuid4())
+    record = remote_command_repository.create(
+        command_id=command_id,
+        pc_name=pc.pc_name,
+        command_type="wake_on_lan",
+        payload={"mac_address": pc.mac_address},
+        requested_by_user_id=get_actor_user_id(current_user),
+    )
+    try:
+        send_wake_on_lan_packet(pc.mac_address)
+    except OSError as error:
+        remote_command_repository.mark_failed(command_id, "failed", str(error))
+        raise HTTPException(status_code=502, detail=f"Wake signal failed: {error}") from error
+    remote_command_repository.mark_completed(command_id, "Wake-on-LAN packet_sent")
+    return WakeCommandResponse(
+        command=remote_command_repository.get(command_id) or record,
+        message="Wake signal sent. Waiting for PC to come online.",
+    )
+
+
+@app.post("/commands/broadcast", response_model=BroadcastCommandResponse)
+async def broadcast_announcement(
+    request: BroadcastCommandRequest,
+    current_user: object = Depends(require_role("cashier")),
+) -> BroadcastCommandResponse:
+    require_remote_command_permission("show_announcement", current_user)
+    mark_stale_pcs_offline()
+    requested_targets = {name.strip() for name in (request.pc_names or []) if name.strip()}
+    targets = requested_targets or {
+        pc.pc_name for pc in pc_registry.values() if pc.status == "online"
+    }
+    commands: list[RemoteCommandRecord] = []
+    offline_targets: list[str] = []
+    failed_targets: dict[str, str] = {}
+
+    for target in sorted(targets):
+        pc = pc_registry.get(target)
+        if pc is None or pc.status == "offline" or not connection_manager.is_connected(target):
+            offline_targets.append(target)
+            continue
+        try:
+            response = await create_and_send_remote_command(
+                target,
+                "show_announcement",
+                request.model_dump(mode="json"),
+                current_user,
+            )
+            commands.append(response.command)
+        except HTTPException as error:
+            failed_targets[target] = str(error.detail)
+
+    return BroadcastCommandResponse(
+        commands=commands,
+        offline_targets=offline_targets,
+        failed_targets=failed_targets,
+    )
+
+
+@app.get("/remote-commands", response_model=list[RemoteCommandRecord])
+def list_remote_commands(
+    current_user: object = Depends(require_role("cashier")),
+) -> list[RemoteCommandRecord]:
+    return remote_command_repository.list_commands(
+        getattr(current_user, "role", "cashier"),
+        get_actor_user_id(current_user),
     )
 
 

@@ -12,6 +12,9 @@ import type {
   CalculatedTimeResponse,
   PaymentInput,
   PrepaidSessionSelection,
+  RemoteCommandRecord,
+  RemoteCommandResponse,
+  MessageSeverity,
   UserAdminRecord,
   UserCreateInput,
   UserUpdateInput,
@@ -192,6 +195,15 @@ export function toCashierMessage(message: string): string {
   if (lowerMessage.includes("offline")) {
     return "This PC is offline. Session actions are disabled until it reconnects.";
   }
+  if (lowerMessage.includes("active sessions require force")) {
+    return "This PC has an active session. Owner/admin confirmation and a reason are required before power control.";
+  }
+  if (lowerMessage.includes("mac address")) {
+    return "Save a valid MAC address before using Wake-on-LAN.";
+  }
+  if (lowerMessage.includes("power controls")) {
+    return "You do not have permission to use PC power controls.";
+  }
   if (lowerMessage.includes("already has an active session")) {
     return "This PC already has an active session.";
   }
@@ -210,6 +222,85 @@ export function toCashierMessage(message: string): string {
 
 export async function fetchPcs(): Promise<PcSummary[]> {
   return requestJson<PcSummary[]>(`${getApiBaseUrl()}/pcs`, { cache: "no-store" });
+}
+
+export async function updatePcMacAddress(
+  pcName: string,
+  macAddress: string | null
+): Promise<{ mac_address: string | null }> {
+  return requestJson<{ mac_address: string | null }>(`${getApiBaseUrl()}/pcs/${encodeURIComponent(pcName)}/mac`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mac_address: macAddress })
+  });
+}
+
+export async function sendPcMessage(
+  pcName: string,
+  input: {
+    title: string;
+    message: string;
+    severity: MessageSeverity;
+    duration_seconds?: number;
+    require_acknowledgement: boolean;
+  }
+): Promise<RemoteCommandResponse> {
+  return requestJson<RemoteCommandResponse>(`${getApiBaseUrl()}/pcs/${encodeURIComponent(pcName)}/message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function sendPowerCommand(
+  pcName: string,
+  command: "shutdown" | "restart" | "sleep",
+  input: { force?: boolean; reason?: string; confirm?: boolean }
+): Promise<RemoteCommandResponse> {
+  return requestJson<RemoteCommandResponse>(
+    `${getApiBaseUrl()}/pcs/${encodeURIComponent(pcName)}/power/${command}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    }
+  );
+}
+
+export async function wakePc(pcName: string): Promise<{ message: string; command: RemoteCommandRecord }> {
+  return requestJson<{ message: string; command: RemoteCommandRecord }>(
+    `${getApiBaseUrl()}/pcs/${encodeURIComponent(pcName)}/wake`,
+    { method: "POST" }
+  );
+}
+
+export async function broadcastAnnouncement(input: {
+  title: string;
+  message: string;
+  severity: MessageSeverity;
+  duration_seconds?: number;
+  require_acknowledgement: boolean;
+  pc_names?: string[];
+}): Promise<{
+  commands: RemoteCommandRecord[];
+  offline_targets: string[];
+  failed_targets: Record<string, string>;
+}> {
+  return requestJson<{
+    commands: RemoteCommandRecord[];
+    offline_targets: string[];
+    failed_targets: Record<string, string>;
+  }>(`${getApiBaseUrl()}/commands/broadcast`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function fetchRemoteCommands(): Promise<RemoteCommandRecord[]> {
+  return requestJson<RemoteCommandRecord[]>(`${getApiBaseUrl()}/remote-commands`, {
+    cache: "no-store"
+  });
 }
 
 export async function fetchMembers(query = ""): Promise<MemberRecord[]> {
