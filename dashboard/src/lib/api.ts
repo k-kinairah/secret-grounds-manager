@@ -8,9 +8,12 @@ import type {
   MembershipProduct,
   MemberSessionSelection,
   MemberTimeTransaction,
+  OperatorAccess,
+  PcLayoutSlot,
   PcSummary,
   CalculatedTimeResponse,
   PaymentInput,
+  PreparedSessionSelection,
   PrepaidSessionSelection,
   RemoteCommandRecord,
   RemoteCommandResponse,
@@ -89,6 +92,28 @@ export async function login(username: string, password: string): Promise<Current
   });
 }
 
+export async function fetchLoginOperators(): Promise<OperatorAccess[]> {
+  return requestJson<OperatorAccess[]>(`${getApiBaseUrl()}/auth/operators`, {
+    cache: "no-store"
+  });
+}
+
+export async function quickOperatorLogin(operatorId: string): Promise<CurrentUser> {
+  return requestJson<CurrentUser>(`${getApiBaseUrl()}/auth/operator/quick`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ operator_id: operatorId })
+  });
+}
+
+export async function adminOperatorLogin(password: string): Promise<CurrentUser> {
+  return requestJson<CurrentUser>(`${getApiBaseUrl()}/auth/operator/admin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password })
+  });
+}
+
 export async function logout(): Promise<void> {
   await requestJson<{ message: string }>(`${getApiBaseUrl()}/auth/logout`, {
     method: "POST"
@@ -145,6 +170,31 @@ export async function fetchShift(shiftId: string): Promise<CashierShiftDetail> {
 export async function fetchUsers(): Promise<UserAdminRecord[]> {
   return requestJson<UserAdminRecord[]>(`${getApiBaseUrl()}/users`, {
     cache: "no-store"
+  });
+}
+
+export async function fetchPcLayouts(includeDisabled = false): Promise<PcLayoutSlot[]> {
+  const query = includeDisabled ? "?include_disabled=true" : "";
+  return requestJson<PcLayoutSlot[]>(`${getApiBaseUrl()}/pcs/layout${query}`, {
+    cache: "no-store"
+  });
+}
+
+export async function updatePcLayout(
+  pcName: string,
+  input: {
+    display_name: string;
+    area_label: string;
+    layout_order: number;
+    is_vip: boolean;
+    is_enabled: boolean;
+    mac_address?: string | null;
+  }
+): Promise<PcLayoutSlot> {
+  return requestJson<PcLayoutSlot>(`${getApiBaseUrl()}/pcs/${pcName}/layout`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
   });
 }
 
@@ -272,6 +322,26 @@ export async function wakePc(pcName: string): Promise<{ message: string; command
     `${getApiBaseUrl()}/pcs/${encodeURIComponent(pcName)}/wake`,
     { method: "POST" }
   );
+}
+
+export async function fetchOperators(): Promise<CurrentUser[]> {
+  return requestJson<CurrentUser[]>(`${getApiBaseUrl()}/operators`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchCurrentOperator(): Promise<{ operator: CurrentUser | null }> {
+  return requestJson<{ operator: CurrentUser | null }>(`${getApiBaseUrl()}/operators/current`, {
+    cache: "no-store"
+  });
+}
+
+export async function setCurrentOperator(operatorId: string): Promise<{ operator: CurrentUser | null }> {
+  return requestJson<{ operator: CurrentUser | null }>(`${getApiBaseUrl()}/operators/current`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ operator_id: operatorId })
+  });
 }
 
 export async function broadcastAnnouncement(input: {
@@ -462,6 +532,74 @@ export async function startPrepaidSession(
       payment: payload.payment
     })
   });
+}
+
+export async function prepareStartupSession(
+  pcName: string,
+  payload: PreparedSessionSelection | MemberSessionSelection | { sessionMode: "open_time"; operatorId?: string }
+): Promise<{ prepared_session: unknown; message: string }> {
+  if ("sessionMode" in payload && payload.sessionMode === "member_balance") {
+    return requestJson<{ prepared_session: unknown; message: string }>(
+      `${getApiBaseUrl()}/sessions/prepare-startup`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pc_name: pcName,
+          session_mode: "member_balance",
+          member_id: payload.memberId,
+          duration_seconds: payload.durationSeconds,
+          member_pin: payload.memberPin
+        })
+      }
+    );
+  }
+
+  if ("sessionMode" in payload && payload.sessionMode === "open_time") {
+    return requestJson<{ prepared_session: unknown; message: string }>(
+      `${getApiBaseUrl()}/sessions/prepare-startup`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pc_name: pcName,
+          session_mode: "open_time",
+          operator_id: payload.operatorId
+        })
+      }
+    );
+  }
+
+  return requestJson<{ prepared_session: unknown; message: string }>(
+    `${getApiBaseUrl()}/sessions/prepare-startup`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pc_name: pcName,
+        session_mode: "prepaid",
+        amount: payload.amount,
+        duration_seconds: payload.durationSeconds,
+        rate_id: payload.rateId,
+        payment: payload.payment,
+        operator_id: payload.operatorId
+      })
+    }
+  );
+}
+
+export async function retryPreparedWake(preparedSessionId: string): Promise<{ message: string }> {
+  return requestJson<{ message: string }>(
+    `${getApiBaseUrl()}/prepared-sessions/${preparedSessionId}/retry-wake`,
+    { method: "POST" }
+  );
+}
+
+export async function cancelPreparedSession(preparedSessionId: string): Promise<{ message: string }> {
+  return requestJson<{ message: string }>(
+    `${getApiBaseUrl()}/prepared-sessions/${preparedSessionId}/cancel`,
+    { method: "POST" }
+  );
 }
 
 export async function startOpenTimeSession(pcName: string): Promise<SessionCommandResponse> {

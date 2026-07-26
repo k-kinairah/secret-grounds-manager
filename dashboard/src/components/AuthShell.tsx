@@ -108,6 +108,20 @@ export function AuthShell({ children }: { children: ReactNode }) {
     }
   }
 
+  async function handleChangeOperator() {
+    if (isLoggingOut) {
+      return;
+    }
+    setIsLoggingOut(true);
+    try {
+      await logout();
+    } finally {
+      setUser(null);
+      setIsLoggingOut(false);
+      router.replace("/login");
+    }
+  }
+
   async function handleShiftOpened(openedShift: CashierShiftDetail) {
     setShift(openedShift);
     setShiftMessage("Shift opened. Dashboard is ready.");
@@ -168,7 +182,8 @@ export function AuthShell({ children }: { children: ReactNode }) {
           {user ? (
             <>
               <span>
-                {user.display_name} - {user.role}
+                On Duty: {user.display_name}
+                {user.username === "admin" ? " · Admin" : ""}
               </span>
               {shift ? (
                 <span className="appShell__shift">
@@ -177,6 +192,9 @@ export function AuthShell({ children }: { children: ReactNode }) {
               ) : null}
               <button disabled={isLoggingOut} onClick={handleLogout} type="button">
                 {isLoggingOut ? "Signing out..." : "Sign out"}
+              </button>
+              <button disabled={isLoggingOut} onClick={handleChangeOperator} type="button">
+                Change Operator
               </button>
             </>
           ) : (

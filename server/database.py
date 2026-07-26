@@ -3,6 +3,11 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
+
+from server.operator_config import FAMILY_OPERATORS
+from server.passwords import hash_password
+from server.time_utils import current_utc_time
 
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parent / "secret_grounds.sqlite3"
@@ -56,7 +61,7 @@ def ensure_session_events_accept_payment_events(connection: sqlite3.Connection) 
     row = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'session_events'"
     ).fetchone()
-    if row is None or "recovery_force_end" in (row["sql"] or ""):
+    if row is None or "operator_changed" in (row["sql"] or ""):
         return
 
     connection.execute("ALTER TABLE session_events RENAME TO session_events_old")
@@ -81,7 +86,17 @@ def ensure_session_events_accept_payment_events(connection: sqlite3.Connection) 
                     'open_time_ended',
                     'open_time_settled',
                     'payment_action_review_required',
-                    'recovery_force_end'
+                    'recovery_force_end',
+                    'session_prepared',
+                    'wake_signal_sent',
+                    'client_connected',
+                    'session_activation_started',
+                    'session_activated',
+                    'startup_failed',
+                    'prepared_session_cancelled',
+                    'automatic_reminder_sent',
+                    'time_expired',
+                    'operator_changed'
                 )
             ),
             seconds INTEGER,
@@ -593,6 +608,101 @@ def seed_default_membership_products(connection: sqlite3.Connection) -> None:
     )
 
 
+def seed_default_pc_layouts(connection: sqlite3.Connection) -> None:
+    existing_count = connection.execute(
+        "SELECT COUNT(*) FROM pc_layouts"
+    ).fetchone()[0]
+    if existing_count:
+        return
+
+    now = __import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc
+    ).isoformat()
+    layouts = [
+        ("PC-01", "PC 1", "SECRET GROUND SHOP", 10, 0, 1),
+        ("PC-02", "PC 2", "SECRET GROUND SHOP", 20, 0, 1),
+        ("PC-03", "PC 3", "SECRET GROUND SHOP", 30, 0, 1),
+        ("PC-04", "PC 4", "SECRET GROUND SHOP", 40, 0, 1),
+        ("PC-05", "PC 5", "SECRET GROUND SHOP", 50, 0, 1),
+        ("PC-06", "PC 6", "SECRET GROUND SHOP", 60, 0, 1),
+        ("PC-07", "PC 7", "SECRET GROUND SHOP", 70, 0, 1),
+        ("PC-08", "PC 8", "SECRET GROUND SHOP", 80, 0, 1),
+        ("PC-09", "PC 9", "SECRET GROUND SHOP", 90, 0, 1),
+        ("PC-10", "PC 10", "SECRET GROUND SHOP", 100, 0, 1),
+        ("PC-11", "PC 11", "ROGENE", 110, 0, 1),
+        ("PC-12", "PC 12", "ROGENE", 120, 0, 1),
+        ("PC-13", "PC 13", "MAMA", 130, 0, 1),
+        ("PC-14", "PC 14", "LALA", 140, 0, 1),
+        ("PC-15", "PC 15", "VIP", 150, 1, 1),
+    ]
+    connection.executemany(
+        """
+        INSERT INTO pc_layouts (
+            pc_name,
+            display_name,
+            area_label,
+            layout_order,
+            is_vip,
+            is_enabled,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [(*layout, now) for layout in layouts],
+    )
+
+
+def seed_family_operators(connection: sqlite3.Connection) -> None:
+    now = current_utc_time().isoformat()
+    admin_password = os.getenv("SECRET_GROUNDS_ADMIN_PASSWORD", "admin12345")
+    disabled_password_hash = hash_password(str(uuid4()))
+    admin_password_hash = hash_password(admin_password)
+
+    for operator in FAMILY_OPERATORS:
+        existing = connection.execute(
+            "SELECT user_id FROM users WHERE username_normalized = ?",
+            (operator.username.casefold(),),
+        ).fetchone()
+        if existing is not None:
+            if operator.password_required:
+                connection.execute(
+                    """
+                    UPDATE users
+                    SET display_name = ?, role = 'owner', is_active = 1, updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (operator.display_name, now, existing["user_id"]),
+                )
+            continue
+
+        connection.execute(
+            """
+            INSERT INTO users (
+                user_id,
+                username,
+                username_normalized,
+                display_name,
+                password_hash,
+                role,
+                is_active,
+                created_at,
+                updated_at,
+                last_login_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'owner', 1, ?, ?, NULL)
+            """,
+            (
+                operator.operator_id,
+                operator.username,
+                operator.username.casefold(),
+                operator.display_name,
+                admin_password_hash if operator.password_required else disabled_password_hash,
+                now,
+                now,
+            ),
+        )
+
+
 def initialize_database() -> None:
     with get_connection() as connection:
         connection.execute(
@@ -820,7 +930,17 @@ def initialize_database() -> None:
                     'open_time_ended',
                     'open_time_settled',
                     'payment_action_review_required',
-                    'recovery_force_end'
+                    'recovery_force_end',
+                    'session_prepared',
+                    'wake_signal_sent',
+                    'client_connected',
+                    'session_activation_started',
+                    'session_activated',
+                    'startup_failed',
+                    'prepared_session_cancelled',
+                    'automatic_reminder_sent',
+                    'time_expired',
+                    'operator_changed'
                     )
                 ),
                 seconds INTEGER,
@@ -842,6 +962,92 @@ def initialize_database() -> None:
         add_column_if_missing(connection, "session_events", "payment_id", "TEXT")
         add_column_if_missing(connection, "session_events", "payment_method", "TEXT")
         add_column_if_missing(connection, "session_events", "performed_by_user_id", "TEXT")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pc_layouts (
+                pc_name TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                area_label TEXT NOT NULL,
+                layout_order INTEGER NOT NULL DEFAULT 0,
+                is_vip INTEGER NOT NULL DEFAULT 0,
+                is_enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS prepared_sessions (
+                prepared_session_id TEXT PRIMARY KEY,
+                pc_name TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'prepared',
+                        'waking',
+                        'waiting_for_client',
+                        'starting',
+                        'active',
+                        'failed',
+                        'cancelled'
+                    )
+                ),
+                session_mode TEXT NOT NULL CHECK (
+                    session_mode IN ('prepaid', 'open_time', 'member_balance')
+                ),
+                rate_id TEXT,
+                rate_name_snapshot TEXT,
+                duration_seconds INTEGER,
+                amount TEXT,
+                payment_json TEXT,
+                member_id TEXT,
+                member_pin TEXT,
+                member_name_snapshot TEXT,
+                member_open_play INTEGER NOT NULL DEFAULT 0,
+                prepared_by_user_id TEXT,
+                prepared_operator_id TEXT,
+                prepared_at TEXT NOT NULL,
+                wake_requested_at TEXT,
+                wake_status TEXT,
+                startup_status TEXT NOT NULL,
+                failure_reason TEXT,
+                expires_at TEXT NOT NULL,
+                activated_session_id TEXT,
+                activated_at TEXT,
+                cancelled_by_user_id TEXT,
+                cancelled_at TEXT,
+                FOREIGN KEY (activated_session_id) REFERENCES sessions(session_id),
+                FOREIGN KEY (prepared_by_user_id) REFERENCES users(user_id),
+                FOREIGN KEY (prepared_operator_id) REFERENCES users(user_id),
+                FOREIGN KEY (cancelled_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS operator_state (
+                state_id TEXT PRIMARY KEY CHECK (state_id = 'current'),
+                operator_user_id TEXT,
+                selected_by_user_id TEXT,
+                selected_at TEXT,
+                FOREIGN KEY (operator_user_id) REFERENCES users(user_id),
+                FOREIGN KEY (selected_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS operator_audit_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                operator_user_id TEXT,
+                operator_display_name TEXT NOT NULL,
+                selected_by_user_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (operator_user_id) REFERENCES users(user_id),
+                FOREIGN KEY (selected_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS payments (
@@ -1110,6 +1316,18 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_pc_layouts_enabled_order
+            ON pc_layouts (is_enabled, layout_order)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_prepared_sessions_pc_status
+            ON prepared_sessions (pc_name, status, prepared_at)
+            """
+        )
+        connection.execute(
+            """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_metered_rate
             ON rate_profiles (rate_type)
             WHERE rate_type = 'metered' AND is_active = 1
@@ -1118,3 +1336,5 @@ def initialize_database() -> None:
         seed_default_rates(connection)
         seed_default_metered_rate(connection)
         seed_default_membership_products(connection)
+        seed_default_pc_layouts(connection)
+        seed_family_operators(connection)

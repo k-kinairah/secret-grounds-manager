@@ -1,5 +1,20 @@
 export type ConnectionStatus = "online" | "offline";
 export type DashboardSessionStatus = "idle" | "active" | "ending" | "settlement_pending" | "unknown";
+export type PowerState =
+  | "online"
+  | "powered_off"
+  | "waking"
+  | "starting"
+  | "connection_problem"
+  | "recovery_required";
+export type PreparedSessionStatus =
+  | "prepared"
+  | "waking"
+  | "waiting_for_client"
+  | "starting"
+  | "active"
+  | "failed"
+  | "cancelled";
 export type SessionStatus =
   | "active"
   | "ending"
@@ -32,11 +47,22 @@ export type MessageSeverity = "info" | "warning" | "urgent";
 
 export interface PcSummary {
   pc_name: string;
+  display_name: string | null;
+  area_label: string | null;
+  layout_order: number;
+  is_vip: boolean;
+  is_enabled: boolean;
   ip_address: string;
   connection_status: ConnectionStatus;
   has_command_connection: boolean;
+  power_state: PowerState;
   last_seen: string;
   session_status: DashboardSessionStatus;
+  startup_status: PreparedSessionStatus | null;
+  prepared_session_id: string | null;
+  startup_elapsed_seconds: number | null;
+  startup_expires_at: string | null;
+  startup_failure_reason: string | null;
   active_session_id: string | null;
   started_at: string | null;
   scheduled_end_at: string | null;
@@ -65,6 +91,17 @@ export interface PcSummary {
   member_balance_before_seconds: number | null;
   member_balance_after_seconds: number | null;
   mac_address: string | null;
+}
+
+export interface PcLayoutSlot {
+  pc_name: string;
+  display_name: string;
+  area_label: string;
+  layout_order: number;
+  is_vip: boolean;
+  is_enabled: boolean;
+  mac_address: string | null;
+  updated_at: string;
 }
 
 export interface SessionRecord {
@@ -221,6 +258,11 @@ export interface PrepaidSessionSelection {
   payment: PaymentInput;
 }
 
+export interface PreparedSessionSelection extends PrepaidSessionSelection {
+  sessionMode?: "prepaid";
+  operatorId?: string;
+}
+
 export interface MemberSessionSelection {
   sessionMode: "member_balance";
   memberId: string;
@@ -244,6 +286,13 @@ export interface CurrentUser {
   username: string;
   display_name: string;
   role: UserRole;
+}
+
+export interface OperatorAccess {
+  operator_id: string;
+  display_name: string;
+  password_required: boolean;
+  user: CurrentUser | null;
 }
 
 export interface UserAdminRecord extends CurrentUser {

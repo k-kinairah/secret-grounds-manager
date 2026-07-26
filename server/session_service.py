@@ -15,11 +15,16 @@ from server.schemas import (
     CommandAcknowledgement,
     ForceEndSessionResponse,
     PCRecord,
+    PreparedSessionRecord,
+    PreparedSessionResponse,
+    PreparedSessionActivationResponse,
+    PreparedSessionStartRequest,
     SessionCommandResponse,
     SessionEventRecord,
     SessionRecord,
     PaymentCreateRequest,
 )
+from server.prepared_session_repository import PreparedSessionRepository, payment_from_json, payment_to_json
 from server.session_repository import SessionRepository
 from server.time_utils import current_utc_time
 
@@ -36,6 +41,7 @@ class SessionService:
         command_timeout_seconds: int,
         billing_service: BillingService | None = None,
         member_repository: object | None = None,
+        prepared_session_repository: PreparedSessionRepository | None = None,
     ) -> None:
         self.repository = repository
         self.rate_repository = rate_repository
@@ -44,6 +50,7 @@ class SessionService:
         self.command_timeout_seconds = command_timeout_seconds
         self.billing_service = billing_service
         self.member_repository = member_repository
+        self.prepared_session_repository = prepared_session_repository
 
     def require_available_client(self, pc_name: str) -> PCRecord:
         pc = self.pc_registry.get(pc_name)
@@ -86,6 +93,23 @@ class SessionService:
             performed_by_user_id=performed_by_user_id,
         )
         return self.repository.add_event(event)
+
+    def create_prepared_audit_event(
+        self,
+        prepared: PreparedSessionRecord,
+        event_type: str,
+        message: str | None = None,
+        performed_by_user_id: str | None = None,
+    ) -> None:
+        session_id = prepared.activated_session_id
+        if session_id is None:
+            return
+        self.create_event(
+            session_id,
+            event_type,
+            message=message,
+            performed_by_user_id=performed_by_user_id,
+        )
 
     def resolve_session_package(
         self,
@@ -133,6 +157,364 @@ class SessionService:
             )
 
         return custom_seconds, None, None, Decimal("0.00")
+
+    def require_prepared_repository(self) -> PreparedSessionRepository:
+        if self.prepared_session_repository is None:
+            raise HTTPException(status_code=500, detail="Prepared startup service is unavailable")
+        return self.prepared_session_repository
+
+    def prepare_offline_session(
+        self,
+        request: PreparedSessionStartRequest,
+        actor_user_id: str | None = None,
+    ) -> PreparedSessionResponse:
+        repository = self.require_prepared_repository()
+        pc_name = request.pc_name.strip()
+        if not pc_name:
+            raise HTTPException(status_code=400, detail="PC name is required")
+        if self.repository.get_active_session_for_pc(pc_name) is not None:
+            raise HTTPException(status_code=409, detail="This PC already has an active session")
+        existing = repository.get_active_for_pc(pc_name)
+        if existing is not None:
+            return PreparedSessionResponse(
+                prepared_session=existing,
+                message="This PC already has a prepared startup in progress.",
+            )
+
+        duration_seconds: int | None = request.duration_seconds
+        resolved_rate_id: str | None = None
+        rate_name_snapshot: str | None = None
+        amount = request.amount
+        member_name_snapshot: str | None = None
+        member_open_play = False
+
+        if request.session_mode == "prepaid":
+            duration_seconds, resolved_rate_id, rate_name_snapshot, amount = (
+                self.resolve_session_package(
+                    request.rate_id,
+                    request.duration_seconds,
+                    request.amount,
+                    "duration_seconds",
+                )
+            )
+            if amount > Decimal("0.00") and request.payment is None:
+                raise HTTPException(status_code=400, detail="Payment details are required for prepared prepaid sessions")
+            if request.payment is not None and self.billing_service is not None:
+                self.billing_service.validate_payment_for_amount(request.payment, amount)
+        elif request.session_mode == "member_balance":
+            if self.member_repository is None or request.member_id is None:
+                raise HTTPException(status_code=400, detail="Member is required")
+            member = self.member_repository.require_usable_member(request.member_id)  # type: ignore[attr-defined]
+            self.member_repository.verify_member_pin_if_required(member.member_id, request.member_pin)  # type: ignore[attr-defined]
+            member_name_snapshot = member.full_name
+            member_open_play = request.duration_seconds is None
+            duration_seconds = request.duration_seconds or member.time_balance_seconds
+            if duration_seconds <= 0:
+                raise HTTPException(status_code=409, detail="Member has no available time balance")
+            if member.time_balance_seconds < duration_seconds:
+                raise HTTPException(status_code=409, detail="Insufficient member time balance")
+        elif request.session_mode == "open_time":
+            duration_seconds = None
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported session mode")
+
+        now = current_utc_time()
+        prepared = PreparedSessionRecord(
+            prepared_session_id=repository.new_id(),
+            pc_name=pc_name,
+            status="prepared",
+            session_mode=request.session_mode,
+            rate_id=resolved_rate_id or request.rate_id,
+            rate_name_snapshot=rate_name_snapshot,
+            duration_seconds=duration_seconds,
+            amount=amount,
+            payment_json=payment_to_json(request.payment),
+            member_id=request.member_id,
+            member_pin=request.member_pin,
+            member_name_snapshot=member_name_snapshot,
+            member_open_play=member_open_play,
+            prepared_by_user_id=actor_user_id,
+            prepared_operator_id=request.operator_id,
+            prepared_at=now,
+            wake_requested_at=None,
+            wake_status=None,
+            startup_status="prepared",
+            failure_reason=None,
+            expires_at=now + timedelta(seconds=120),
+        )
+        return PreparedSessionResponse(
+            prepared_session=repository.create(prepared),
+            message="Prepared session created. Wake signal can be sent.",
+        )
+
+    def mark_prepared_wake_sent(
+        self,
+        prepared_session_id: str,
+        wake_status: str = "Wake signal sent",
+    ) -> PreparedSessionRecord:
+        repository = self.require_prepared_repository()
+        prepared = repository.get(prepared_session_id)
+        if prepared is None:
+            raise HTTPException(status_code=404, detail="Prepared session not found")
+        if prepared.status in {"active", "cancelled", "failed"}:
+            raise HTTPException(status_code=409, detail="Prepared session is no longer waiting")
+        now = current_utc_time()
+        return repository.update(
+            prepared.model_copy(
+                update={
+                    "status": "waiting_for_client",
+                    "startup_status": "waiting_for_client",
+                    "wake_status": wake_status,
+                    "wake_requested_at": now,
+                    "failure_reason": None,
+                }
+            )
+        )
+
+    def cancel_prepared_session(
+        self,
+        prepared_session_id: str,
+        actor_user_id: str | None = None,
+    ) -> PreparedSessionResponse:
+        repository = self.require_prepared_repository()
+        prepared = repository.get(prepared_session_id)
+        if prepared is None:
+            raise HTTPException(status_code=404, detail="Prepared session not found")
+        if prepared.status in {"active", "cancelled", "failed"}:
+            return PreparedSessionResponse(
+                prepared_session=prepared,
+                message="Prepared session is already closed.",
+            )
+        cancelled = repository.update(
+            prepared.model_copy(
+                update={
+                    "status": "cancelled",
+                    "startup_status": "cancelled",
+                    "cancelled_by_user_id": actor_user_id,
+                    "cancelled_at": current_utc_time(),
+                    "failure_reason": "Cancelled before the client connected",
+                }
+            )
+        )
+        return PreparedSessionResponse(
+            prepared_session=cancelled,
+            message="Prepared session cancelled. No charge was created.",
+        )
+
+    async def activate_prepared_session_for_pc(
+        self,
+        pc_name: str,
+    ) -> PreparedSessionActivationResponse | None:
+        repository = self.require_prepared_repository()
+        repository.expire_old_preparations()
+        prepared = repository.get_active_for_pc(pc_name)
+        if prepared is None:
+            return None
+        if prepared.activated_session_id is not None:
+            return PreparedSessionActivationResponse(
+                prepared_session=prepared,
+                session=self.repository.get_session(prepared.activated_session_id),
+            )
+        if self.repository.get_active_session_for_pc(pc_name) is not None:
+            failed = repository.update(
+                prepared.model_copy(
+                    update={
+                        "status": "failed",
+                        "startup_status": "failed",
+                        "failure_reason": "PC already has an active billable session",
+                    }
+                )
+            )
+            return PreparedSessionActivationResponse(prepared_session=failed)
+
+        starting = repository.update(
+            prepared.model_copy(
+                update={"status": "starting", "startup_status": "starting"}
+            )
+        )
+        now = current_utc_time()
+        session = self.build_session_from_prepared(starting, now)
+        self.repository.create_session(session)
+        if session.session_mode == "member_balance":
+            if self.member_repository is None or session.member_id is None:
+                raise HTTPException(status_code=500, detail="Member reservation service is unavailable")
+            member = self.member_repository.require_usable_member(session.member_id)  # type: ignore[attr-defined]
+            self.member_repository.create_reservation(  # type: ignore[attr-defined]
+                member,
+                session.session_id,
+                session.total_seconds,
+                starting.prepared_by_user_id,
+            )
+        elif session.session_mode == "prepaid" and self.billing_service is not None:
+            payment = payment_from_json(starting.payment_json)
+            if payment is not None and session.total_amount > Decimal("0.00"):
+                self.billing_service.record_payment(
+                    session.session_id,
+                    payment,
+                    action_type="session_start",
+                    max_amount=session.total_amount,
+                    actor_user_id=starting.prepared_by_user_id,
+                )
+
+        self.create_event(
+            session.session_id,
+            "session_prepared",
+            message=f"Prepared startup activated from {starting.prepared_session_id}",
+            performed_by_user_id=starting.prepared_operator_id or starting.prepared_by_user_id,
+        )
+        self.create_event(
+            session.session_id,
+            "session_activation_started",
+            performed_by_user_id=starting.prepared_operator_id or starting.prepared_by_user_id,
+        )
+
+        command = self.create_start_command_for_session(session)
+        try:
+            acknowledgements = await self.send_required_command(pc_name, command)
+        except Exception as error:
+            failed_session = session.model_copy(
+                update={
+                    "status": "failed",
+                    "ended_at": current_utc_time(),
+                    "ended_reason": "prepared_start_command_failed",
+                }
+            )
+            self.repository.update_session(failed_session)
+            if session.session_mode == "member_balance" and session.member_id is not None and self.member_repository is not None:
+                self.member_repository.release_reservation(  # type: ignore[attr-defined]
+                    session.member_id,
+                    session.session_id,
+                    starting.prepared_by_user_id,
+                    f"Released prepared startup reservation after command failure: {error}",
+                )
+            failed = repository.update(
+                starting.model_copy(
+                    update={
+                        "status": "failed",
+                        "startup_status": "failed",
+                        "failure_reason": str(error),
+                        "activated_session_id": session.session_id,
+                    }
+                )
+            )
+            self.create_event(
+                session.session_id,
+                "startup_failed",
+                message=str(error),
+                performed_by_user_id=starting.prepared_operator_id or starting.prepared_by_user_id,
+            )
+            return PreparedSessionActivationResponse(
+                prepared_session=failed,
+                session=failed_session,
+                command=command,
+            )
+
+        activated = repository.update(
+            starting.model_copy(
+                update={
+                    "status": "active",
+                    "startup_status": "active",
+                    "activated_session_id": session.session_id,
+                    "activated_at": now,
+                    "failure_reason": None,
+                }
+            )
+        )
+        self.create_event(
+            session.session_id,
+            "session_activated",
+            performed_by_user_id=starting.prepared_operator_id or starting.prepared_by_user_id,
+        )
+        return PreparedSessionActivationResponse(
+            prepared_session=activated,
+            session=(
+                self.billing_service.enrich_session(session)
+                if self.billing_service is not None
+                else session
+            ),
+            command=command,
+            acknowledgements=acknowledgements,
+        )
+
+    def build_session_from_prepared(
+        self,
+        prepared: PreparedSessionRecord,
+        activated_at: datetime,
+    ) -> SessionRecord:
+        session_id = str(uuid4())
+        if prepared.session_mode == "open_time":
+            metered_rate = self.rate_repository.get_active_metered_rate()
+            if metered_rate is None:
+                raise HTTPException(status_code=409, detail="Active metered rate is missing")
+            return SessionRecord(
+                session_id=session_id,
+                pc_name=prepared.pc_name,
+                status="active",
+                started_at=activated_at,
+                scheduled_end_at=activated_at,
+                original_seconds=0,
+                added_seconds=0,
+                total_seconds=0,
+                amount_paid=None,
+                ended_reason=None,
+                created_at=activated_at,
+                base_amount=Decimal("0.00"),
+                additional_amount=Decimal("0.00"),
+                total_amount=Decimal("0.00"),
+                session_mode="open_time",
+                settlement_pending=True,
+                rate_id=metered_rate.rate_id,
+                rate_name_snapshot=f"{metered_rate.name}: {metered_rate.price} per {metered_rate.duration_seconds}s",
+                metered_rate_price_snapshot=metered_rate.price,
+                metered_rate_duration_seconds_snapshot=metered_rate.duration_seconds,
+                created_by_user_id=prepared.prepared_operator_id or prepared.prepared_by_user_id,
+            )
+
+        if prepared.duration_seconds is None or prepared.duration_seconds <= 0:
+            raise HTTPException(status_code=400, detail="Prepared duration is invalid")
+        return SessionRecord(
+            session_id=session_id,
+            pc_name=prepared.pc_name,
+            status="active",
+            started_at=activated_at,
+            scheduled_end_at=activated_at + timedelta(seconds=prepared.duration_seconds),
+            original_seconds=prepared.duration_seconds,
+            added_seconds=0,
+            total_seconds=prepared.duration_seconds,
+            amount_paid=None,
+            ended_reason=None,
+            created_at=activated_at,
+            rate_id=prepared.rate_id,
+            rate_name_snapshot=prepared.rate_name_snapshot,
+            base_amount=prepared.amount or Decimal("0.00"),
+            additional_amount=Decimal("0.00"),
+            total_amount=prepared.amount or Decimal("0.00"),
+            session_mode=prepared.session_mode,
+            created_by_user_id=prepared.prepared_operator_id or prepared.prepared_by_user_id,
+            member_id=prepared.member_id,
+            member_name_snapshot=prepared.member_name_snapshot,
+        )
+
+    def create_start_command_for_session(self, session: SessionRecord) -> ClientCommand:
+        if session.session_mode == "open_time":
+            return self.create_command(
+                "start_session",
+                {
+                    "session_id": session.session_id,
+                    "session_mode": "open_time",
+                    "started_at": session.started_at.isoformat(),
+                },
+            )
+        payload: dict[str, object] = {
+            "session_id": session.session_id,
+            "session_mode": session.session_mode,
+            "duration_seconds": session.total_seconds,
+            "scheduled_end_at": session.scheduled_end_at.isoformat(),
+        }
+        if session.session_mode == "member_balance":
+            payload["timer_mode"] = "elapsed" if session.original_seconds == 0 else "countdown"
+            payload["max_usable_seconds"] = session.total_seconds
+        return self.create_command("start_session", payload)
 
     def create_command(
         self,

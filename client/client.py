@@ -11,13 +11,16 @@ from client.config import (
     ClientConfig,
     ClientConfigError,
     ENABLE_DEV_ESCAPE,
+    ENABLE_CUSTOMER_OVERLAY,
     ENABLE_LOCK_SCREEN,
+    CUSTOMER_OVERLAY_POSITION,
     HEARTBEAT_INTERVAL_SECONDS,
     REQUEST_TIMEOUT_SECONDS,
     SESSION_RECOVERY_PATH,
     get_client_config_path,
     load_client_config,
 )
+from client.customer_overlay import CustomerOverlayController
 from client.lock_screen import LockScreenController
 from client.remote_controls import RemoteControlHandler
 from client.session_recovery import SessionRecoveryStore
@@ -49,6 +52,7 @@ class SecretGroundsClient:
         recovery_store: SessionRecoveryStore | None = None,
         enable_lock_screen: bool = ENABLE_LOCK_SCREEN,
         enable_dev_escape: bool = ENABLE_DEV_ESCAPE,
+        enable_customer_overlay: bool = ENABLE_CUSTOMER_OVERLAY,
         open_setup_wizard: Callable[[], None] | None = None,
     ) -> None:
         self.server_url = server_url.rstrip("/")
@@ -71,6 +75,11 @@ class SecretGroundsClient:
         )
         self.recovery_store = recovery_store or SessionRecoveryStore(
             SESSION_RECOVERY_PATH
+        )
+        self.customer_overlay = CustomerOverlayController(
+            pc_name,
+            position=CUSTOMER_OVERLAY_POSITION,
+            enable_gui=enable_customer_overlay,
         )
         self.lock_screen.start()
 
@@ -312,6 +321,10 @@ class SecretGroundsClient:
                         "Local session already active; refreshed persisted state "
                         f"and hid lock screen for session_id={session_id}."
                     )
+                    self.customer_overlay.show_session(
+                        session_type=self.human_session_mode(session_mode),
+                        is_elapsed=session_mode == "open_time",
+                    )
                     print(f"Local session {session_id} is already active.")
                     return True
                 old_stop_event = self.active_session.stop_event
@@ -328,6 +341,12 @@ class SecretGroundsClient:
                     return False
                 timer_thread = Thread(
                     target=self.run_session_timer,
+                    args=(session_id, deadline_monotonic, stop_event),
+                    daemon=True,
+                )
+            else:
+                timer_thread = Thread(
+                    target=self.run_open_time_overlay_timer,
                     args=(session_id, deadline_monotonic, stop_event),
                     daemon=True,
                 )
@@ -360,8 +379,11 @@ class SecretGroundsClient:
                 print(f"Lock screen hide failed for session_id={session_id}: {error}")
                 return False
             print(f"Session {session_id} unlocked.")
-            if timer_thread is not None:
-                timer_thread.start()
+            self.customer_overlay.show_session(
+                session_type=self.human_session_mode(session_mode),
+                is_elapsed=session_mode == "open_time",
+            )
+            timer_thread.start()
 
         return True
 
@@ -479,7 +501,9 @@ class SecretGroundsClient:
                 pc_name=self.pc_name,
                 scheduled_end_at=self.active_session.scheduled_end_at,
                 state="active",
+                session_mode=self.active_session.session_mode,
             )
+            self.customer_overlay.reset_reminders_after_add_time()
 
         print(f"Added {seconds} seconds to session {session_id}.")
         return self.build_acknowledgement(command_id, "completed", "Time added")
@@ -553,6 +577,7 @@ class SecretGroundsClient:
             self.active_session = None
             self.recovery_store.clear()
             self.lock_screen.show_locked("Session locked after manual end.")
+            self.customer_overlay.hide()
             print(f"Lock screen shown after end_session for session_id={session_id}.")
 
         print(f"Session {session_id} ended manually.")
@@ -572,6 +597,7 @@ class SecretGroundsClient:
                 deadline_monotonic = active_session.deadline_monotonic
 
             remaining_seconds = max(0, int(deadline_monotonic - time.monotonic()))
+            self.customer_overlay.update_time(remaining_seconds)
             print(f"Session {session_id} remaining: {remaining_seconds} seconds")
 
             if remaining_seconds <= 0:
@@ -585,6 +611,8 @@ class SecretGroundsClient:
                         self.active_session = None
 
                 self.lock_screen.show_locked("Session locked after expiration.")
+                self.customer_overlay.update_time(0)
+                self.customer_overlay.hide()
                 self.recovery_store.mark_pending_completion(
                     session_id=session_id,
                     pc_name=self.pc_name,
@@ -605,6 +633,21 @@ class SecretGroundsClient:
                 return
 
             stop_event.wait(min(5, remaining_seconds))
+
+    def run_open_time_overlay_timer(
+        self,
+        session_id: str,
+        started_monotonic: float,
+        stop_event: Event,
+    ) -> None:
+        while not stop_event.is_set():
+            with self.active_session_lock:
+                active_session = self.active_session
+                if active_session is None or active_session.session_id != session_id:
+                    return
+            elapsed_seconds = max(0, int(time.monotonic() - started_monotonic))
+            self.customer_overlay.update_time(elapsed_seconds)
+            stop_event.wait(1)
 
     def handle_command(self, websocket: SimpleWebSocketClient) -> None:
         command = websocket.receive_json()
@@ -637,6 +680,7 @@ class SecretGroundsClient:
                     print("Command WebSocket connected.")
                     self.set_current_websocket(websocket)
                     self.lock_screen.set_connection_online(True)
+                    self.customer_overlay.set_connection_online(True)
                     self.reconcile_session_state()
                     self.flush_pending_completion()
 
@@ -667,6 +711,7 @@ class SecretGroundsClient:
     def stop(self) -> None:
         self.stop_event.set()
         self.lock_screen.stop()
+        self.customer_overlay.hide()
 
     def set_current_websocket(self, websocket: SimpleWebSocketClient | None) -> None:
         with self.websocket_lock:
@@ -871,6 +916,7 @@ class SecretGroundsClient:
     def handle_websocket_offline(self) -> None:
         self.set_current_websocket(None)
         self.lock_screen.set_connection_online(False)
+        self.customer_overlay.set_connection_online(False)
 
         with self.active_session_lock:
             has_active_session = self.active_session is not None
@@ -880,6 +926,13 @@ class SecretGroundsClient:
         else:
             print("WebSocket offline while idle; remaining locked.")
             self.lock_screen.show_locked()
+
+    def human_session_mode(self, session_mode: str) -> str:
+        if session_mode == "member_balance":
+            return "Member Time"
+        if session_mode == "open_time":
+            return "Open Time"
+        return "Package"
 
 
 def open_setup_wizard_async() -> None:

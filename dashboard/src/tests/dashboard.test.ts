@@ -2,16 +2,20 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   addTime,
+  adminOperatorLogin,
   calculateTime,
   createUser,
   createRate,
   fetchCurrentUser,
+  fetchLoginOperators,
+  fetchPcLayouts,
   fetchRates,
   fetchUsers,
   forceEndSession,
   getApiBaseUrl,
   login,
   logout,
+  quickOperatorLogin,
   recordPayment,
   resetMemberPin,
   resetUserPassword,
@@ -21,12 +25,18 @@ import {
   startSession,
   toCashierMessage,
   updateRate,
+  updatePcLayout,
   updateRateStatus,
   updateUser,
   updateUserStatus
 } from "../lib/api";
 import { calculateCashChange, isPaymentInputValid } from "../lib/paymentSelection";
-import { getPcActionAvailability, getPcCardTone, summarizePcs } from "../lib/pcStatus";
+import {
+  getPcActionAvailability,
+  getPcCardTone,
+  getPcMonitorPresentation,
+  summarizePcs
+} from "../lib/pcStatus";
 import { saveRateProfile } from "../lib/rateActions";
 import { rateFormToInput, rateToForm } from "../lib/rateForm";
 import { calculatePreviewSeconds } from "../lib/sessionSelection";
@@ -45,11 +55,22 @@ import type { PcSummary, RateProfile, RateProfileInput } from "../lib/types";
 function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
   return {
     pc_name: "PC-01",
+    display_name: "PC 1",
+    area_label: "SECRET GROUND SHOP",
+    layout_order: 10,
+    is_vip: false,
+    is_enabled: true,
     ip_address: "127.0.0.1",
     connection_status: "online",
     has_command_connection: true,
+    power_state: "online",
     last_seen: "2026-07-23T00:00:00+00:00",
     session_status: "idle",
+    startup_status: null,
+    prepared_session_id: null,
+    startup_elapsed_seconds: null,
+    startup_expires_at: null,
+    startup_failure_reason: null,
     active_session_id: null,
     started_at: null,
     scheduled_end_at: null,
@@ -152,14 +173,48 @@ assert.deepEqual(getPcActionAvailability(offlinePc), {
   canViewDetails: true
 });
 
+const wakeReadyPc = makePc({
+  connection_status: "offline",
+  power_state: "powered_off",
+  mac_address: "AA:BB:CC:DD:EE:FF"
+});
+assert.equal(getPcActionAvailability(wakeReadyPc).canStart, true);
+
+const wakingPc = makePc({
+  connection_status: "offline",
+  power_state: "waking",
+  startup_status: "waiting_for_client",
+  prepared_session_id: "prepared-1",
+  mac_address: "AA:BB:CC:DD:EE:FF"
+});
+assert.equal(getPcActionAvailability(wakingPc).canStart, false);
+assert.deepEqual(getPcMonitorPresentation(wakingPc), {
+  className: "monitorTileWaking",
+  label: "Waking"
+});
+
 const activePc = makePc({
   session_status: "active",
   active_session_id: "session-1",
-  remaining_seconds: 60
+  remaining_seconds: 600
 });
 assert.equal(getPcCardTone(activePc), "active");
 assert.equal(getPcActionAvailability(activePc).canAddTime, true);
 assert.equal(getPcActionAvailability(activePc).canEnd, true);
+assert.deepEqual(getPcMonitorPresentation(activePc), {
+  className: "monitorTileActive",
+  label: "In Use"
+});
+
+const lowTimePc = makePc({
+  session_status: "active",
+  active_session_id: "session-low",
+  remaining_seconds: 60
+});
+assert.deepEqual(getPcMonitorPresentation(lowTimePc), {
+  className: "monitorTileLowTime",
+  label: "Low Time"
+});
 
 const settlementPc = makePc({
   session_status: "settlement_pending",
@@ -173,10 +228,32 @@ assert.equal(getPcCardTone(settlementPc), "warning");
 assert.equal(getPcActionAvailability(settlementPc).canStart, false);
 assert.equal(getPcActionAvailability(settlementPc).canEnd, false);
 assert.equal(getPcActionAvailability(settlementPc).canCollectPayment, true);
+assert.deepEqual(getPcMonitorPresentation(settlementPc), {
+  className: "monitorTileWarning",
+  label: "Settlement"
+});
+
+const recoveryPc = makePc({
+  session_status: "unknown",
+  recovery_required: true,
+  recovery_reason: "server-only active session"
+});
+assert.deepEqual(getPcMonitorPresentation(recoveryPc), {
+  className: "monitorTileWarning",
+  label: "Recovery"
+});
 
 const availablePc = makePc();
 assert.equal(getPcCardTone(availablePc), "available");
 assert.equal(getPcActionAvailability(availablePc).canStart, true);
+assert.deepEqual(getPcMonitorPresentation(availablePc), {
+  className: "monitorTileAvailable",
+  label: "Available"
+});
+assert.deepEqual(getPcMonitorPresentation(offlinePc), {
+  className: "monitorTileOffline",
+  label: "Powered Off"
+});
 
 assert.deepEqual(summarizePcs([availablePc, activePc, offlinePc]), {
   total: 3,
@@ -285,8 +362,12 @@ async function runAsyncAssertions() {
     };
 
     await login("owner", "password123");
+    await fetchLoginOperators();
+    await quickOperatorLogin("operator_mama");
+    await adminOperatorLogin("password123");
     await fetchCurrentUser();
     await fetchUsers();
+    await fetchPcLayouts(true);
     await createUser({
       username: "cashier",
       display_name: "Cashier",
@@ -320,6 +401,14 @@ async function runAsyncAssertions() {
       sort_order: 10
     });
     await updateRateStatus("rate-30", false);
+    await updatePcLayout("PC-03", {
+      display_name: "PC 3",
+      area_label: "SECRET GROUND SHOP",
+      layout_order: 30,
+      is_vip: false,
+      is_enabled: false,
+      mac_address: null
+    });
     await startMemberSession("PC-01", {
       sessionMode: "member_balance",
       memberId: "member-1",
@@ -346,8 +435,12 @@ async function runAsyncAssertions() {
       fetchCalls.map((call) => ({ method: call.method, url: call.url })),
       [
         { method: "POST", url: "http://127.0.0.1:8000/auth/login" },
+        { method: "GET", url: "http://127.0.0.1:8000/auth/operators" },
+        { method: "POST", url: "http://127.0.0.1:8000/auth/operator/quick" },
+        { method: "POST", url: "http://127.0.0.1:8000/auth/operator/admin" },
         { method: "GET", url: "http://127.0.0.1:8000/auth/me" },
         { method: "GET", url: "http://127.0.0.1:8000/users" },
+        { method: "GET", url: "http://127.0.0.1:8000/pcs/layout?include_disabled=true" },
         { method: "POST", url: "http://127.0.0.1:8000/users" },
         { method: "PUT", url: "http://127.0.0.1:8000/users/user-1" },
         { method: "PATCH", url: "http://127.0.0.1:8000/users/user-1/status" },
@@ -359,6 +452,7 @@ async function runAsyncAssertions() {
         { method: "POST", url: "http://127.0.0.1:8000/rates" },
         { method: "PUT", url: "http://127.0.0.1:8000/rates/rate-30" },
         { method: "PATCH", url: "http://127.0.0.1:8000/rates/rate-30/status" },
+        { method: "PUT", url: "http://127.0.0.1:8000/pcs/PC-03/layout" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/start-member" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/start" },
         { method: "POST", url: "http://127.0.0.1:8000/pcs/PC-01/message" },
@@ -373,36 +467,50 @@ async function runAsyncAssertions() {
       username: "owner",
       password: "password123"
     });
-    assert.deepEqual(fetchCalls[6].body, {
+    assert.deepEqual(fetchCalls[2].body, {
+      operator_id: "operator_mama"
+    });
+    assert.deepEqual(fetchCalls[3].body, {
+      password: "password123"
+    });
+    assert.deepEqual(fetchCalls[10].body, {
       password: "new-password"
     });
-    assert.deepEqual(fetchCalls[8].body, {
+    assert.deepEqual(fetchCalls[12].body, {
       pin: "1234"
     });
-    assert.equal((fetchCalls[12].body as RateProfileInput).price, "50.00");
-    assert.equal((fetchCalls[12].body as RateProfileInput).duration_seconds, 1800);
-    assert.deepEqual(fetchCalls[14].body, {
+    assert.equal((fetchCalls[16].body as RateProfileInput).price, "50.00");
+    assert.equal((fetchCalls[16].body as RateProfileInput).duration_seconds, 1800);
+    assert.deepEqual(fetchCalls[18].body, {
+      display_name: "PC 3",
+      area_label: "SECRET GROUND SHOP",
+      layout_order: 30,
+      is_vip: false,
+      is_enabled: false,
+      mac_address: null
+    });
+    assert.deepEqual(fetchCalls[19].body, {
       pc_name: "PC-01",
       member_id: "member-1",
       duration_seconds: 3600,
       member_pin: "1234"
     });
-    assert.deepEqual(fetchCalls[15].body, {
+    assert.deepEqual(fetchCalls[20].body, {
       pc_name: "PC-01",
       amount: "20.00"
     });
-    assert.deepEqual(fetchCalls[16].body, {
+    assert.deepEqual(fetchCalls[21].body, {
       title: "Secret Grounds",
       message: "Please return to the cashier.",
       severity: "info",
       require_acknowledgement: false
     });
-    assert.deepEqual(fetchCalls[17].body, {});
-    assert.deepEqual(fetchCalls[18].body, {
+    assert.deepEqual(fetchCalls[22].body, {});
+    assert.deepEqual(fetchCalls[23].body, {
       amount: "5.00"
     });
-    assert.deepEqual(fetchCalls[19].body, null);
-    assert.deepEqual(fetchCalls[20].body, {
+    assert.deepEqual(fetchCalls[24].body, null);
+    assert.deepEqual(fetchCalls[25].body, {
       payment_method: "cash",
       amount: "20.00",
       cash_received: "50.00"
@@ -464,6 +572,63 @@ async function runAsyncAssertions() {
     assert.match(ratesCss, /\.errorMessage/);
     assert.match(ratesCss, /\.meteredCard/);
     assert.match(ratesCss, /color: #f8fafc/);
+
+    const monitorTileSource = readFileSync("src/components/PcMonitorTile.tsx", "utf8");
+    assert.match(monitorTileSource, /monitorName/);
+    assert.match(monitorTileSource, /monitorStatusLight/);
+    assert.match(monitorTileSource, /monitorVipBadge/);
+    assert.doesNotMatch(monitorTileSource, /Start Session|Add Time|End Session|Collect Payment|Start & Wake/);
+
+    const dashboardCss = readFileSync("src/app/page.module.css", "utf8");
+    assert.match(dashboardCss, /\.monitorTileSelected/);
+    assert.match(dashboardCss, /\.monitorGrid/);
+    assert.match(dashboardCss, /@media \(max-width: 900px\)/);
+    assert.match(dashboardCss, /max-height: calc\(100vh - 48px\)/);
+    assert.match(dashboardCss, /\.pcControlModal/);
+    assert.match(dashboardCss, /width: min\(980px, 92vw\)/);
+    assert.match(dashboardCss, /max-height: 88vh/);
+    assert.match(dashboardCss, /\.pcControlGrid/);
+    assert.match(dashboardCss, /grid-template-columns: minmax\(0, 1\.05fr\) minmax\(320px, 0\.95fr\)/);
+    assert.match(dashboardCss, /backdrop-filter: none/);
+
+    const pcDetailsSource = readFileSync("src/components/PcDetailsPanel.tsx", "utf8");
+    assert.match(pcDetailsSource, /role="dialog"/);
+    assert.match(pcDetailsSource, /aria-modal="true"/);
+    assert.match(pcDetailsSource, /event\.key === "Escape"/);
+    assert.match(pcDetailsSource, /querySelectorAll<HTMLElement>/);
+    assert.match(pcDetailsSource, /Session Actions/);
+    assert.match(pcDetailsSource, /Messaging/);
+    assert.match(pcDetailsSource, /Power Controls/);
+    assert.match(pcDetailsSource, /Advanced \/ Technical Details/);
+    assert.match(pcDetailsSource, /<Icon name="message" \/>[\s\S]*Send Message/);
+    assert.match(pcDetailsSource, /<Icon name="power" \/>[\s\S]*Wake PC/);
+    assert.match(pcDetailsSource, /<Icon name="moon" \/>[\s\S]*Sleep/);
+    assert.match(pcDetailsSource, /<Icon name="rotate" \/>[\s\S]*Restart/);
+    assert.match(pcDetailsSource, /<Icon name="powerOff" \/>[\s\S]*Shutdown/);
+    assert.match(pcDetailsSource, /<Icon name="save" \/>[\s\S]*Save MAC/);
+    assert.match(pcDetailsSource, /Wake-on-LAN is unavailable until a MAC address is saved/);
+    assert.match(pcDetailsSource, /MAC address[\s\S]*<input[\s\S]*Save MAC/);
+    assert.ok(
+      pcDetailsSource.lastIndexOf("MAC address") > pcDetailsSource.indexOf("Advanced / Technical Details")
+    );
+
+    const loginSource = readFileSync("src/components/LoginClient.tsx", "utf8");
+    assert.match(loginSource, /Who&apos;s in charge right now\?/);
+    assert.match(loginSource, /fetchLoginOperators/);
+    assert.match(loginSource, /quickOperatorLogin/);
+    assert.match(loginSource, /adminOperatorLogin/);
+    assert.match(loginSource, /Show password/);
+    assert.doesNotMatch(loginSource, /Username/);
+    assert.doesNotMatch(loginSource, /placeholder="cashier"/);
+
+    const dashboardSource = readFileSync("src/components/DashboardClient.tsx", "utf8");
+    assert.doesNotMatch(dashboardSource, /Sino ang naka-bantay ngayon/);
+    assert.doesNotMatch(dashboardSource, /Current on-duty operator/);
+
+    const operatorConfigSource = readFileSync("../server/operator_config.py", "utf8");
+    for (const name of ["Mama", "Neil", "Tyrone", "Rogene", "Rojan", "Bel", "Karen", "Admin"]) {
+      assert.match(operatorConfigSource, new RegExp(name));
+    }
 
     const loggedErrors: unknown[] = [];
     console.error = (...args: unknown[]) => {

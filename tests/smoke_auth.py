@@ -15,15 +15,19 @@ def main() -> None:
         os.environ["SECRET_GROUNDS_DB_PATH"] = str(Path(temp_directory) / "auth.sqlite3")
 
         from server.auth import (
+            authenticate_admin_operator,
             auth_session_repository,
             authenticate_login,
+            authenticate_quick_operator,
             get_current_user,
+            list_family_operator_access,
             require_owner,
             require_role,
             set_auth_cookie,
         )
         from server.database import get_connection, initialize_database
         from server.main import (
+            quick_operator_login,
             create_rate,
             open_shift,
             record_payment,
@@ -38,6 +42,7 @@ def main() -> None:
             ShiftOpenRequest,
             SessionRecord,
             UserCreateRequest,
+            QuickOperatorLoginRequest,
             UserStatusUpdate,
             UserUpdateRequest,
         )
@@ -46,6 +51,62 @@ def main() -> None:
 
         initialize_database()
         user_repository = UserRepository()
+
+        operators = list_family_operator_access()
+        assert [operator.display_name for operator in operators] == [
+            "Mama",
+            "Neil",
+            "Tyrone",
+            "Rogene",
+            "Rojan",
+            "Bel",
+            "Karen",
+            "Admin",
+        ]
+        assert all(
+            operator.user is not None
+            for operator in operators
+        )
+        assert authenticate_quick_operator("operator_mama").display_name == "Mama"
+        assert authenticate_quick_operator("operator_neil").display_name == "Neil"
+        for operator_id in [
+            "operator_tyrone",
+            "operator_rogene",
+            "operator_rojan",
+            "operator_bel",
+            "operator_karen",
+        ]:
+            assert authenticate_quick_operator(operator_id).user_id == operator_id
+        try:
+            authenticate_quick_operator("operator_not_real")
+        except HTTPException as error:
+            assert error.status_code == 403
+        else:
+            raise AssertionError("Arbitrary operator quick access should be rejected")
+
+        try:
+            authenticate_admin_operator("wrong-password")
+        except HTTPException as error:
+            assert error.status_code == 401
+        else:
+            raise AssertionError("Wrong Admin password should be rejected")
+        assert authenticate_admin_operator("admin12345").display_name == "Admin"
+        operator_response = Response()
+        quick_operator_login(
+            QuickOperatorLoginRequest(operator_id="operator_rogene"),
+            operator_response,
+        )
+        with get_connection() as connection:
+            operator_audit_row = connection.execute(
+                """
+                SELECT operator_display_name
+                FROM operator_audit_events
+                WHERE event_type = 'operator_changed'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        assert operator_audit_row["operator_display_name"] == "Rogene"
 
         owner = user_repository.create_user(
             UserCreateRequest(
@@ -96,8 +157,8 @@ def main() -> None:
         )
         admin = user_repository.create_user(
             UserCreateRequest(
-                username="admin",
-                display_name="Admin",
+                username="admin_test",
+                display_name="Admin Test",
                 password="admin-pass",
                 role="admin",
             )
@@ -139,16 +200,18 @@ def main() -> None:
         else:
             raise AssertionError("Admin should not pass owner gate")
 
-        try:
-            update_user_status(
-                owner.user_id,
-                UserStatusUpdate(is_active=False),
-                stored_owner,
-            )
-        except HTTPException as error:
-            assert error.status_code == 400
-        else:
-            raise AssertionError("Last active owner should not be disabled")
+        updated_owner_status = update_user_status(
+            owner.user_id,
+            UserStatusUpdate(is_active=False),
+            stored_owner,
+        )
+        assert updated_owner_status is not None
+        assert updated_owner_status.is_active is False
+        update_user_status(
+            owner.user_id,
+            UserStatusUpdate(is_active=True),
+            stored_owner,
+        )
 
         now = current_utc_time()
         session_repository.create_session(
@@ -182,7 +245,7 @@ def main() -> None:
                 "SELECT recorded_by_user_id FROM payments WHERE session_id = ?",
                 ("auth-session",),
             ).fetchone()
-        assert payment_row["recorded_by_user_id"] == owner.user_id
+        assert payment_row["recorded_by_user_id"] == "operator_rogene"
 
         created_rate = create_rate(
             RateProfileCreate(

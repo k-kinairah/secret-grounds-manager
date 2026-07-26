@@ -4,13 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "@/app/page.module.css";
 import {
   broadcastAnnouncement,
+  cancelPreparedSession,
   endSession,
   fetchPcs,
   fetchCurrentUser,
+  fetchPcLayouts,
   fetchRates,
   forceEndSession,
   getPollingIntervalMs,
   recordPayment,
+  prepareStartupSession,
+  retryPreparedWake,
+  updatePcLayout,
   startMemberSession,
   startOpenTimeSession,
   startPrepaidSession,
@@ -19,11 +24,11 @@ import {
 } from "@/lib/api";
 import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
 import { calculateOpenTimeEstimate, secondsFromScheduledEnd } from "@/lib/time";
-import type { CurrentUser, MessageSeverity, PcSummary, RateProfile } from "@/lib/types";
+import type { CurrentUser, MessageSeverity, PcLayoutSlot, PcSummary, RateProfile } from "@/lib/types";
 import { DashboardSummary } from "./DashboardSummary";
 import { EndSessionDialog } from "./EndSessionDialog";
-import { PcCard } from "./PcCard";
 import { PcDetailsPanel } from "./PcDetailsPanel";
+import { PcMonitorTile } from "./PcMonitorTile";
 import { PaymentDialog } from "./PaymentDialog";
 import { SessionDialog } from "./SessionDialog";
 
@@ -41,10 +46,13 @@ export function DashboardClient() {
   const [pcs, setPcs] = useState<PcSummary[]>([]);
   const [rates, setRates] = useState<RateProfile[]>([]);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [layoutSlots, setLayoutSlots] = useState<PcLayoutSlot[]>([]);
+  const [showSetupLayout, setShowSetupLayout] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [selectedPcName, setSelectedPcName] = useState<string | null>(null);
   const [isMutating, setIsMutating] = useState(false);
   const [now, setNow] = useState<Date | null>(null);
   const isPollingRef = useRef(false);
@@ -65,6 +73,10 @@ export function DashboardClient() {
       setPcs(nextPcs);
       setRates(nextRates);
       setCurrentUser(nextUser);
+      if (nextUser.role !== "owner") {
+        setShowSetupLayout(false);
+        setLayoutSlots([]);
+      }
       setIsConnected(true);
       setHasLoadedOnce(true);
       setMessage(null);
@@ -138,6 +150,23 @@ export function DashboardClient() {
     [pcs, now]
   );
   const summary = summarizePcs(livePcs);
+  const groupedPcs = useMemo(() => {
+    const groups = new Map<string, PcSummary[]>();
+    for (const pc of livePcs) {
+      const label = pc.area_label ?? "UNASSIGNED";
+      groups.set(label, [...(groups.get(label) ?? []), pc]);
+    }
+    return Array.from(groups.entries());
+  }, [livePcs]);
+  const registeredPcNames = useMemo(() => new Set(livePcs.map((pc) => pc.pc_name)), [livePcs]);
+  const groupedLayoutSlots = useMemo(() => {
+    const groups = new Map<string, PcLayoutSlot[]>();
+    for (const slot of layoutSlots) {
+      const label = slot.area_label || "UNASSIGNED";
+      groups.set(label, [...(groups.get(label) ?? []), slot]);
+    }
+    return Array.from(groups.entries());
+  }, [layoutSlots]);
   const meteredRate = useMemo(
     () => rates.find((rate) => rate.rate_type === "metered" && rate.is_active) ?? null,
     [rates]
@@ -156,6 +185,63 @@ export function DashboardClient() {
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Action failed. Please try again.");
+    } finally {
+      setIsMutating(false);
+    }
+  }
+
+  async function retryWakeAction(pc: PcSummary) {
+    if (!pc.prepared_session_id) {
+      setMessage("No prepared startup is waiting for this PC.");
+      return;
+    }
+    void runAction(
+      () => retryPreparedWake(pc.prepared_session_id as string),
+      `Wake signal sent again for ${pc.display_name ?? pc.pc_name}.`
+    );
+  }
+
+  async function cancelPreparedAction(pc: PcSummary) {
+    if (!pc.prepared_session_id) {
+      setMessage("No prepared startup is waiting for this PC.");
+      return;
+    }
+    void runAction(
+      () => cancelPreparedSession(pc.prepared_session_id as string),
+      `${pc.display_name ?? pc.pc_name} prepared startup cancelled. No charge was created.`
+    );
+  }
+
+  async function loadSetupLayout() {
+    setIsMutating(true);
+    try {
+      const slots = await fetchPcLayouts(true);
+      setLayoutSlots(slots);
+      setShowSetupLayout(true);
+      setMessage("Setup/Layout mode is showing configured slots. Unregistered slots are not counted in operations.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not load layout setup.");
+    } finally {
+      setIsMutating(false);
+    }
+  }
+
+  async function hideLayoutSlot(slot: PcLayoutSlot) {
+    setIsMutating(true);
+    try {
+      await updatePcLayout(slot.pc_name, {
+        display_name: slot.display_name,
+        area_label: slot.area_label,
+        layout_order: slot.layout_order,
+        is_vip: slot.is_vip,
+        is_enabled: false,
+        mac_address: slot.mac_address
+      });
+      const slots = await fetchPcLayouts(true);
+      setLayoutSlots(slots);
+      setMessage(`${slot.display_name} hidden from setup layout.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not hide this layout slot.");
     } finally {
       setIsMutating(false);
     }
@@ -242,6 +328,11 @@ export function DashboardClient() {
     return currentPc ?? pc;
   }
 
+  function openDetails(pc: PcSummary) {
+    setSelectedPcName(pc.pc_name);
+    setDialog({ type: "details", pc });
+  }
+
   const currentTime = now === null ? "Loading time..." : now.toLocaleString();
 
   return (
@@ -263,6 +354,23 @@ export function DashboardClient() {
           <button className={styles.secondaryButton} onClick={() => setDialog({ type: "announcement" })} type="button">
             Announcement
           </button>
+          {currentUser?.role === "owner" ? (
+            <button
+              className={styles.secondaryButton}
+              disabled={isMutating}
+              onClick={() => {
+                if (showSetupLayout) {
+                  setShowSetupLayout(false);
+                  setMessage(null);
+                } else {
+                  void loadSetupLayout();
+                }
+              }}
+              type="button"
+            >
+              {showSetupLayout ? "Operational View" : "Setup/Layout"}
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -281,20 +389,81 @@ export function DashboardClient() {
         {hasLoadedOnce && livePcs.length === 0 ? (
           <div className={styles.emptyState}>No registered PCs.</div>
         ) : null}
-        {livePcs.map((pc) => (
-          <PcCard
-            key={pc.pc_name}
-            pc={pc}
-            onAddTime={(selectedPc) => setDialog({ type: "add", pc: selectedPc })}
-            onDetails={(selectedPc) => setDialog({ type: "details", pc: selectedPc })}
-            onEnd={(selectedPc) => setDialog({ type: "end", pc: selectedPc })}
-            onResolve={(selectedPc) => setDialog({ type: "resolve", pc: selectedPc })}
-            onStart={(selectedPc) => setDialog({ type: "start", pc: selectedPc })}
-            onPayment={(selectedPc) => setDialog({ type: "payment", pc: selectedPc })}
-            currentUserRole={currentUser?.role ?? null}
-          />
+        {groupedPcs.map(([groupLabel, groupPcs]) => (
+          <section className={styles.pcLayoutGroup} key={groupLabel} aria-label={groupLabel}>
+            <h2>{groupLabel}</h2>
+            <div className={styles.monitorGrid}>
+              {groupPcs.map((pc) => (
+                <PcMonitorTile
+                  key={pc.pc_name}
+                  isSelected={selectedPcName === pc.pc_name && dialog?.type === "details"}
+                  pc={pc}
+                  onSelect={openDetails}
+                />
+              ))}
+            </div>
+          </section>
         ))}
       </section>
+
+      {showSetupLayout && currentUser?.role === "owner" ? (
+        <section className={styles.setupLayoutSection} aria-label="Setup layout slots">
+          <div className={styles.sectionHeader}>
+            <div>
+              <h2>Setup / Layout</h2>
+              <p>Configured slots for future client installations. Not Installed slots are excluded from dashboard counts.</p>
+            </div>
+          </div>
+          {groupedLayoutSlots.map(([groupLabel, slots]) => (
+            <section className={styles.pcLayoutGroup} key={groupLabel} aria-label={`${groupLabel} setup`}>
+              <h2>{groupLabel}</h2>
+              <div className={styles.monitorGrid}>
+                {slots.map((slot) => {
+                  const isRegistered = registeredPcNames.has(slot.pc_name);
+                  return (
+                    <div
+                      className={`${styles.monitorCard} ${styles.setupSlotCard} ${
+                        !slot.is_enabled ? styles.disabledSetupSlot : ""
+                      }`}
+                      key={slot.pc_name}
+                    >
+                      <div className={styles.pcAreaRow}>
+                        <span>{slot.area_label}</span>
+                        {slot.is_vip ? <span className={styles.vipBadge}>VIP</span> : null}
+                      </div>
+                      <div className={styles.monitorFace}>
+                        <h3>{slot.display_name}</h3>
+                        <span className={isRegistered ? styles.installedStatus : styles.notInstalledStatus}>
+                          {isRegistered ? "Registered" : "Not Installed"}
+                        </span>
+                      </div>
+                      <div className={styles.setupSlotActions}>
+                        <button
+                          className={styles.secondaryButton}
+                          onClick={() => {
+                            setMessage("Use the PC details/settings flow to configure slot metadata.");
+                          }}
+                          type="button"
+                        >
+                          Configure
+                        </button>
+                        <button
+                          className={styles.dangerButton}
+                          disabled={isMutating || !slot.is_enabled}
+                          onClick={() => void hideLayoutSlot(slot)}
+                          type="button"
+                        >
+                          Hide Slot
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </section>
+      ) : null}
 
       {dialog?.type === "start" ? (
         <SessionDialog
@@ -306,15 +475,30 @@ export function DashboardClient() {
               () =>
                 "sessionMode" in selection
                   ? selection.sessionMode === "open_time"
-                    ? startOpenTimeSession(dialog.pc.pc_name)
-                    : startMemberSession(dialog.pc.pc_name, selection)
-                  : startPrepaidSession(dialog.pc.pc_name, selection),
-              `${dialog.pc.pc_name} session started.`
+                    ? dialog.pc.connection_status === "offline"
+                      ? prepareStartupSession(dialog.pc.pc_name, {
+                          sessionMode: "open_time",
+                          operatorId: currentUser?.user_id
+                        })
+                      : startOpenTimeSession(dialog.pc.pc_name)
+                    : dialog.pc.connection_status === "offline"
+                      ? prepareStartupSession(dialog.pc.pc_name, selection)
+                      : startMemberSession(dialog.pc.pc_name, selection)
+                  : dialog.pc.connection_status === "offline"
+                    ? prepareStartupSession(dialog.pc.pc_name, {
+                        ...selection,
+                        operatorId: currentUser?.user_id
+                      })
+                    : startPrepaidSession(dialog.pc.pc_name, selection),
+              dialog.pc.connection_status === "offline"
+                ? `Wake signal sent for ${dialog.pc.display_name ?? dialog.pc.pc_name}. Session will start after the client connects.`
+                : `${dialog.pc.display_name ?? dialog.pc.pc_name} session started.`
             )
           }
           pc={dialog.pc}
           meteredRate={meteredRate}
           packageRates={packageRates}
+          currentOperator={currentUser}
         />
       ) : null}
 
@@ -378,8 +562,15 @@ export function DashboardClient() {
         <PcDetailsPanel
           currentUserRole={currentUser?.role ?? null}
           onActionComplete={() => void refresh()}
+          onAddTime={(selectedPc) => setDialog({ type: "add", pc: selectedPc })}
+          onCancelPrepared={(selectedPc) => void cancelPreparedAction(selectedPc)}
           pc={findCurrentPc(dialog.pc)}
           onClose={() => setDialog(null)}
+          onEnd={(selectedPc) => setDialog({ type: "end", pc: selectedPc })}
+          onPayment={(selectedPc) => setDialog({ type: "payment", pc: selectedPc })}
+          onResolve={(selectedPc) => setDialog({ type: "resolve", pc: selectedPc })}
+          onRetryWake={(selectedPc) => void retryWakeAction(selectedPc)}
+          onStart={(selectedPc) => setDialog({ type: "start", pc: selectedPc })}
         />
       ) : null}
 

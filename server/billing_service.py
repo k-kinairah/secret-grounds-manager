@@ -84,7 +84,7 @@ class BillingService:
             return open_shift.shift_id
 
         admin_override_enabled = (
-            os.getenv("SECRET_GROUNDS_ALLOW_ADMIN_PAYMENTS_WITHOUT_SHIFT", "false")
+            os.getenv("SECRET_GROUNDS_ALLOW_ADMIN_PAYMENTS_WITHOUT_SHIFT", "true")
             .strip()
             .lower()
             in {"1", "true", "yes", "on"}

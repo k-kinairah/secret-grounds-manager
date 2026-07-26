@@ -6,14 +6,16 @@ from typing import Callable
 from fastapi import Cookie, Depends, HTTPException, Response
 
 from server.auth_repository import AuthSessionRepository
+from server.operator_config import FAMILY_OPERATOR_BY_ID, FAMILY_OPERATOR_BY_USERNAME, FAMILY_OPERATORS
 from server.passwords import verify_password
-from server.schemas import LoginRequest, UserPublic, UserRecord, UserRole
+from server.schemas import LoginRequest, OperatorAccessRecord, UserPublic, UserRecord, UserRole
 from server.user_repository import UserRepository
 
 
 AUTH_COOKIE_NAME = "sg_session"
 SESSION_LIFETIME_SECONDS = int(os.getenv("SECRET_GROUNDS_AUTH_SECONDS", str(8 * 60 * 60)))
 FAILED_LOGIN_COUNTS: dict[str, int] = defaultdict(int)
+FAILED_ADMIN_OPERATOR_ATTEMPTS: dict[str, int] = defaultdict(int)
 
 
 user_repository = UserRepository()
@@ -65,6 +67,51 @@ def authenticate_login(request: LoginRequest) -> UserRecord:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     FAILED_LOGIN_COUNTS.pop(username_key, None)
+    user_repository.mark_login(user.user_id)
+    return user
+
+
+def list_family_operator_access() -> list[OperatorAccessRecord]:
+    records: list[OperatorAccessRecord] = []
+    for operator in FAMILY_OPERATORS:
+        user = user_repository.get_by_username(operator.username)
+        records.append(
+            OperatorAccessRecord(
+                operator_id=operator.operator_id,
+                display_name=operator.display_name,
+                password_required=operator.password_required,
+                user=to_public_user(user) if user is not None and user.is_active else None,
+            )
+        )
+    return records
+
+
+def authenticate_quick_operator(operator_id: str) -> UserRecord:
+    operator = FAMILY_OPERATOR_BY_ID.get(operator_id)
+    if operator is None or operator.password_required:
+        raise HTTPException(status_code=403, detail="Operator quick access is not allowed")
+
+    user = user_repository.get_by_username(operator.username)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=404, detail="Operator is not configured")
+
+    user_repository.mark_login(user.user_id)
+    return user
+
+
+def authenticate_admin_operator(password: str, client_key: str = "admin") -> UserRecord:
+    attempts = FAILED_ADMIN_OPERATOR_ATTEMPTS[client_key]
+    if attempts >= 3:
+        time.sleep(min(2.0, 0.35 * attempts))
+
+    operator = FAMILY_OPERATOR_BY_USERNAME["admin"]
+    user = user_repository.get_by_username(operator.username)
+    if user is None or not user.is_active or not verify_password(password, user.password_hash):
+        FAILED_ADMIN_OPERATOR_ATTEMPTS[client_key] += 1
+        print("Failed Admin operator login attempt")
+        raise HTTPException(status_code=401, detail="Invalid Admin password")
+
+    FAILED_ADMIN_OPERATOR_ATTEMPTS.pop(client_key, None)
     user_repository.mark_login(user.user_id)
     return user
 

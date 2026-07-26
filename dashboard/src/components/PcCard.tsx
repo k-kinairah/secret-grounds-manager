@@ -1,5 +1,5 @@
 import styles from "@/app/page.module.css";
-import { formatDateTime, formatMoney, formatTimer } from "@/lib/time";
+import { formatMoney, formatTimer } from "@/lib/time";
 import { getPcActionAvailability, getPcCardTone } from "@/lib/pcStatus";
 import type { PcSummary, UserRole } from "@/lib/types";
 
@@ -11,6 +11,8 @@ interface PcCardProps {
   onResolve: (pc: PcSummary) => void;
   onDetails: (pc: PcSummary) => void;
   onPayment: (pc: PcSummary) => void;
+  onRetryWake: (pc: PcSummary) => void;
+  onCancelPrepared: (pc: PcSummary) => void;
   currentUserRole: UserRole | null;
 }
 
@@ -34,11 +36,21 @@ export function PcCard({
   onResolve,
   onDetails,
   onPayment,
+  onRetryWake,
+  onCancelPrepared,
   currentUserRole
 }: PcCardProps) {
   const actions = getPcActionAvailability(pc);
   const tone = getPcCardTone(pc);
-  const connectionLabel = pc.connection_status === "online" ? "Online" : "Offline";
+  const displayName = pc.display_name ?? pc.pc_name;
+  const connectionLabel =
+    pc.power_state === "waking"
+      ? "Waking"
+      : pc.power_state === "starting"
+        ? "Starting"
+        : pc.connection_status === "online"
+          ? "Online"
+          : "Powered Off";
   const sessionLabel =
     pc.session_status === "active"
       ? "In Use"
@@ -66,14 +78,18 @@ export function PcCard({
     pc.recovery_required && (currentUserRole === "owner" || currentUserRole === "admin");
 
   return (
-    <article className={`${styles.pcCard} ${toneClassName[tone]}`}>
+    <article className={`${styles.pcCard} ${styles.monitorCard} ${toneClassName[tone]}`}>
       <button
-        aria-label={`View ${pc.pc_name} details`}
+        aria-label={`View ${displayName} details`}
         onClick={() => onDetails(pc)}
         className={styles.pcCardButton}
       >
+        <div className={styles.pcAreaRow}>
+          <span>{pc.area_label ?? "Secret Grounds"}</span>
+          {pc.is_vip ? <strong>VIP</strong> : null}
+        </div>
         <div className={styles.pcHeader}>
-          <div className={styles.pcName}>{pc.pc_name}</div>
+          <div className={styles.pcName}>{displayName}</div>
           <div className={styles.badgeRow}>
             <span
               className={`${styles.statusPill} ${
@@ -87,7 +103,21 @@ export function PcCard({
             </span>
           </div>
         </div>
-        {pc.session_status === "active" || pc.session_status === "ending" ? (
+        {pc.startup_status !== null ? (
+          <div className={styles.timerBlock}>
+            <div className={styles.timerLabel}>
+              {pc.startup_elapsed_seconds !== null && pc.startup_elapsed_seconds >= 90
+                ? "Startup warning"
+                : "Waiting for client"}
+            </div>
+            <div className={styles.timerValue}>{formatTimer(pc.startup_elapsed_seconds)}</div>
+            <p className={styles.panelText}>
+              {pc.startup_elapsed_seconds !== null && pc.startup_elapsed_seconds >= 30
+                ? `Still waiting for ${displayName} to connect.`
+                : "Wake signal sent. Client will start automatically after Windows boots."}
+            </p>
+          </div>
+        ) : pc.session_status === "active" || pc.session_status === "ending" ? (
           <div className={styles.timerBlock}>
             <div className={styles.timerLabel}>
               {isOpenTime || isMemberSession ? "Elapsed" : "Remaining"}
@@ -104,14 +134,20 @@ export function PcCard({
           <div className={styles.availableBlock}>Settlement Pending</div>
         ) : (
           <div className={styles.availableBlock}>
-            {pc.session_status === "unknown" ? "Recovery Review" : "Available"}
+            {pc.connection_status === "offline"
+              ? pc.mac_address
+                ? "Available for Wake-on-LAN"
+                : "Powered off"
+              : pc.session_status === "unknown"
+                ? "Recovery Review"
+                : "Available"}
           </div>
         )}
         <dl className={styles.detailList}>
           <div className={styles.detailRow}>
-            <span>{pc.connection_status === "offline" ? "Last seen" : "IP address"}</span>
+            <span>{pc.connection_status === "offline" ? "Power" : "State"}</span>
             <strong>
-              {pc.connection_status === "offline" ? formatDateTime(pc.last_seen) : pc.ip_address}
+              {pc.connection_status === "offline" ? "Powered Off" : connectionLabel}
             </strong>
           </div>
           {pc.session_status === "active" || pc.session_status === "ending" || isSettlementPending ? (
@@ -168,8 +204,19 @@ export function PcCard({
           disabled={!actions.canStart}
           onClick={() => onStart(pc)}
         >
-          Start Session
+          {pc.connection_status === "offline" ? "Start & Wake" : "Start Session"}
         </button>
+        {pc.startup_status !== null ? (
+          <>
+            <button className={styles.secondaryButton} onClick={() => onRetryWake(pc)}>
+              Retry Wake
+            </button>
+            <button className={styles.dangerButton} onClick={() => onCancelPrepared(pc)}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
         <button
           className={styles.secondaryButton}
           disabled={!actions.canAddTime || isOpenTime}
@@ -191,6 +238,8 @@ export function PcCard({
         >
           {pc.recovery_required ? (canResolve ? "Resolve Session" : "Needs Admin") : "End Session"}
         </button>
+          </>
+        )}
       </div>
     </article>
   );

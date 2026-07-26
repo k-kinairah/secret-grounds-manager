@@ -75,7 +75,7 @@ def main() -> None:
         )
         admin = user_repository.create_user(
             UserCreateRequest(
-                username="admin",
+                username="admin_test",
                 display_name="Admin",
                 password="password123",
                 role="admin",
@@ -249,7 +249,7 @@ def main() -> None:
         wake = wake_pc("PC-OFFLINE", admin_user)
         assert wake.command.status == "completed"
         assert wake.command.client_response == "Wake-on-LAN packet_sent"
-        assert packets == ["AA:BB:CC:DD:EE:FF"]
+        assert packets == ["AA:BB:CC:DD:EE:FF"] * 3
 
         admin_history = list_remote_commands(admin_user)
         cashier_history = list_remote_commands(cashier_user)

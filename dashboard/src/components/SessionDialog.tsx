@@ -4,7 +4,7 @@ import { fetchMembers } from "@/lib/api";
 import { calculateCashChange } from "@/lib/paymentSelection";
 import { calculatePreviewSeconds } from "@/lib/sessionSelection";
 import { formatMoney, formatNaturalDuration, formatRateDuration, minutesToSeconds } from "@/lib/time";
-import type { MemberRecord, MemberSessionSelection, PaymentMethod, PcSummary, PrepaidSessionSelection, RateProfile } from "@/lib/types";
+import type { CurrentUser, MemberRecord, MemberSessionSelection, PaymentMethod, PcSummary, PrepaidSessionSelection, RateProfile } from "@/lib/types";
 
 type DialogMode = "start" | "add";
 type SelectionTab = "amount" | "packages" | "member" | "open_time";
@@ -18,6 +18,8 @@ interface SessionDialogProps {
   isLoading: boolean;
   onCancel: () => void;
   onConfirm: (selection: SessionSelection) => void;
+  currentOperator?: CurrentUser | null;
+  operators?: CurrentUser[];
 }
 
 const quickAmounts = ["5.00", "10.00", "20.00", "50.00"];
@@ -29,7 +31,8 @@ export function SessionDialog({
   packageRates,
   isLoading,
   onCancel,
-  onConfirm
+  onConfirm,
+  currentOperator
 }: SessionDialogProps) {
   const [activeTab, setActiveTab] = useState<SelectionTab>("amount");
   const [amount, setAmount] = useState("");
@@ -151,6 +154,18 @@ export function SessionDialog({
     <div className={styles.overlay} role="presentation">
       <section className={styles.dialog} role="dialog" aria-modal="true" aria-label={title}>
         <h2>{title}</h2>
+        <div className={styles.amountPreview}>
+          <span>Operator</span>
+          <strong>{currentOperator?.display_name ?? "Select an on-duty operator before starting."}</strong>
+          {pc.connection_status === "offline" ? (
+            <>
+              <span>Power state</span>
+              <strong>
+                PC is currently powered off. The system will send a wake signal, wait for the client, then start the session automatically.
+              </strong>
+            </>
+          ) : null}
+        </div>
         <div className={styles.tabList} role="tablist" aria-label="Session selection method">
           <button
             aria-selected={activeTab === "amount"}
@@ -413,8 +428,16 @@ export function SessionDialog({
           <button className={styles.secondaryButton} disabled={isLoading} onClick={onCancel}>
             Cancel
           </button>
-          <button className={styles.primaryButton} disabled={isLoading} onClick={confirm}>
-            {isLoading ? "Working..." : "Confirm"}
+          <button
+            className={styles.primaryButton}
+            disabled={isLoading || (mode === "start" && !currentOperator)}
+            onClick={confirm}
+          >
+            {isLoading
+              ? "Working..."
+              : pc.connection_status === "offline" && mode === "start"
+                ? "Start & Wake PC"
+                : "Confirm"}
           </button>
         </div>
       </section>

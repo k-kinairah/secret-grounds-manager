@@ -40,6 +40,16 @@ PaymentMethod = Literal["cash", "gcash", "maya", "other"]
 PaymentStatus = Literal["completed", "voided"]
 BillingPaymentStatus = Literal["unpaid", "partially_paid", "paid", "overpaid"]
 SessionMode = Literal["prepaid", "open_time", "member_balance"]
+PreparedSessionMode = Literal["prepaid", "open_time", "member_balance"]
+PreparedSessionStatus = Literal[
+    "prepared",
+    "waking",
+    "waiting_for_client",
+    "starting",
+    "active",
+    "failed",
+    "cancelled",
+]
 UserRole = Literal["owner", "admin", "cashier"]
 ShiftStatus = Literal["open", "closed"]
 MemberStatus = Literal["active", "inactive"]
@@ -95,11 +105,29 @@ class PCRecord(BaseModel):
 
 class PCDashboardRecord(BaseModel):
     pc_name: str
+    display_name: str | None = None
+    area_label: str | None = None
+    layout_order: int = 0
+    is_vip: bool = False
+    is_enabled: bool = True
     ip_address: str
     connection_status: Literal["online", "offline"]
     has_command_connection: bool = False
+    power_state: Literal[
+        "online",
+        "powered_off",
+        "waking",
+        "starting",
+        "connection_problem",
+        "recovery_required",
+    ] = "powered_off"
     last_seen: datetime
     session_status: Literal["idle", "active", "ending", "settlement_pending", "unknown"]
+    startup_status: PreparedSessionStatus | None = None
+    prepared_session_id: str | None = None
+    startup_elapsed_seconds: int | None = None
+    startup_expires_at: datetime | None = None
+    startup_failure_reason: str | None = None
     active_session_id: str | None = None
     started_at: datetime | None = None
     scheduled_end_at: datetime | None = None
@@ -235,6 +263,113 @@ class WakeCommandResponse(BaseModel):
     message: str
 
 
+class PCLayoutRecord(BaseModel):
+    pc_name: str
+    display_name: str
+    area_label: str
+    layout_order: int
+    is_vip: bool = False
+    is_enabled: bool = True
+    mac_address: str | None = None
+    updated_at: datetime
+
+
+class PCLayoutUpdate(BaseModel):
+    display_name: str = Field(..., min_length=1)
+    area_label: str = Field(..., min_length=1)
+    layout_order: int = Field(..., ge=0)
+    is_vip: bool = False
+    is_enabled: bool = True
+    mac_address: str | None = None
+
+    @field_validator("mac_address")
+    @classmethod
+    def validate_mac_address(cls, value: str | None) -> str | None:
+        return normalize_mac_address(value)
+
+
+class PreparedSessionRecord(BaseModel):
+    prepared_session_id: str
+    pc_name: str
+    status: PreparedSessionStatus
+    session_mode: PreparedSessionMode
+    rate_id: str | None = None
+    rate_name_snapshot: str | None = None
+    duration_seconds: int | None = None
+    amount: Decimal | None = None
+    payment_json: str | None = None
+    member_id: str | None = None
+    member_pin: str | None = None
+    member_name_snapshot: str | None = None
+    member_open_play: bool = False
+    prepared_by_user_id: str | None = None
+    prepared_operator_id: str | None = None
+    prepared_at: datetime
+    wake_requested_at: datetime | None = None
+    wake_status: str | None = None
+    startup_status: PreparedSessionStatus
+    failure_reason: str | None = None
+    expires_at: datetime
+    activated_session_id: str | None = None
+    activated_at: datetime | None = None
+    cancelled_by_user_id: str | None = None
+    cancelled_at: datetime | None = None
+
+
+class PreparedSessionStartRequest(BaseModel):
+    pc_name: str = Field(..., min_length=1)
+    session_mode: PreparedSessionMode = "prepaid"
+    duration_seconds: int | None = Field(default=None, gt=0)
+    rate_id: str | None = None
+    amount: Decimal | None = None
+    payment: "PaymentCreateRequest | None" = None
+    member_id: str | None = None
+    member_pin: str | None = None
+    operator_id: str | None = None
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal | None) -> Decimal | None:
+        return normalize_positive_money(value) if value is not None else None
+
+
+class PreparedSessionResponse(BaseModel):
+    prepared_session: PreparedSessionRecord
+    message: str
+
+
+class PreparedSessionActivationResponse(BaseModel):
+    prepared_session: PreparedSessionRecord
+    session: SessionRecord | None = None
+    command: ClientCommand | None = None
+    acknowledgements: list[CommandAcknowledgement] = Field(default_factory=list)
+
+
+class OperatorSelectionRequest(BaseModel):
+    operator_id: str = Field(..., min_length=1)
+
+
+class OperatorAccessRecord(BaseModel):
+    operator_id: str
+    display_name: str
+    password_required: bool
+    user: "UserPublic | None" = None
+
+
+class QuickOperatorLoginRequest(BaseModel):
+    operator_id: str = Field(..., min_length=1)
+
+
+class AdminOperatorLoginRequest(BaseModel):
+    password: str = Field(..., min_length=1)
+
+
+class OnDutyOperatorRecord(BaseModel):
+    operator: "UserPublic | None"
+    selected_by_user_id: str | None = None
+    selected_at: datetime | None = None
+
+
 SessionStatus = Literal[
     "active",
     "ending",
@@ -260,6 +395,16 @@ SessionEventType = Literal[
     "open_time_settled",
     "payment_action_review_required",
     "recovery_force_end",
+    "session_prepared",
+    "wake_signal_sent",
+    "client_connected",
+    "session_activation_started",
+    "session_activated",
+    "startup_failed",
+    "prepared_session_cancelled",
+    "automatic_reminder_sent",
+    "time_expired",
+    "operator_changed",
 ]
 
 

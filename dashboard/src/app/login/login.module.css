@@ -22,6 +22,168 @@
   width: 100%;
 }
 
+.operatorPanel {
+  background: linear-gradient(180deg, rgba(17, 27, 45, 0.98), rgba(7, 16, 30, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 10px;
+  box-shadow: 0 28px 80px rgb(0 0 0 / 0.48), 0 0 38px rgb(14 165 233 / 0.12);
+  display: grid;
+  gap: 24px;
+  max-width: 760px;
+  padding: 34px;
+  width: min(760px, 94vw);
+}
+
+.logoLockup {
+  align-items: center;
+  color: #22d3ee;
+  display: flex;
+  gap: 14px;
+}
+
+.logoMark {
+  align-items: center;
+  border: 2px solid #22d3ee;
+  border-radius: 8px;
+  box-shadow: 0 0 22px rgb(34 211 238 / 0.28);
+  display: inline-flex;
+  font-weight: 950;
+  height: 48px;
+  justify-content: center;
+  letter-spacing: 0;
+  width: 48px;
+}
+
+.logoText {
+  font-size: 24px;
+  font-style: italic;
+  font-weight: 950;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.operatorGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.operatorCard {
+  align-items: center;
+  background:
+    radial-gradient(circle at 18% 20%, rgb(34 211 238 / 0.12), transparent 55%),
+    #08111f;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 8px;
+  color: #f8fafc;
+  cursor: pointer;
+  display: grid;
+  gap: 5px 12px;
+  grid-template-columns: 48px 1fr;
+  min-height: 84px;
+  padding: 15px;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.operatorCard:hover:not(:disabled),
+.operatorCard:focus-visible {
+  border-color: #22d3ee;
+  box-shadow: 0 0 24px rgb(34 211 238 / 0.16);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.operatorCard span:not(.avatar) {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.operatorCard small {
+  color: #8ea4c2;
+  font-weight: 800;
+  grid-column: 2;
+}
+
+.adminCard {
+  border-color: rgba(250, 204, 21, 0.34);
+}
+
+.avatar {
+  align-items: center;
+  background: linear-gradient(135deg, #06b6d4, #2563eb);
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 16px;
+  font-weight: 950;
+  grid-row: span 2;
+  height: 48px;
+  justify-content: center;
+  width: 48px;
+}
+
+.adminOverlay {
+  align-items: center;
+  background: rgb(2 6 23 / 0.72);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 20;
+}
+
+.adminDialog {
+  background: #08111f;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 10px;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 0.5);
+  color: #e2e8f0;
+  max-width: 420px;
+  padding: 24px;
+  width: 100%;
+}
+
+.adminDialog h2 {
+  color: #f8fafc;
+  margin: 0 0 8px;
+}
+
+.adminDialog p {
+  color: #95a8c6;
+  margin: 0 0 18px;
+}
+
+.checkboxRow {
+  align-items: center;
+  color: #cbd5e1;
+  display: flex;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.dialogActions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.secondaryButton {
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 6px;
+  color: #bfdbfe;
+  font-weight: 900;
+  min-height: 46px;
+  padding: 0 16px;
+}
+
 .eyebrow {
   color: #67e8f9;
   font-size: 12px;
@@ -92,4 +254,14 @@
   font-size: 14px;
   line-height: 1.45;
   padding: 12px;
+}
+
+@media (max-width: 640px) {
+  .operatorGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .operatorPanel {
+    padding: 24px;
+  }
 }

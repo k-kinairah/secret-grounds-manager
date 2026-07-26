@@ -9,7 +9,7 @@ from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from server.connection_manager import ClientConnectionManager
-from server.database import initialize_database
+from server.database import get_connection, initialize_database
 from server.schemas import (
     AddTimeRequest,
     BillingSummary,
@@ -23,8 +23,11 @@ from server.schemas import (
     BroadcastCommandRequest,
     BroadcastCommandResponse,
     ForceEndSessionResponse,
+    AdminOperatorLoginRequest,
     MessageCommandRequest,
     PCMacAddressUpdate,
+    PCLayoutRecord,
+    PCLayoutUpdate,
     PCHeartbeat,
     PCDashboardRecord,
     PCRecord,
@@ -34,6 +37,7 @@ from server.schemas import (
     PCSessionStateResponse,
     PaymentCreateRequest,
     LoginRequest,
+    QuickOperatorLoginRequest,
     MemberAddTimeRequest,
     MemberCreateRequest,
     MemberPurchaseRequest,
@@ -48,6 +52,12 @@ from server.schemas import (
     MemberTimeTransactionRecord,
     MemberUpdateRequest,
     PasswordResetRequest,
+    PreparedSessionResponse,
+    PreparedSessionStartRequest,
+    PreparedSessionActivationResponse,
+    OnDutyOperatorRecord,
+    OperatorAccessRecord,
+    OperatorSelectionRequest,
     PrepaidAddTimeRequest,
     PrepaidStartSessionRequest,
     OpenTimeStartRequest,
@@ -77,10 +87,13 @@ from server.schemas import (
 from server.auth import (
     AUTH_COOKIE_NAME,
     auth_session_repository,
+    authenticate_admin_operator,
     authenticate_login,
+    authenticate_quick_operator,
     clear_auth_cookie,
     get_actor_user_id,
     get_current_user,
+    list_family_operator_access,
     require_owner,
     require_role,
     set_auth_cookie,
@@ -92,6 +105,8 @@ from server.member_repository import MemberRepository
 from server.payment_repository import PaymentRepository
 from server.rate_calculator import calculate_metered_time
 from server.remote_command_repository import PCMetadataRepository, RemoteCommandRepository
+from server.pc_layout_repository import OperatorStateRepository, PCLayoutRepository
+from server.prepared_session_repository import PreparedSessionRepository
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
@@ -108,6 +123,9 @@ shift_repository = ShiftRepository()
 member_repository = MemberRepository(payment_repository, shift_repository)
 remote_command_repository = RemoteCommandRepository()
 pc_metadata_repository = PCMetadataRepository()
+pc_layout_repository = PCLayoutRepository()
+operator_state_repository = OperatorStateRepository()
+prepared_session_repository = PreparedSessionRepository()
 billing_service = BillingService(session_repository, payment_repository, shift_repository, user_repository)
 rate_repository = RateRepository()
 session_service = SessionService(
@@ -118,6 +136,7 @@ session_service = SessionService(
     command_timeout_seconds=5,
     billing_service=billing_service,
     member_repository=member_repository,
+    prepared_session_repository=prepared_session_repository,
 )
 OFFLINE_AFTER_SECONDS = 15
 MONITOR_INTERVAL_SECONDS = 5
@@ -132,6 +151,42 @@ def get_allowed_cors_origins() -> list[str]:
         for origin in raw_origins.split(",")
         if origin.strip()
     ]
+
+
+def issue_operator_session(user: object, response: Response, selected_by_user_id: str | None = None) -> UserPublic:
+    public_user = to_public_user(user)
+    token, _ = auth_session_repository.create_session(
+        public_user.user_id,
+        int(os.getenv("SECRET_GROUNDS_AUTH_SECONDS", str(8 * 60 * 60))),
+    )
+    set_auth_cookie(response, token)
+    operator_state_repository.set_current(
+        public_user.user_id,
+        selected_by_user_id or public_user.user_id,
+    )
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO operator_audit_events (
+                event_id,
+                event_type,
+                operator_user_id,
+                operator_display_name,
+                selected_by_user_id,
+                created_at
+            )
+            VALUES (?, 'operator_changed', ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                public_user.user_id,
+                public_user.display_name,
+                selected_by_user_id or public_user.user_id,
+                current_utc_time().isoformat(),
+            ),
+        )
+    print(f"Operator changed: {public_user.display_name}")
+    return public_user
 
 
 def clean_pc_payload(pc_name: str, ip_address: str) -> tuple[str, str]:
@@ -219,9 +274,30 @@ def home() -> dict[str, str]:
 @app.post("/auth/login", response_model=UserPublic)
 def login(request: LoginRequest, response: Response) -> UserPublic:
     user = authenticate_login(request)
-    token, _ = auth_session_repository.create_session(user.user_id, int(os.getenv("SECRET_GROUNDS_AUTH_SECONDS", str(8 * 60 * 60))))
-    set_auth_cookie(response, token)
-    return to_public_user(user)
+    return issue_operator_session(user, response)
+
+
+@app.get("/auth/operators", response_model=list[OperatorAccessRecord])
+def list_login_operators() -> list[OperatorAccessRecord]:
+    return list_family_operator_access()
+
+
+@app.post("/auth/operator/quick", response_model=UserPublic)
+def quick_operator_login(
+    request: QuickOperatorLoginRequest,
+    response: Response,
+) -> UserPublic:
+    user = authenticate_quick_operator(request.operator_id)
+    return issue_operator_session(user, response)
+
+
+@app.post("/auth/operator/admin", response_model=UserPublic)
+def admin_operator_login(
+    request: AdminOperatorLoginRequest,
+    response: Response,
+) -> UserPublic:
+    user = authenticate_admin_operator(request.password)
+    return issue_operator_session(user, response)
 
 
 @app.post("/auth/logout")
@@ -499,6 +575,20 @@ async def client_websocket(websocket: WebSocket, pc_name: str) -> None:
         return
 
     await connection_manager.connect(cleaned_pc_name, websocket)
+    async def activate_after_receive_loop_starts() -> None:
+        activation_response = await session_service.activate_prepared_session_for_pc(
+            cleaned_pc_name
+        )
+        if activation_response is not None:
+            print(
+                "Prepared startup activation processed: "
+                f"pc_name={cleaned_pc_name}, "
+                f"prepared_session_id={activation_response.prepared_session.prepared_session_id}, "
+                f"status={activation_response.prepared_session.status}, "
+                f"session_id={activation_response.prepared_session.activated_session_id}"
+            )
+
+    activation_task = asyncio.create_task(activate_after_receive_loop_starts())
 
     try:
         # The WebSocket endpoint owns all incoming acknowledgement reads, which
@@ -531,6 +621,7 @@ async def client_websocket(websocket: WebSocket, pc_name: str) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        activation_task.cancel()
         connection_manager.disconnect(cleaned_pc_name, websocket)
 
 
@@ -539,11 +630,30 @@ def get_registered_pcs(
     _: object = Depends(require_role("cashier")),
 ) -> list[PCDashboardRecord]:
     mark_stale_pcs_offline()
+    prepared_session_repository.expire_old_preparations()
     now = current_utc_time()
     dashboard_records: list[PCDashboardRecord] = []
+    layouts = {layout.pc_name: layout for layout in pc_layout_repository.list_layouts()}
+    prepared_by_pc = {
+        prepared.pc_name: prepared
+        for prepared in prepared_session_repository.list_active()
+    }
+    # Operational dashboard data is registered-client only. Layout rows are
+    # configuration slots and must not become cashier-visible PCs until a real
+    # Secret Grounds client has registered at least once.
+    pc_names = sorted(
+        pc_registry,
+        key=lambda name: (
+            layouts[name].layout_order if name in layouts else 10_000,
+            name,
+        ),
+    )
 
-    for _, pc in sorted(pc_registry.items()):
+    for pc_name in pc_names:
+        layout = layouts.get(pc_name)
+        pc = pc_registry[pc_name]
         active_session = session_repository.get_active_session_for_pc(pc.pc_name)
+        prepared = prepared_by_pc.get(pc.pc_name)
         recovery_flag = recovery_flags.get(pc.pc_name)
         remaining_seconds: int | None = None
         connection_status = "online" if pc.status == "online" else "offline"
@@ -560,6 +670,14 @@ def get_registered_pcs(
             and active_session.status in {"active", "ending"}
         ):
             session_status = "unknown"
+        power_state = "online" if connection_status == "online" else "powered_off"
+        if prepared is not None:
+            power_state = "starting" if prepared.status == "starting" else "waking"
+            session_status = "idle"
+        if recovery_flag is not None:
+            power_state = "recovery_required"
+        elif connection_status == "offline" and active_session is not None:
+            power_state = "connection_problem"
 
         if active_session is not None:
             remaining_seconds = max(
@@ -575,11 +693,30 @@ def get_registered_pcs(
         dashboard_records.append(
             PCDashboardRecord(
                 pc_name=pc.pc_name,
+                display_name=layout.display_name if layout is not None else pc.pc_name,
+                area_label=layout.area_label if layout is not None else "UNASSIGNED",
+                layout_order=layout.layout_order if layout is not None else 10_000,
+                is_vip=layout.is_vip if layout is not None else False,
+                is_enabled=layout.is_enabled if layout is not None else True,
                 ip_address=pc.ip_address,
                 connection_status=connection_status,
                 has_command_connection=connection_manager.is_connected(pc.pc_name),
+                power_state=power_state,
                 last_seen=pc.last_seen,
                 session_status=session_status,
+                startup_status=prepared.status if prepared is not None else None,
+                prepared_session_id=(
+                    prepared.prepared_session_id if prepared is not None else None
+                ),
+                startup_elapsed_seconds=(
+                    max(0, int((now - prepared.prepared_at).total_seconds()))
+                    if prepared is not None
+                    else None
+                ),
+                startup_expires_at=prepared.expires_at if prepared is not None else None,
+                startup_failure_reason=(
+                    prepared.failure_reason if prepared is not None else None
+                ),
                 active_session_id=(
                     active_session.session_id if active_session is not None else None
                 ),
@@ -777,7 +914,11 @@ REMOTE_MESSAGE_COMMAND_TYPES: set[str] = {"show_message", "show_announcement"}
 
 def require_remote_command_permission(command_type: str, current_user: object) -> None:
     role = getattr(current_user, "role", None)
-    if command_type in POWER_COMMAND_TYPES or command_type == "wake_on_lan":
+    if command_type == "wake_on_lan":
+        if role not in {"owner", "admin", "cashier"}:
+            raise HTTPException(status_code=403, detail="You cannot wake PCs")
+        return
+    if command_type in POWER_COMMAND_TYPES:
         if role not in {"owner", "admin"}:
             raise HTTPException(status_code=403, detail="Only owner/admin can use PC power controls")
         return
@@ -796,12 +937,41 @@ def get_registered_pc_or_404(pc_name: str) -> PCRecord:
     return pc
 
 
+def get_known_pc_or_404(pc_name: str) -> PCRecord:
+    cleaned_pc_name = pc_name.strip()
+    pc = pc_registry.get(cleaned_pc_name)
+    if pc is not None:
+        return pc
+    layout = pc_layout_repository.get_layout(cleaned_pc_name)
+    if layout is None:
+        raise HTTPException(status_code=404, detail="PC is not configured")
+    return PCRecord(
+        pc_name=layout.pc_name,
+        ip_address="",
+        status="offline",
+        last_seen=current_utc_time(),
+        mac_address=layout.mac_address,
+    )
+
+
+def get_on_duty_actor_user_id(current_user: object) -> str | None:
+    current_operator = operator_state_repository.get_current(user_repository.get_user)
+    if current_operator.operator is not None:
+        return current_operator.operator.user_id
+    return get_actor_user_id(current_user)
+
+
 def send_wake_on_lan_packet(mac_address: str) -> None:
     mac_bytes = bytes.fromhex(mac_address.replace(":", ""))
     packet = b"\xff" * 6 + mac_bytes * 16
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as wol_socket:
         wol_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         wol_socket.sendto(packet, ("255.255.255.255", 9))
+
+
+def send_wake_on_lan_burst(mac_address: str, packets: int = 3) -> None:
+    for _ in range(max(1, packets)):
+        send_wake_on_lan_packet(mac_address)
 
 
 async def deliver_remote_command(
@@ -876,7 +1046,7 @@ async def create_and_send_remote_command(
         pc_name=pc.pc_name,
         command_type=command_type,
         payload=payload,
-        requested_by_user_id=get_actor_user_id(current_user),
+        requested_by_user_id=get_on_duty_actor_user_id(current_user),
         forced=forced,
         force_reason=force_reason,
     )
@@ -987,10 +1157,10 @@ async def send_power_command(
 @app.post("/pcs/{pc_name}/wake", response_model=WakeCommandResponse)
 def wake_pc(
     pc_name: str,
-    current_user: object = Depends(require_role("admin")),
+    current_user: object = Depends(require_role("cashier")),
 ) -> WakeCommandResponse:
     require_remote_command_permission("wake_on_lan", current_user)
-    pc = get_registered_pc_or_404(pc_name)
+    pc = get_known_pc_or_404(pc_name)
     if not pc.mac_address:
         raise HTTPException(status_code=409, detail="This PC does not have a saved MAC address")
 
@@ -1000,10 +1170,10 @@ def wake_pc(
         pc_name=pc.pc_name,
         command_type="wake_on_lan",
         payload={"mac_address": pc.mac_address},
-        requested_by_user_id=get_actor_user_id(current_user),
+        requested_by_user_id=get_on_duty_actor_user_id(current_user),
     )
     try:
-        send_wake_on_lan_packet(pc.mac_address)
+        send_wake_on_lan_burst(pc.mac_address)
     except OSError as error:
         remote_command_repository.mark_failed(command_id, "failed", str(error))
         raise HTTPException(status_code=502, detail=f"Wake signal failed: {error}") from error
@@ -1011,6 +1181,139 @@ def wake_pc(
     return WakeCommandResponse(
         command=remote_command_repository.get(command_id) or record,
         message="Wake signal sent. Waiting for PC to come online.",
+    )
+
+
+@app.get("/pcs/layout", response_model=list[PCLayoutRecord])
+def list_pc_layouts(
+    include_disabled: bool = False,
+    _: object = Depends(require_owner),
+) -> list[PCLayoutRecord]:
+    return pc_layout_repository.list_layouts(include_disabled)
+
+
+@app.put("/pcs/{pc_name}/layout", response_model=PCLayoutRecord)
+def update_pc_layout(
+    pc_name: str,
+    request: PCLayoutUpdate,
+    _: object = Depends(require_role("admin")),
+) -> PCLayoutRecord:
+    if request.mac_address is not None:
+        pc_metadata_repository.set_mac_address(pc_name.strip(), request.mac_address)
+    return pc_layout_repository.upsert_layout(pc_name.strip(), request)
+
+
+@app.get("/operators", response_model=list[UserPublic])
+def list_operators(
+    _: object = Depends(require_role("cashier")),
+) -> list[UserPublic]:
+    return [
+        to_public_user(user)
+        for user in user_repository.list_users()
+        if user.is_active and user.role in {"owner", "admin", "cashier"}
+    ]
+
+
+@app.get("/operators/current", response_model=OnDutyOperatorRecord)
+def get_on_duty_operator(
+    _: object = Depends(require_role("cashier")),
+) -> OnDutyOperatorRecord:
+    return operator_state_repository.get_current(user_repository.get_user)
+
+
+@app.post("/operators/current", response_model=OnDutyOperatorRecord)
+def set_on_duty_operator(
+    request: OperatorSelectionRequest,
+    current_user: object = Depends(require_role("cashier")),
+) -> OnDutyOperatorRecord:
+    operator = user_repository.get_user(request.operator_id)
+    if operator is None or not operator.is_active:
+        raise HTTPException(status_code=404, detail="Operator not found")
+    operator_state_repository.set_current(
+        operator.user_id,
+        get_actor_user_id(current_user),
+    )
+    return operator_state_repository.get_current(user_repository.get_user)
+
+
+def send_prepared_wake(
+    prepared_session_id: str,
+    current_user: object,
+) -> PreparedSessionResponse:
+    prepared = prepared_session_repository.get(prepared_session_id)
+    if prepared is None:
+        raise HTTPException(status_code=404, detail="Prepared session not found")
+    pc = get_known_pc_or_404(prepared.pc_name)
+    if not pc.mac_address:
+        raise HTTPException(status_code=409, detail="This PC does not have a saved MAC address")
+
+    command_id = str(uuid4())
+    remote_command_repository.create(
+        command_id=command_id,
+        pc_name=pc.pc_name,
+        command_type="wake_on_lan",
+        payload={"mac_address": pc.mac_address, "prepared_session_id": prepared_session_id},
+        requested_by_user_id=get_on_duty_actor_user_id(current_user),
+    )
+    try:
+        send_wake_on_lan_burst(pc.mac_address)
+    except OSError as error:
+        remote_command_repository.mark_failed(command_id, "failed", str(error))
+        failed = prepared_session_repository.update(
+            prepared.model_copy(
+                update={
+                    "status": "failed",
+                    "startup_status": "failed",
+                    "failure_reason": f"Wake signal failed: {error}",
+                }
+            )
+        )
+        return PreparedSessionResponse(
+            prepared_session=failed,
+            message=f"Wake signal failed: {error}",
+        )
+
+    remote_command_repository.mark_completed(command_id, "Wake-on-LAN packet_sent")
+    updated = session_service.mark_prepared_wake_sent(prepared_session_id)
+    return PreparedSessionResponse(
+        prepared_session=updated,
+        message="Wake signal sent. Waiting for PC to come online.",
+    )
+
+
+@app.post("/sessions/prepare-startup", response_model=PreparedSessionResponse)
+def prepare_startup_session(
+    request: PreparedSessionStartRequest,
+    current_user: object = Depends(require_role("cashier")),
+) -> PreparedSessionResponse:
+    mark_stale_pcs_offline()
+    prepared_response = session_service.prepare_offline_session(
+        request,
+        get_on_duty_actor_user_id(current_user),
+    )
+    wake_response = send_prepared_wake(
+        prepared_response.prepared_session.prepared_session_id,
+        current_user,
+    )
+    return wake_response
+
+
+@app.post("/prepared-sessions/{prepared_session_id}/retry-wake", response_model=PreparedSessionResponse)
+def retry_prepared_wake(
+    prepared_session_id: str,
+    current_user: object = Depends(require_role("cashier")),
+) -> PreparedSessionResponse:
+    return send_prepared_wake(prepared_session_id, current_user)
+
+
+@app.post("/prepared-sessions/{prepared_session_id}/cancel", response_model=PreparedSessionResponse)
+def cancel_prepared_session(
+    prepared_session_id: str,
+    current_user: object = Depends(require_role("cashier")),
+) -> PreparedSessionResponse:
+    return session_service.cancel_prepared_session(
+        prepared_session_id,
+        get_on_duty_actor_user_id(current_user),
     )
 
 
@@ -1073,7 +1376,7 @@ async def start_session(
         request.duration_seconds,
         request.rate_id,
         request.amount,
-        get_actor_user_id(current_user),
+        get_on_duty_actor_user_id(current_user),
     )
     recovery_flags.pop(response.session.pc_name, None)
     return response
@@ -1091,7 +1394,7 @@ async def start_prepaid_session(
         request.duration_seconds,
         request.rate_id,
         request.amount,
-        get_actor_user_id(current_user),
+        get_on_duty_actor_user_id(current_user),
     )
     recovery_flags.pop(response.session.pc_name, None)
     return response
@@ -1105,7 +1408,7 @@ async def start_open_time_session(
     mark_stale_pcs_offline()
     response = await session_service.start_open_time_session(
         request.pc_name,
-        get_actor_user_id(current_user),
+        get_on_duty_actor_user_id(current_user),
     )
     recovery_flags.pop(response.session.pc_name, None)
     return response
@@ -1122,7 +1425,7 @@ async def start_member_session(
         request.member_id,
         request.duration_seconds,
         request.member_pin,
-        get_actor_user_id(current_user),
+        get_on_duty_actor_user_id(current_user),
     )
     recovery_flags.pop(response.session.pc_name, None)
     return response
@@ -1140,7 +1443,7 @@ async def add_time_to_session(
         request.seconds,
         request.rate_id,
         request.amount,
-        get_actor_user_id(current_user),
+        get_on_duty_actor_user_id(current_user),
     )
 
 
@@ -1157,7 +1460,7 @@ async def add_prepaid_time_to_session(
         request.seconds,
         request.rate_id,
         request.amount,
-        get_actor_user_id(current_user),
+        get_on_duty_actor_user_id(current_user),
     )
 
 
@@ -1172,7 +1475,7 @@ async def add_member_time_to_session(
         session_id,
         request.member_id,
         request.seconds,
-        get_actor_user_id(current_user),
+        get_on_duty_actor_user_id(current_user),
     )
 
 
@@ -1184,7 +1487,7 @@ async def end_session(
     mark_stale_pcs_offline()
     response = await session_service.end_session(
         session_id,
-        get_actor_user_id(current_user),
+        get_on_duty_actor_user_id(current_user),
     )
     recovery_flags.pop(response.session.pc_name, None)
     return response
@@ -1253,7 +1556,7 @@ def record_payment(
     return billing_service.record_payment(
         session_id,
         request,
-        actor_user_id=get_actor_user_id(current_user),
+        actor_user_id=get_on_duty_actor_user_id(current_user),
     )
 
 
