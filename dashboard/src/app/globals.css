@@ -21,6 +21,17 @@
   box-sizing: border-box;
 }
 
+.srOnly {
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  width: 1px;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
 body {
   margin: 0;
   background:
@@ -79,6 +90,10 @@ select:focus-visible {
   gap: 8px;
 }
 
+.appShell__links {
+  flex: 1;
+}
+
 .appShell a,
 .appShell button {
   border-radius: 6px;
@@ -98,6 +113,73 @@ select:focus-visible {
 .appShell button:hover:not(:disabled) {
   background: rgb(59 130 246 / 0.14);
   color: #ffffff;
+}
+
+.appShell__adminMenu {
+  position: relative;
+}
+
+.appShell__adminMenu summary {
+  border-radius: 6px;
+  color: #dbeafe;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 800;
+  list-style: none;
+  padding: 9px 12px;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.appShell__adminMenu summary::-webkit-details-marker {
+  display: none;
+}
+
+.appShell__adminMenu summary::after {
+  color: #67e8f9;
+  content: "v";
+  font-size: 11px;
+  margin-left: 7px;
+}
+
+.appShell__adminMenu[open] summary,
+.appShell__adminMenu summary:hover,
+.appShell__adminMenu summary:focus-visible {
+  background: rgb(59 130 246 / 0.14);
+  color: #ffffff;
+  outline: none;
+}
+
+.appShell__adminDropdown {
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(5, 8, 17, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 8px;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 0.42), 0 0 24px rgb(34 211 238 / 0.1);
+  display: grid;
+  gap: 4px;
+  left: 0;
+  min-width: 210px;
+  padding: 8px;
+  position: absolute;
+  top: calc(100% + 8px);
+  z-index: 40;
+}
+
+.appShell__adminDropdown a,
+.appShell__dropdownPlaceholder {
+  border-radius: 6px;
+  display: block;
+  padding: 10px 11px;
+}
+
+.appShell__dropdownPlaceholder {
+  color: #64748b;
+  cursor: not-allowed;
+  font-size: 14px;
+  font-weight: 800;
 }
 
 .appShell__account span {
@@ -267,6 +349,11 @@ select:focus-visible {
     flex-wrap: wrap;
   }
 
+  .appShell__adminDropdown {
+    left: auto;
+    right: 0;
+  }
+
   .shiftCloseBar {
     grid-template-columns: 1fr;
   }
@@ -360,7 +447,8 @@ input:-webkit-autofill:focus {
   width: 38px;
 }
 
-.appShell a.appShell__linkActive {
+.appShell a.appShell__linkActive,
+.appShell summary.appShell__linkActive {
   background: rgb(14 165 233 / 0.18);
   border: 1px solid rgb(56 189 248 / 0.28);
   color: #ffffff;

@@ -1,9 +1,9 @@
 .page {
   display: grid;
-  gap: 22px;
+  gap: 18px;
   margin: 0 auto;
-  max-width: 1440px;
-  padding: 36px 28px 48px;
+  max-width: 1560px;
+  padding: 30px 28px 44px;
 }
 
 .topBar {
@@ -23,6 +23,58 @@
 .topBar p {
   color: var(--muted);
   margin: 6px 0 0;
+}
+
+.activityPanel {
+  display: grid;
+  gap: 14px;
+}
+
+.compactFilters {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.filterChip {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.76);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 900;
+  gap: 8px;
+  letter-spacing: 0.04em;
+  min-height: 38px;
+  padding: 5px 6px 5px 12px;
+  text-transform: uppercase;
+}
+
+.filterChip select {
+  appearance: none;
+  background:
+    linear-gradient(135deg, rgba(14, 165, 233, 0.2), rgba(37, 99, 235, 0.16));
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 999px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0;
+  min-height: 28px;
+  padding: 4px 28px 4px 10px;
+  text-transform: none;
+}
+
+.filterChip::after {
+  color: #67e8f9;
+  content: "v";
+  font-size: 10px;
+  margin-left: -28px;
+  pointer-events: none;
 }
 
 .filters {
@@ -194,6 +246,94 @@
   text-align: center;
 }
 
+.activityLoading,
+.activityEmpty {
+  background:
+    radial-gradient(circle at top, rgba(34, 211, 238, 0.1), transparent 13rem),
+    linear-gradient(180deg, rgba(17, 27, 45, 0.94), rgba(8, 17, 31, 0.94));
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  color: var(--muted);
+}
+
+.activityLoading {
+  align-items: center;
+  display: flex;
+  font-weight: 900;
+  justify-content: center;
+  min-height: 160px;
+}
+
+.activityEmpty {
+  align-items: center;
+  display: grid;
+  justify-items: center;
+  min-height: 300px;
+  padding: 28px;
+  text-align: center;
+}
+
+.activityEmptyIcon {
+  border: 1px solid rgba(56, 189, 248, 0.36);
+  border-radius: 12px;
+  box-shadow: 0 0 24px rgb(34 211 238 / 0.18);
+  height: 48px;
+  position: relative;
+  width: 38px;
+}
+
+.activityEmptyIcon::before,
+.activityEmptyIcon::after {
+  background: rgba(34, 211, 238, 0.55);
+  border-radius: 999px;
+  content: "";
+  left: 9px;
+  position: absolute;
+  right: 9px;
+}
+
+.activityEmptyIcon::before {
+  height: 3px;
+  top: 15px;
+}
+
+.activityEmptyIcon::after {
+  box-shadow: 0 9px 0 rgba(34, 211, 238, 0.42), 0 18px 0 rgba(34, 211, 238, 0.3);
+  height: 3px;
+  top: 24px;
+}
+
+.activityEmpty h2 {
+  color: var(--text);
+  font-size: 24px;
+  margin: 16px 0 6px;
+}
+
+.activityEmpty p {
+  margin: 0;
+}
+
+.activityEmpty ul {
+  color: #cbd5e1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+}
+
+.activityEmpty li {
+  background: rgba(14, 165, 233, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 7px 10px;
+}
+
 .tableButton {
   background: rgba(59, 130, 246, 0.14);
   border: 1px solid rgba(59, 130, 246, 0.34);
@@ -297,6 +437,16 @@
 
   .filters {
     grid-template-columns: 1fr;
+  }
+
+  .compactFilters {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .filterChip {
+    justify-content: space-between;
+    width: 100%;
   }
 
   .billingList,

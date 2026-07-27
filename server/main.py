@@ -1,17 +1,25 @@
 import asyncio
+import csv
+import json
 import os
 import socket
+from datetime import date, datetime, time, timedelta, timezone
+from io import StringIO
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import AsyncIterator
 from uuid import uuid4
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from server.connection_manager import ClientConnectionManager
 from server.database import get_connection, initialize_database
 from server.schemas import (
     AddTimeRequest,
+    AdminSettingsResetRequest,
+    AdminSettingsResponse,
+    AdminSettingsUpdateRequest,
     BillingSummary,
     CashierShiftDetail,
     CashierShiftRecord,
@@ -19,6 +27,7 @@ from server.schemas import (
     CalculateTimeRequest,
     ClientEvent,
     ClientCommand,
+    ClientSafeSettings,
     CommandAcknowledgement,
     BroadcastCommandRequest,
     BroadcastCommandResponse,
@@ -57,6 +66,8 @@ from server.schemas import (
     PreparedSessionActivationResponse,
     OnDutyOperatorRecord,
     OperatorAccessRecord,
+    OperatorActivityRecord,
+    OperatorManagementRecord,
     OperatorSelectionRequest,
     PrepaidAddTimeRequest,
     PrepaidStartSessionRequest,
@@ -73,6 +84,16 @@ from server.schemas import (
     SessionCommandResponse,
     SessionRecord,
     SessionStateSummary,
+    SalesOutstandingSettlement,
+    SalesPCBreakdown,
+    SalesPaymentMethodBreakdown,
+    SalesPeriod,
+    SalesRecentPayment,
+    SalesReport,
+    SalesSummary,
+    SalesTimeseriesPoint,
+    SalesTypeBreakdown,
+    SalesOperatorBreakdown,
     StartSessionRequest,
     TestCommandRequest,
     TestCommandResponse,
@@ -84,6 +105,7 @@ from server.schemas import (
     UserStatusUpdate,
     UserUpdateRequest,
 )
+from server.admin_settings_service import AdminSettingsService
 from server.auth import (
     AUTH_COOKIE_NAME,
     auth_session_repository,
@@ -112,6 +134,8 @@ from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
 from server.rate_repository import RateRepository
 from server.time_utils import current_utc_time
+from server.operator_config import FAMILY_OPERATORS
+from server.operator_config import FAMILY_OPERATOR_BY_USERNAME, FAMILY_OPERATORS
 
 
 pc_registry: dict[str, PCRecord] = {}
@@ -120,6 +144,13 @@ connection_manager = ClientConnectionManager()
 session_repository = SessionRepository()
 payment_repository = PaymentRepository()
 shift_repository = ShiftRepository()
+admin_settings_service = AdminSettingsService()
+
+
+def require_admin_operator(current_user=Depends(get_current_user)):
+    if current_user.username.casefold() != "admin":
+        raise HTTPException(status_code=403, detail="Admin operator access required")
+    return current_user
 member_repository = MemberRepository(payment_repository, shift_repository)
 remote_command_repository = RemoteCommandRepository()
 pc_metadata_repository = PCMetadataRepository()
@@ -316,6 +347,34 @@ def get_me(current_user=Depends(get_current_user)) -> UserPublic:
     return to_public_user(current_user)
 
 
+@app.get("/settings", response_model=AdminSettingsResponse)
+def get_admin_settings(
+    _: object = Depends(require_admin_operator),
+) -> AdminSettingsResponse:
+    return admin_settings_service.get_response()
+
+
+@app.put("/settings", response_model=AdminSettingsResponse)
+def update_admin_settings(
+    request: AdminSettingsUpdateRequest,
+    current_user=Depends(require_admin_operator),
+) -> AdminSettingsResponse:
+    return admin_settings_service.update_settings(request, current_user.user_id)
+
+
+@app.post("/settings/reset", response_model=AdminSettingsResponse)
+def reset_admin_settings(
+    request: AdminSettingsResetRequest,
+    current_user=Depends(require_admin_operator),
+) -> AdminSettingsResponse:
+    return admin_settings_service.reset_settings(request, current_user.user_id)
+
+
+@app.get("/client-settings", response_model=ClientSafeSettings)
+def get_client_settings() -> ClientSafeSettings:
+    return admin_settings_service.get_client_settings()
+
+
 @app.post("/shifts/open", response_model=CashierShiftDetail)
 def open_shift(
     request: ShiftOpenRequest,
@@ -484,14 +543,14 @@ def update_membership_product_status(
 
 
 @app.get("/users", response_model=list[UserAdminRecord])
-def list_users(_: object = Depends(require_owner)) -> list[UserAdminRecord]:
+def list_users(_: object = Depends(require_admin_operator)) -> list[UserAdminRecord]:
     return user_repository.list_users()
 
 
 @app.post("/users", response_model=UserAdminRecord)
 def create_user(
     request: UserCreateRequest,
-    _: object = Depends(require_owner),
+    _: object = Depends(require_admin_operator),
 ) -> UserAdminRecord:
     return user_repository.create_user(request)
 
@@ -500,7 +559,7 @@ def create_user(
 def update_user(
     user_id: str,
     request: UserUpdateRequest,
-    _: object = Depends(require_owner),
+    _: object = Depends(require_admin_operator),
 ) -> UserAdminRecord:
     user = user_repository.update_user(user_id, request)
     if user is None:
@@ -512,7 +571,7 @@ def update_user(
 def update_user_status(
     user_id: str,
     request: UserStatusUpdate,
-    _: object = Depends(require_owner),
+    _: object = Depends(require_admin_operator),
 ) -> UserAdminRecord:
     user = user_repository.set_active(user_id, request)
     if user is None:
@@ -524,12 +583,607 @@ def update_user_status(
 def reset_user_password(
     user_id: str,
     request: PasswordResetRequest,
-    _: object = Depends(require_owner),
+    _: object = Depends(require_admin_operator),
 ) -> UserAdminRecord:
     user = user_repository.reset_password(user_id, request)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+
+def operator_name_for_user(user_id: str | None, users_by_id: dict[str, str]) -> str:
+    if user_id is None:
+        return "System"
+    return users_by_id.get(user_id, "Unknown operator")
+
+
+IMPORTANT_SESSION_EVENTS: dict[str, tuple[str, str]] = {
+    "operator_changed": ("Operator changed", "operator"),
+    "session_started": ("Started session", "session"),
+    "prepaid_start_paid": ("Collected prepaid start payment", "payment"),
+    "time_added": ("Added time", "session"),
+    "time_added_during_grace": ("Added time during grace period", "session"),
+    "prepaid_add_time_paid": ("Collected add-time payment", "payment"),
+    "automatic_shutdown_cancelled": ("Cancelled automatic shutdown", "session"),
+    "session_ended_manually": ("Ended session", "session"),
+    "session_completed": ("Session completed", "session"),
+    "open_time_started": ("Started Open Time", "session"),
+    "open_time_ended": ("Ended Open Time", "session"),
+    "open_time_settled": ("Settled Open Time", "payment"),
+    "payment_action_review_required": ("Payment needs review", "payment"),
+    "recovery_force_end": ("Force-ended recovered session", "recovery"),
+    "wake_signal_sent": ("Wake requested", "remote"),
+    "automatic_shutdown_initiated": ("Automatic shutdown initiated", "remote"),
+    "automatic_shutdown_failed": ("Automatic shutdown failed", "remote"),
+    "shutdown_command_acknowledged": ("Shutdown acknowledged", "remote"),
+    "shutdown_command_invoked": ("Shutdown invoked", "remote"),
+}
+
+
+@app.get("/admin/operators", response_model=list[OperatorManagementRecord])
+def list_admin_operators(
+    _: object = Depends(require_admin_operator),
+) -> list[OperatorManagementRecord]:
+    users = {user.username.casefold(): user for user in user_repository.list_users()}
+    records: list[OperatorManagementRecord] = []
+    for operator in FAMILY_OPERATORS:
+        user = users.get(operator.username.casefold())
+        if user is None:
+            continue
+        records.append(
+            OperatorManagementRecord(
+                operator_id=operator.operator_id,
+                username=user.username,
+                display_name=user.display_name,
+                password_required=operator.password_required,
+                role=user.role,
+                is_active=user.is_active,
+                last_login_at=user.last_login_at,
+            )
+        )
+    return records
+
+
+@app.get("/operator-activity", response_model=list[OperatorActivityRecord])
+def list_operator_activity(
+    date_scope: str = Query("today", pattern="^(today|all)$"),
+    operator_id: str | None = None,
+    category: str | None = None,
+    limit: int = Query(200, ge=1, le=500),
+    _: object = Depends(require_admin_operator),
+) -> list[OperatorActivityRecord]:
+    since = current_utc_time().date().isoformat() if date_scope == "today" else None
+    users = user_repository.list_users()
+    users_by_id = {user.user_id: user.display_name for user in users}
+    activity: list[OperatorActivityRecord] = []
+
+    with get_connection() as connection:
+        event_rows = connection.execute(
+            """
+            SELECT
+                e.event_type,
+                e.created_at,
+                e.amount,
+                e.payment_method,
+                e.performed_by_user_id,
+                s.pc_name,
+                s.member_name_snapshot,
+                s.member_code_snapshot
+            FROM session_events e
+            LEFT JOIN sessions s ON s.session_id = e.session_id
+            ORDER BY e.created_at DESC
+            LIMIT 1000
+            """
+        ).fetchall()
+        payment_rows = connection.execute(
+            """
+            SELECT
+                p.created_at,
+                p.amount,
+                p.payment_method,
+                p.status,
+                p.recorded_by_user_id,
+                s.pc_name,
+                s.member_name_snapshot,
+                s.member_code_snapshot
+            FROM payments p
+            LEFT JOIN sessions s ON s.session_id = p.session_id
+            ORDER BY p.created_at DESC
+            LIMIT 1000
+            """
+        ).fetchall()
+        command_rows = connection.execute(
+            """
+            SELECT requested_at, command_type, status, requested_by_user_id, pc_name
+            FROM remote_commands
+            ORDER BY requested_at DESC
+            LIMIT 1000
+            """
+        ).fetchall()
+        settings_rows = connection.execute(
+            """
+            SELECT
+                event_type,
+                category,
+                changed_fields_json,
+                performed_by_user_id,
+                applied_immediately,
+                created_at
+            FROM admin_settings_audit_events
+            ORDER BY created_at DESC
+            LIMIT 1000
+            """
+        ).fetchall()
+
+    for row in event_rows:
+        details = IMPORTANT_SESSION_EVENTS.get(row["event_type"])
+        if details is None:
+            continue
+        action, event_category = details
+        timestamp = row["created_at"]
+        actor_id = row["performed_by_user_id"]
+        if since is not None and timestamp < since:
+            continue
+        if operator_id is not None and actor_id != operator_id:
+            continue
+        if category is not None and category != event_category:
+            continue
+        activity.append(
+            OperatorActivityRecord(
+                timestamp=timestamp,
+                operator_id=actor_id,
+                operator_name=operator_name_for_user(actor_id, users_by_id),
+                action=action,
+                category=event_category,
+                pc_name=row["pc_name"],
+                customer=row["member_name_snapshot"] or row["member_code_snapshot"],
+                amount=Decimal(row["amount"]) if row["amount"] is not None else None,
+                payment_method=row["payment_method"],
+                result="Recorded",
+            )
+        )
+
+    for row in payment_rows:
+        timestamp = row["created_at"]
+        actor_id = row["recorded_by_user_id"]
+        if since is not None and timestamp < since:
+            continue
+        if operator_id is not None and actor_id != operator_id:
+            continue
+        if category is not None and category != "payment":
+            continue
+        activity.append(
+            OperatorActivityRecord(
+                timestamp=timestamp,
+                operator_id=actor_id,
+                operator_name=operator_name_for_user(actor_id, users_by_id),
+                action="Collected payment",
+                category="payment",
+                pc_name=row["pc_name"],
+                customer=row["member_name_snapshot"] or row["member_code_snapshot"],
+                amount=Decimal(row["amount"]),
+                payment_method=row["payment_method"],
+                result=str(row["status"]).replace("_", " ").title(),
+            )
+        )
+
+    for row in command_rows:
+        command_type = str(row["command_type"])
+        if command_type not in {
+            "wake_on_lan",
+            "shutdown",
+            "restart",
+            "sleep",
+            "show_message",
+            "show_announcement",
+        }:
+            continue
+        timestamp = row["requested_at"]
+        actor_id = row["requested_by_user_id"]
+        if since is not None and timestamp < since:
+            continue
+        if operator_id is not None and actor_id != operator_id:
+            continue
+        if category is not None and category != "remote":
+            continue
+        activity.append(
+            OperatorActivityRecord(
+                timestamp=timestamp,
+                operator_id=actor_id,
+                operator_name=operator_name_for_user(actor_id, users_by_id),
+                action=f"Sent {command_type.replace('_', ' ')} command",
+                category="remote",
+                pc_name=row["pc_name"],
+                result=str(row["status"]).replace("_", " ").title(),
+            )
+        )
+
+    for row in settings_rows:
+        timestamp = row["created_at"]
+        actor_id = row["performed_by_user_id"]
+        if since is not None and timestamp < since:
+            continue
+        if operator_id is not None and actor_id != operator_id:
+            continue
+        if category is not None and category != "settings":
+            continue
+        try:
+            changed_fields = ", ".join(json.loads(row["changed_fields_json"]))
+        except Exception:
+            changed_fields = str(row["category"])
+        activity.append(
+            OperatorActivityRecord(
+                timestamp=timestamp,
+                operator_id=actor_id,
+                operator_name=operator_name_for_user(actor_id, users_by_id),
+                action=f"Updated settings: {changed_fields}",
+                category="settings",
+                result="Applied" if row["applied_immediately"] else "Restart required",
+            )
+        )
+
+    return sorted(activity, key=lambda item: item.timestamp, reverse=True)[:limit]
+
+
+def parse_money(value: object) -> Decimal:
+    if value is None:
+        return Decimal("0.00")
+    return Decimal(str(value)).quantize(Decimal("0.01"))
+
+
+def storage_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def operator_name_for_sales(user_id: str | None, users_by_id: dict[str, str]) -> str:
+    return operator_name_for_user(user_id, users_by_id)
+
+
+def resolve_sales_range(
+    period: SalesPeriod,
+    start_date: date | None,
+    end_date: date | None,
+) -> tuple[datetime, datetime, str]:
+    today = current_utc_time().date()
+    if period == "today":
+        start = today
+        end = today + timedelta(days=1)
+    elif period == "yesterday":
+        start = today - timedelta(days=1)
+        end = today
+    elif period == "this_week":
+        start = today - timedelta(days=today.weekday())
+        end = today + timedelta(days=1)
+    elif period == "this_month":
+        start = today.replace(day=1)
+        end = today + timedelta(days=1)
+    else:
+        if start_date is None or end_date is None:
+            raise HTTPException(status_code=400, detail="Custom range requires start_date and end_date")
+        if end_date < start_date:
+            raise HTTPException(status_code=400, detail="End date cannot be before start date")
+        start = start_date
+        end = end_date + timedelta(days=1)
+
+    start_at = datetime.combine(start, time.min, tzinfo=timezone.utc)
+    end_at = datetime.combine(end, time.min, tzinfo=timezone.utc)
+    grouping = "hour" if (end_at - start_at) <= timedelta(days=2) else "day"
+    return start_at, end_at, grouping
+
+
+def sales_type_for_payment(row: object) -> tuple[str, str]:
+    if row["member_transaction_type"] in {"membership_purchase", "promo_topup"}:
+        return "member_purchase", "Member Balance Purchase"
+    if row["session_id"] is not None:
+        return "pc_session", "PC Session"
+    return "other", "Other"
+
+
+def build_sales_report(
+    period: SalesPeriod,
+    start_date: date | None,
+    end_date: date | None,
+    recent_limit: int = 80,
+) -> SalesReport:
+    start_at, end_at, grouping = resolve_sales_range(period, start_date, end_date)
+    users = user_repository.list_users()
+    users_by_id = {user.user_id: user.display_name for user in users}
+    start_text = start_at.isoformat()
+    end_text = end_at.isoformat()
+
+    with get_connection() as connection:
+        payment_rows = connection.execute(
+            """
+            SELECT
+                p.payment_id,
+                p.session_id,
+                p.amount,
+                p.payment_method,
+                p.status,
+                p.action_type,
+                p.recorded_by_user_id,
+                p.created_at,
+                s.pc_name,
+                s.member_name_snapshot,
+                s.member_code_snapshot,
+                m.full_name AS member_full_name,
+                m.member_code AS member_code,
+                mt.transaction_type AS member_transaction_type
+            FROM payments p
+            LEFT JOIN sessions s ON s.session_id = p.session_id
+            LEFT JOIN member_time_transactions mt ON mt.related_payment_id = p.payment_id
+            LEFT JOIN members m ON m.member_id = mt.member_id
+            WHERE p.created_at >= ?
+              AND p.created_at < ?
+              AND p.status = 'completed'
+            ORDER BY p.created_at DESC
+            """,
+            (start_text, end_text),
+        ).fetchall()
+        outstanding_rows = connection.execute(
+            """
+            SELECT
+                s.session_id,
+                s.pc_name,
+                s.member_name_snapshot,
+                s.member_code_snapshot,
+                s.ended_at,
+                s.total_amount,
+                COALESCE(SUM(CASE WHEN p.status = 'completed' THEN CAST(p.amount AS REAL) ELSE 0 END), 0) AS total_paid,
+                s.status
+            FROM sessions s
+            LEFT JOIN payments p ON p.session_id = s.session_id
+            WHERE s.settlement_pending = 1
+              AND s.status = 'settlement_pending'
+            GROUP BY s.session_id
+            HAVING (CAST(s.total_amount AS REAL) - total_paid) > 0
+            ORDER BY COALESCE(s.ended_at, s.created_at) DESC
+            """
+        ).fetchall()
+
+    method_totals = {
+        "cash": {"amount": Decimal("0.00"), "count": 0},
+        "gcash": {"amount": Decimal("0.00"), "count": 0},
+        "maya": {"amount": Decimal("0.00"), "count": 0},
+        "other": {"amount": Decimal("0.00"), "count": 0},
+    }
+    type_totals = {
+        "pc_session": {"label": "PC Sessions", "amount": Decimal("0.00"), "count": 0},
+        "member_purchase": {"label": "Member Balance Purchases", "amount": Decimal("0.00"), "count": 0},
+        "other": {"label": "Other", "amount": Decimal("0.00"), "count": 0},
+    }
+    operator_totals: dict[str, dict[str, object]] = {}
+    pc_totals: dict[str, dict[str, object]] = {}
+    timeseries_totals: dict[str, dict[str, object]] = {}
+    recent_payments: list[SalesRecentPayment] = []
+
+    for row in payment_rows:
+        amount = parse_money(row["amount"])
+        method = row["payment_method"]
+        sales_type, _ = sales_type_for_payment(row)
+        created_at = storage_datetime(row["created_at"])
+        operator_id = row["recorded_by_user_id"]
+        operator_key = operator_id or "__system__"
+        operator_entry = operator_totals.setdefault(
+            operator_key,
+            {
+                "operator_id": operator_id,
+                "operator_name": operator_name_for_sales(operator_id, users_by_id),
+                "total": Decimal("0.00"),
+                "count": 0,
+                "cash": Decimal("0.00"),
+                "gcash": Decimal("0.00"),
+                "maya": Decimal("0.00"),
+                "other": Decimal("0.00"),
+            },
+        )
+        operator_entry["total"] = operator_entry["total"] + amount
+        operator_entry["count"] = int(operator_entry["count"]) + 1
+        operator_entry[method] = operator_entry[method] + amount
+
+        method_totals[method]["amount"] += amount
+        method_totals[method]["count"] += 1
+        type_totals[sales_type]["amount"] += amount
+        type_totals[sales_type]["count"] += 1
+
+        if row["pc_name"] is not None and sales_type == "pc_session":
+            pc_entry = pc_totals.setdefault(
+                row["pc_name"],
+                {
+                    "pc_name": row["pc_name"],
+                    "total": Decimal("0.00"),
+                    "count": 0,
+                    "sessions": set(),
+                },
+            )
+            pc_entry["total"] = pc_entry["total"] + amount
+            pc_entry["count"] = int(pc_entry["count"]) + 1
+            pc_entry["sessions"].add(row["session_id"])
+
+        bucket_start = created_at.replace(minute=0, second=0, microsecond=0) if grouping == "hour" else created_at.replace(hour=0, minute=0, second=0, microsecond=0)
+        bucket_label = bucket_start.strftime("%I %p").lstrip("0") if grouping == "hour" else bucket_start.strftime("%b %d")
+        bucket_key = bucket_start.isoformat()
+        bucket = timeseries_totals.setdefault(
+            bucket_key,
+            {"label": bucket_label, "start_at": bucket_start, "amount": Decimal("0.00"), "count": 0},
+        )
+        bucket["amount"] = bucket["amount"] + amount
+        bucket["count"] = int(bucket["count"]) + 1
+
+        if len(recent_payments) < recent_limit:
+            customer = (
+                row["member_full_name"]
+                or row["member_name_snapshot"]
+                or row["member_code"]
+                or row["member_code_snapshot"]
+            )
+            recent_payments.append(
+                SalesRecentPayment(
+                    payment_id=row["payment_id"],
+                    timestamp=created_at,
+                    operator_name=operator_name_for_sales(operator_id, users_by_id),
+                    customer=customer,
+                    pc_name=row["pc_name"],
+                    sales_type=sales_type,
+                    payment_method=method,
+                    amount=amount,
+                    status=row["status"],
+                    related_reference=row["session_id"] or row["payment_id"],
+                )
+            )
+
+    outstanding = [
+        SalesOutstandingSettlement(
+            session_id=row["session_id"],
+            pc_name=row["pc_name"],
+            customer=row["member_name_snapshot"] or row["member_code_snapshot"],
+            session_end_time=storage_datetime(row["ended_at"]) if row["ended_at"] is not None else None,
+            amount_due=parse_money(row["total_amount"]) - parse_money(row["total_paid"]),
+            status=row["status"],
+            payment_status="unpaid" if parse_money(row["total_paid"]) == Decimal("0.00") else "partially_paid",
+        )
+        for row in outstanding_rows
+    ]
+    outstanding_amount = sum((item.amount_due for item in outstanding), Decimal("0.00"))
+    total_sales = sum((parse_money(row["amount"]) for row in payment_rows), Decimal("0.00"))
+    payment_count = len(payment_rows)
+    average = (total_sales / payment_count).quantize(Decimal("0.01")) if payment_count else Decimal("0.00")
+
+    return SalesReport(
+        period=period,
+        start_at=start_at,
+        end_at=end_at,
+        grouping=grouping,
+        summary=SalesSummary(
+            total_sales=total_sales,
+            cash_total=method_totals["cash"]["amount"],
+            gcash_total=method_totals["gcash"]["amount"],
+            maya_total=method_totals["maya"]["amount"],
+            other_total=method_totals["other"]["amount"],
+            payment_count=payment_count,
+            outstanding_amount=outstanding_amount,
+            session_revenue=type_totals["pc_session"]["amount"],
+            member_purchase_revenue=type_totals["member_purchase"]["amount"],
+            other_revenue=type_totals["other"]["amount"],
+            average_transaction_value=average,
+        ),
+        payment_methods=[
+            SalesPaymentMethodBreakdown(
+                payment_method=method,
+                amount=values["amount"],
+                payment_count=values["count"],
+            )
+            for method, values in method_totals.items()
+        ],
+        sales_types=[
+            SalesTypeBreakdown(
+                sales_type=sales_type,
+                label=values["label"],
+                amount=values["amount"],
+                payment_count=values["count"],
+            )
+            for sales_type, values in type_totals.items()
+        ],
+        operators=[
+            SalesOperatorBreakdown(
+                operator_id=values["operator_id"],
+                operator_name=values["operator_name"],
+                total_amount=values["total"],
+                payment_count=values["count"],
+                cash_total=values["cash"],
+                gcash_total=values["gcash"],
+                maya_total=values["maya"],
+                other_total=values["other"],
+            )
+            for values in sorted(operator_totals.values(), key=lambda value: value["total"], reverse=True)
+        ],
+        pcs=[
+            SalesPCBreakdown(
+                pc_name=values["pc_name"],
+                total_amount=values["total"],
+                payment_count=values["count"],
+                paid_session_count=len(values["sessions"]),
+            )
+            for values in sorted(pc_totals.values(), key=lambda value: value["total"], reverse=True)
+        ],
+        timeseries=[
+            SalesTimeseriesPoint(
+                label=values["label"],
+                start_at=values["start_at"],
+                amount=values["amount"],
+                payment_count=values["count"],
+            )
+            for _, values in sorted(timeseries_totals.items())
+        ],
+        recent_payments=recent_payments,
+        outstanding_settlements=outstanding,
+    )
+
+
+@app.get("/sales/report", response_model=SalesReport)
+def get_sales_report(
+    period: SalesPeriod = Query("today"),
+    start_date: date | None = None,
+    end_date: date | None = None,
+    _: object = Depends(require_admin_operator),
+) -> SalesReport:
+    return build_sales_report(period, start_date, end_date)
+
+
+@app.get("/sales/export.csv")
+def export_sales_report(
+    period: SalesPeriod = Query("today"),
+    start_date: date | None = None,
+    end_date: date | None = None,
+    _: object = Depends(require_admin_operator),
+) -> Response:
+    report = build_sales_report(period, start_date, end_date, recent_limit=10000)
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "payment timestamp",
+        "operator",
+        "type",
+        "PC",
+        "customer/member",
+        "payment method",
+        "amount",
+        "status",
+        "related reference",
+    ])
+    for payment in report.recent_payments:
+        writer.writerow([
+            payment.timestamp.isoformat(),
+            payment.operator_name,
+            payment.sales_type,
+            payment.pc_name or "",
+            payment.customer or "",
+            payment.payment_method,
+            str(payment.amount),
+            payment.status,
+            payment.related_reference or "",
+        ])
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="secret-grounds-sales.csv"'},
+    )
+
+
+@app.get("/dashboard/today-sales", response_model=Decimal)
+def get_dashboard_today_sales(_: object = Depends(require_role("cashier"))) -> Decimal:
+    start_at, end_at, _ = resolve_sales_range("today", None, None)
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT COALESCE(SUM(CASE WHEN status = 'completed' THEN CAST(amount AS REAL) ELSE 0 END), 0) AS total
+            FROM payments
+            WHERE created_at >= ?
+              AND created_at < ?
+            """,
+            (start_at.isoformat(), end_at.isoformat()),
+        ).fetchone()
+    return parse_money(row["total"] if row is not None else "0.00")
 
 
 @app.post("/register", response_model=PCRegistrationResponse)

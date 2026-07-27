@@ -14,10 +14,27 @@ class LockScreenState:
     is_locked: bool = True
     is_online: bool = False
     dev_escape_active: bool = False
+    shop_display_name: str = "Secret Grounds"
+    customer_branding_text: str = "Ask the cashier to add more time to continue."
+    mode: str = "available"
     headline: str = "This computer is currently unavailable"
     instruction: str = "Please ask the cashier to start a session"
     countdown: str | None = None
     is_final_warning: bool = False
+
+
+@dataclass(frozen=True)
+class LockScreenViewModel:
+    brand: str
+    pc_name: str
+    mode: str
+    headline: str
+    instruction: str
+    countdown: str | None
+    connection_label: str
+    connection_online: bool
+    is_final_warning: bool
+    accent: str
 
 
 class LockScreenController:
@@ -49,6 +66,7 @@ class LockScreenController:
         self.headline_label = None
         self.instruction_label = None
         self.countdown_label = None
+        self.title_label = None
 
     def start(self) -> None:
         if self.enable_dev_escape:
@@ -74,6 +92,7 @@ class LockScreenController:
         with self.state_lock:
             self.state.is_locked = True
             self.state.dev_escape_active = False
+            self.state.mode = "available"
             self.state.headline = "This computer is currently unavailable"
             self.state.instruction = "Please ask the cashier to start a session"
             self.state.countdown = None
@@ -92,15 +111,16 @@ class LockScreenController:
         with self.state_lock:
             self.state.is_locked = True
             self.state.dev_escape_active = False
+            self.state.mode = "grace"
             self.state.headline = (
                 f"PC shutting down in {max(0, remaining_seconds)} seconds."
                 if final_warning
-                else "YOUR SESSION HAS ENDED"
+                else "Your time has ended."
             )
             self.state.instruction = (
-                "Need more time?\n"
-                "Please ask the cashier to add time before the countdown ends.\n"
-                "Your open programs will remain available if time is added before shutdown."
+                "This PC will shut down in 2 minutes.\n"
+                f"{self.state.customer_branding_text}\n"
+                "Please save and close your applications if you are finished."
             )
             self.state.countdown = f"{minutes:02d}:{seconds:02d}"
             self.state.is_final_warning = final_warning
@@ -113,6 +133,38 @@ class LockScreenController:
         if self.enable_gui:
             self._schedule(self._show_window)
 
+    def show_shutdown_transition(self) -> None:
+        with self.state_lock:
+            self.state.is_locked = True
+            self.state.dev_escape_active = False
+            self.state.mode = "shutting_down"
+            self.state.headline = "Session complete. This PC is shutting down."
+            self.state.instruction = (
+                "Please leave the computer on this screen.\n"
+                "The cashier will handle the next session."
+            )
+            self.state.countdown = None
+            self.state.is_final_warning = False
+        print("Shutdown transition screen shown.")
+        if self.enable_gui:
+            self._schedule(self._show_window)
+
+    def show_shutdown_failure(self) -> None:
+        with self.state_lock:
+            self.state.is_locked = True
+            self.state.dev_escape_active = False
+            self.state.mode = "shutdown_failed"
+            self.state.headline = "The session has ended."
+            self.state.instruction = (
+                "Please ask the cashier for assistance.\n"
+                "This computer is locked until the shop resolves shutdown."
+            )
+            self.state.countdown = None
+            self.state.is_final_warning = True
+        print("Shutdown failure screen shown.")
+        if self.enable_gui:
+            self._schedule(self._show_window)
+
     def hide_for_session(self) -> None:
         with self.state_lock:
             self.state.is_locked = False
@@ -122,6 +174,19 @@ class LockScreenController:
 
         if self.enable_gui:
             self._schedule(self._hide_window)
+
+    def apply_settings(
+        self,
+        shop_display_name: str | None = None,
+        customer_branding_text: str | None = None,
+    ) -> None:
+        with self.state_lock:
+            if shop_display_name:
+                self.state.shop_display_name = shop_display_name
+            if customer_branding_text:
+                self.state.customer_branding_text = customer_branding_text
+        if self.enable_gui:
+            self._schedule(self._update_lock_text)
 
     def set_connection_online(self, is_online: bool) -> None:
         with self.state_lock:
@@ -142,6 +207,34 @@ class LockScreenController:
     def is_online(self) -> bool:
         with self.state_lock:
             return self.state.is_online
+
+    def build_view_model(self) -> LockScreenViewModel:
+        with self.state_lock:
+            connection_online = self.state.is_online
+            is_final_warning = self.state.is_final_warning
+            mode = self.state.mode
+            headline = self.state.headline
+            instruction = self.state.instruction
+            countdown = self.state.countdown
+            brand = self.state.shop_display_name
+        if is_final_warning:
+            accent = "#F87171"
+        elif mode == "grace":
+            accent = "#FBBF24"
+        else:
+            accent = "#22D3EE"
+        return LockScreenViewModel(
+            brand=brand,
+            pc_name=self.pc_name,
+            mode=mode,
+            headline=headline,
+            instruction=instruction,
+            countdown=countdown,
+            connection_label="Online" if connection_online else "Offline",
+            connection_online=connection_online,
+            is_final_warning=is_final_warning,
+            accent=accent,
+        )
 
     def use_development_escape(self) -> None:
         if not self.enable_dev_escape:
@@ -167,7 +260,7 @@ class LockScreenController:
 
         self.root = tk.Tk()
         self.root.title("Secret Grounds")
-        self.root.configure(background="#030712")
+        self.root.configure(background="#05070D")
         self.root.attributes("-fullscreen", True)
         self.root.attributes("-topmost", True)
         self.root.overrideredirect(True)
@@ -176,7 +269,7 @@ class LockScreenController:
         self.root.bind("<FocusOut>", lambda _: self._ensure_visible())
         self.root.bind("<Control-Shift-F12>", lambda _: self.use_development_escape())
 
-        container = tk.Frame(self.root, background="#030712")
+        container = tk.Frame(self.root, background="#05070D")
         container.pack(expand=True, fill="both")
 
         if self.open_setup_wizard is not None:
@@ -200,29 +293,30 @@ class LockScreenController:
         mark = tk.Label(
             container,
             text="SG",
-            font=("Segoe UI", 30, "bold"),
+            font=("Segoe UI", 34, "bold"),
             foreground="#020617",
             background="#22D3EE",
-            padx=22,
-            pady=10,
+            padx=26,
+            pady=12,
         )
-        mark.pack(pady=(96, 22))
+        mark.pack(pady=(84, 22))
 
         title = tk.Label(
             container,
             text="Secret Grounds",
-            font=("Segoe UI", 48, "bold"),
+            font=("Segoe UI", 52, "bold"),
             foreground="#E0FAFF",
-            background="#030712",
+            background="#05070D",
         )
         title.pack(pady=(0, 22))
+        self.title_label = title
 
         unavailable = tk.Label(
             container,
             text="This computer is currently unavailable",
-            font=("Segoe UI", 24),
+            font=("Segoe UI", 28, "bold"),
             foreground="#F9FAFB",
-            background="#030712",
+            background="#05070D",
         )
         unavailable.pack(pady=8)
         self.headline_label = unavailable
@@ -232,7 +326,7 @@ class LockScreenController:
             text="Please ask the cashier to start a session",
             font=("Segoe UI", 18),
             foreground="#A7B8D4",
-            background="#030712",
+            background="#05070D",
             justify="center",
         )
         cashier.pack(pady=8)
@@ -241,9 +335,9 @@ class LockScreenController:
         self.countdown_label = tk.Label(
             container,
             text="",
-            font=("Segoe UI", 64, "bold"),
+            font=("Consolas", 72, "bold"),
             foreground="#22D3EE",
-            background="#030712",
+            background="#05070D",
         )
         self.countdown_label.pack(pady=(20, 8))
 
@@ -252,7 +346,7 @@ class LockScreenController:
             text=f"PC name: {self.pc_name}",
             font=("Segoe UI", 18, "bold"),
             foreground="#67E8F9",
-            background="#030712",
+            background="#05070D",
         )
         pc_label.pack(pady=(36, 8))
 
@@ -261,7 +355,7 @@ class LockScreenController:
             text="Connection status: Offline",
             font=("Segoe UI", 16),
             foreground="#FCA5A5",
-            background="#030712",
+            background="#05070D",
         )
         self.connection_label.pack(pady=8)
 
@@ -317,30 +411,28 @@ class LockScreenController:
         if self.connection_label is None:
             return
 
-        is_online = self.is_online()
-        label = "Online" if is_online else "Offline"
-        color = "#86EFAC" if is_online else "#FCA5A5"
+        model = self.build_view_model()
+        color = "#86EFAC" if model.connection_online else "#FCA5A5"
         self.connection_label.configure(
-            text=f"Connection status: {label}",
+            text=f"Connection status: {model.connection_label}",
             foreground=color,
         )
 
     def _update_lock_text(self) -> None:
-        with self.state_lock:
-            headline = self.state.headline
-            instruction = self.state.instruction
-            countdown = self.state.countdown
-            is_final_warning = self.state.is_final_warning
+        model = self.build_view_model()
 
         if self.headline_label is not None:
             self.headline_label.configure(
-                text=headline,
-                foreground="#FCA5A5" if is_final_warning else "#F9FAFB",
+                text=model.headline,
+                foreground="#FCA5A5" if model.is_final_warning else "#F9FAFB",
             )
         if self.instruction_label is not None:
-            self.instruction_label.configure(text=instruction)
+            self.instruction_label.configure(text=model.instruction)
+        if self.title_label is not None:
+            self.title_label.configure(text=model.brand)
         if self.countdown_label is not None:
             self.countdown_label.configure(
-                text=countdown or "",
-                foreground="#F87171" if is_final_warning else "#22D3EE",
+                text=model.countdown or "",
+                foreground=model.accent,
             )
+        self._update_connection_label()

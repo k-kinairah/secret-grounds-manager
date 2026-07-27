@@ -71,6 +71,7 @@ class SecretGroundsClient:
         self.active_session_lock = Lock()
         self.processed_command_ids: set[str] = set()
         self.remote_controls = RemoteControlHandler(pc_name)
+        self.final_warning_sound_enabled = EXPIRATION_SOUND_ENABLED
         self.websocket_lock = Lock()
         self.current_websocket: SimpleWebSocketClient | None = None
         self.lock_screen = lock_screen or LockScreenController(
@@ -116,6 +117,7 @@ class SecretGroundsClient:
             response.raise_for_status()
             print("Connected to Secret Grounds Server!")
             print(response.json())
+            self.refresh_client_settings()
             return True
 
         except requests.ConnectionError:
@@ -128,6 +130,45 @@ class SecretGroundsClient:
             print(f"Registration failed: {error}. Retrying soon...")
 
         return False
+
+    def refresh_client_settings(self) -> None:
+        try:
+            response = self.session.get(
+                f"{self.server_url}/client-settings",
+                timeout=self.request_timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException as error:
+            print(f"Client settings unavailable; using safe defaults: {error}")
+            return
+
+        thresholds = payload.get("reminder_thresholds_seconds")
+        safe_thresholds = (
+            [int(value) for value in thresholds]
+            if isinstance(thresholds, list)
+            and all(isinstance(value, int) and value > 0 for value in thresholds)
+            else None
+        )
+        shop_name = payload.get("shop_display_name")
+        customer_text = payload.get("customer_branding_text")
+        overlay_position = payload.get("overlay_position")
+        active_overlay_enabled = payload.get("active_overlay_enabled")
+        final_warning_sound_enabled = payload.get("final_warning_sound_enabled")
+
+        self.lock_screen.apply_settings(
+            shop_display_name=shop_name if isinstance(shop_name, str) else None,
+            customer_branding_text=customer_text if isinstance(customer_text, str) else None,
+        )
+        self.customer_overlay.apply_settings(
+            shop_display_name=shop_name if isinstance(shop_name, str) else None,
+            thresholds_seconds=safe_thresholds,
+            position=overlay_position if isinstance(overlay_position, str) else None,
+            enable_gui=active_overlay_enabled if isinstance(active_overlay_enabled, bool) else None,
+        )
+        if isinstance(final_warning_sound_enabled, bool):
+            self.final_warning_sound_enabled = final_warning_sound_enabled
+        print("Client-safe settings refreshed.")
 
     def register_until_connected(self) -> None:
         # Startup blocks here until the server accepts this PC into the registry.
@@ -351,9 +392,23 @@ class SecretGroundsClient:
                     daemon=True,
                 )
             else:
+                started_monotonic = time.monotonic()
+                try:
+                    started_at = self.parse_utc_datetime(scheduled_end_at)
+                    elapsed_seconds = max(
+                        0,
+                        int((datetime.now(timezone.utc) - started_at).total_seconds()),
+                    )
+                    started_monotonic = time.monotonic() - elapsed_seconds
+                except Exception as error:
+                    print(
+                        "Could not derive open-time elapsed offset; "
+                        f"using local start time: {error}"
+                    )
+                deadline_monotonic = started_monotonic
                 timer_thread = Thread(
                     target=self.run_open_time_overlay_timer,
-                    args=(session_id, deadline_monotonic, stop_event),
+                    args=(session_id, started_monotonic, stop_event),
                     daemon=True,
                 )
             self.active_session = LocalSession(
@@ -526,6 +581,10 @@ class SecretGroundsClient:
                 session_mode=self.active_session.session_mode,
             )
             self.customer_overlay.reset_reminders_after_add_time()
+            remaining_seconds = max(
+                0,
+                int(self.active_session.deadline_monotonic - time.monotonic()),
+            )
             if was_in_grace:
                 self.lock_screen.hide_for_session()
                 self.customer_overlay.show_session(
@@ -534,6 +593,10 @@ class SecretGroundsClient:
                     ),
                     is_elapsed=False,
                 )
+            self.customer_overlay.show_time_added_confirmation(
+                seconds,
+                remaining_seconds,
+            )
 
         if cancel_expiration:
             print(
@@ -736,7 +799,7 @@ class SecretGroundsClient:
             scheduled_end_at=scheduled_end_at or datetime.now(timezone.utc).isoformat(),
             session_mode=session_mode,
         )
-        self.lock_screen.show_locked("Session locked after expiration shutdown.")
+        self.lock_screen.show_shutdown_transition()
 
         if AUTOMATIC_SHUTDOWN_ON_EXPIRATION:
             try:
@@ -751,6 +814,7 @@ class SecretGroundsClient:
                 )
             except Exception as error:
                 print(f"Automatic shutdown failed for {session_id}: {error}")
+                self.lock_screen.show_shutdown_failure()
                 self.send_client_event(
                     {
                         "event_type": "expiration_shutdown_failed",
@@ -791,7 +855,7 @@ class SecretGroundsClient:
                 "message": "Final 30-second warning reached",
             }
         )
-        if EXPIRATION_SOUND_ENABLED:
+        if self.final_warning_sound_enabled:
             self.play_final_warning_sound()
 
     def play_final_warning_sound(self) -> None:

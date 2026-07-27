@@ -29,8 +29,11 @@ def main() -> None:
         from server.main import (
             quick_operator_login,
             create_rate,
+            list_admin_operators,
+            list_operator_activity,
             open_shift,
             record_payment,
+            require_admin_operator,
             session_repository,
             update_user_status,
         )
@@ -91,6 +94,18 @@ def main() -> None:
         else:
             raise AssertionError("Wrong Admin password should be rejected")
         assert authenticate_admin_operator("admin12345").display_name == "Admin"
+        seeded_admin = user_repository.get_by_username("admin")
+        seeded_mama = user_repository.get_user("operator_mama")
+        assert seeded_admin is not None
+        assert seeded_mama is not None
+        assert require_admin_operator(seeded_admin).user_id == seeded_admin.user_id
+        try:
+            require_admin_operator(seeded_mama)
+        except HTTPException as error:
+            assert error.status_code == 403
+        else:
+            raise AssertionError("Family operators must not access Admin-only pages")
+        assert len(list_admin_operators(seeded_admin)) == 8
         operator_response = Response()
         quick_operator_login(
             QuickOperatorLoginRequest(operator_id="operator_rogene"),
@@ -246,6 +261,14 @@ def main() -> None:
                 ("auth-session",),
             ).fetchone()
         assert payment_row["recorded_by_user_id"] == "operator_rogene"
+        activity = list_operator_activity("all", "operator_rogene", "payment", 50, seeded_admin)
+        assert any(
+            item.operator_name == "Rogene"
+            and item.amount == Decimal("20.00")
+            and item.payment_method == "cash"
+            and item.pc_name == "PC-AUTH"
+            for item in activity
+        )
 
         created_rate = create_rate(
             RateProfileCreate(

@@ -12,6 +12,15 @@ const ROLE_RANK: Record<UserRole, number> = {
   admin: 2,
   owner: 3
 };
+const ADMIN_ONLY_PATHS = [
+  "/operator-activity",
+  "/operators",
+  "/sales",
+  "/settings",
+  "/users",
+  "/shifts",
+  "/remote-commands"
+];
 
 function canAccess(user: CurrentUser | null, minimumRole: UserRole): boolean {
   return user !== null && ROLE_RANK[user.role] >= ROLE_RANK[minimumRole];
@@ -27,6 +36,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
   const [shiftMessage, setShiftMessage] = useState<string | null>(null);
   const [isClosingShift, setIsClosingShift] = useState(false);
   const isLoginPage = pathname === "/login";
+  const isAdminOperator = user?.username === "admin";
 
   useEffect(() => {
     let isMounted = true;
@@ -44,6 +54,8 @@ export function AuthShell({ children }: { children: ReactNode }) {
         }
         setShift(currentShift);
         if (isLoginPage) {
+          router.replace("/");
+        } else if (ADMIN_ONLY_PATHS.includes(pathname) && currentUser.username !== "admin") {
           router.replace("/");
         }
       } catch {
@@ -171,12 +183,54 @@ export function AuthShell({ children }: { children: ReactNode }) {
         </Link>
         <div className="appShell__links">
           <Link className={pathname === "/" ? "appShell__linkActive" : ""} href="/">Dashboard</Link>
-          <Link className={pathname === "/history" ? "appShell__linkActive" : ""} href="/history">History</Link>
-          <Link className={pathname === "/remote-commands" ? "appShell__linkActive" : ""} href="/remote-commands">Commands</Link>
           <Link className={pathname === "/members" ? "appShell__linkActive" : ""} href="/members">Members</Link>
-          <Link className={pathname === "/shifts" ? "appShell__linkActive" : ""} href="/shifts">Shifts</Link>
-          {canAccess(user, "admin") ? <Link className={pathname === "/rates" ? "appShell__linkActive" : ""} href="/rates">Rates</Link> : null}
-          {canAccess(user, "owner") ? <Link className={pathname === "/users" ? "appShell__linkActive" : ""} href="/users">Users</Link> : null}
+          <Link className={pathname === "/history" ? "appShell__linkActive" : ""} href="/history">History</Link>
+          <Link className={pathname === "/rates" ? "appShell__linkActive" : ""} href="/rates">Rates</Link>
+          {isAdminOperator ? (
+            <details className="appShell__adminMenu">
+              <summary
+                className={
+                  ["/operator-activity", "/operators", "/sales", "/remote-commands", "/settings"].includes(pathname)
+                    ? "appShell__linkActive"
+                    : ""
+                }
+              >
+                Admin
+              </summary>
+              <div className="appShell__adminDropdown">
+                <Link
+                  className={pathname === "/operator-activity" ? "appShell__linkActive" : ""}
+                  href="/operator-activity"
+                >
+                  Operator Activity
+                </Link>
+                <Link
+                  className={pathname === "/operators" ? "appShell__linkActive" : ""}
+                  href="/operators"
+                >
+                  Staff
+                </Link>
+                <Link
+                  className={pathname === "/remote-commands" ? "appShell__linkActive" : ""}
+                  href="/remote-commands"
+                >
+                  Commands
+                </Link>
+                <Link
+                  className={pathname === "/sales" ? "appShell__linkActive" : ""}
+                  href="/sales"
+                >
+                  Sales
+                </Link>
+                <Link
+                  className={pathname === "/settings" ? "appShell__linkActive" : ""}
+                  href="/settings"
+                >
+                  Settings
+                </Link>
+              </div>
+            </details>
+          ) : null}
         </div>
         <div className="appShell__account">
           {user ? (
@@ -206,7 +260,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
         <main className="authLoading" aria-live="polite">
           Loading Secret Grounds Manager...
         </main>
-      ) : user?.role === "cashier" && shift === null && pathname !== "/shifts" ? (
+      ) : user?.role === "cashier" && shift === null ? (
         <StartShiftGate message={shiftMessage} onOpened={handleShiftOpened} />
       ) : (
         <>

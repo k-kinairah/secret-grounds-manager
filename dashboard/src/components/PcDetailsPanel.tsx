@@ -24,6 +24,7 @@ type IconName =
 interface PcDetailsPanelProps {
   pc: PcSummary;
   currentUserRole: UserRole | null;
+  variant?: "modal" | "dock";
   onClose: () => void;
   onActionComplete: () => void;
   onStart: (pc: PcSummary) => void;
@@ -158,6 +159,7 @@ function statusLabel(pc: PcSummary): string {
 export function PcDetailsPanel({
   pc,
   currentUserRole,
+  variant = "modal",
   onClose,
   onActionComplete,
   onStart,
@@ -195,6 +197,10 @@ export function PcDetailsPanel({
     pc.recovery_required && (currentUserRole === "owner" || currentUserRole === "admin");
 
   useEffect(() => {
+    if (variant === "dock") {
+      return;
+    }
+
     const modal = modalRef.current;
     const previousActiveElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     modal?.focus();
@@ -240,7 +246,7 @@ export function PcDetailsPanel({
       document.removeEventListener("keydown", handleKeyDown);
       previousActiveElement?.focus();
     };
-  }, [isWorking, onClose]);
+  }, [isWorking, onClose, variant]);
 
   async function runPanelAction(action: () => Promise<unknown>, success: string) {
     if (isWorking) {
@@ -293,6 +299,23 @@ export function PcDetailsPanel({
     );
   }
 
+  const panelContent = (
+    <section
+      aria-label={`${pc.pc_name} controls`}
+      aria-modal={variant === "modal" ? "true" : undefined}
+      className={variant === "dock" ? styles.pcControlDock : styles.pcControlModal}
+      ref={modalRef}
+      role={variant === "modal" ? "dialog" : "region"}
+      tabIndex={variant === "modal" ? -1 : undefined}
+    >
+      <PcControlPanelContent />
+    </section>
+  );
+
+  if (variant === "dock") {
+    return panelContent;
+  }
+
   return (
     <div
       className={styles.overlay}
@@ -303,14 +326,13 @@ export function PcDetailsPanel({
       }}
       role="presentation"
     >
-      <section
-        aria-label={`${pc.pc_name} control window`}
-        aria-modal="true"
-        className={styles.pcControlModal}
-        ref={modalRef}
-        role="dialog"
-        tabIndex={-1}
-      >
+      {panelContent}
+    </div>
+  );
+
+  function PcControlPanelContent() {
+    return (
+      <>
         <header className={styles.pcControlHeader}>
           <div>
             <h2>{pc.display_name ?? pc.pc_name}</h2>
@@ -644,7 +666,7 @@ export function PcDetailsPanel({
             </div>
           </details>
         ) : null}
-      </section>
-    </div>
-  );
+      </>
+    );
+  }
 }

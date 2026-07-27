@@ -26,7 +26,7 @@ from server.schemas import (
 )
 from server.prepared_session_repository import PreparedSessionRepository, payment_from_json, payment_to_json
 from server.session_repository import SessionRepository
-from server.settings import EXPIRATION_GRACE_SECONDS
+from server.admin_settings_service import get_runtime_expiration_grace_seconds
 from server.time_utils import current_utc_time
 
 
@@ -549,7 +549,8 @@ class SessionService:
             return session
 
         started_at = grace_started_at or current_utc_time()
-        shutdown_at = started_at + timedelta(seconds=EXPIRATION_GRACE_SECONDS)
+        expiration_grace_seconds = get_runtime_expiration_grace_seconds()
+        shutdown_at = started_at + timedelta(seconds=expiration_grace_seconds)
         updated = session.model_copy(
             update={
                 "status": "grace_period",
@@ -566,7 +567,7 @@ class SessionService:
         self.create_event(
             session.session_id,
             "shutdown_grace_started",
-            seconds=EXPIRATION_GRACE_SECONDS,
+            seconds=expiration_grace_seconds,
             message=f"Shutdown scheduled at {shutdown_at.isoformat()}",
         )
         return updated

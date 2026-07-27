@@ -71,8 +71,8 @@ def start_server(database_path: str) -> subprocess.Popen[str]:
         ],
         cwd=PROJECT_ROOT,
         env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         text=True,
     )
 
@@ -130,6 +130,25 @@ def wait_for_session_status(
         time.sleep(0.25)
 
     raise RuntimeError(f"Session {session_id} did not become {status}")
+
+
+def wait_for_pc_connection_status(
+    session: requests.Session,
+    pc_name: str,
+    status: str,
+) -> dict[str, object]:
+    last_payload: list[dict[str, object]] = []
+    deadline = time.monotonic() + 25
+    while time.monotonic() < deadline:
+        response = session.get(f"{SERVER_URL}/pcs", timeout=5)
+        response.raise_for_status()
+        last_payload = response.json()
+        for pc in last_payload:
+            if pc["pc_name"] == pc_name and pc["connection_status"] == status:
+                return pc
+        time.sleep(0.25)
+
+    raise RuntimeError(f"PC {pc_name} did not become {status}: {last_payload}")
 
 
 def post_json(
@@ -271,13 +290,14 @@ def main() -> None:
 
             assert_client_rejects_mismatched_session()
             client.stop()
+            client_thread.join(timeout=3)
 
             requests.post(
                 f"{SERVER_URL}/register",
                 json={"pc_name": "PC-OFFLINE", "ip_address": "127.0.0.2"},
                 timeout=5,
             ).raise_for_status()
-            time.sleep(16)
+            wait_for_pc_connection_status(admin_session, "PC-OFFLINE", "offline")
             offline_start = post_json(
                 admin_session,
                 "/sessions/start",
@@ -308,6 +328,7 @@ def main() -> None:
 
         finally:
             client.stop()
+            client_thread.join(timeout=3)
             stop_server(server_process)
 
 

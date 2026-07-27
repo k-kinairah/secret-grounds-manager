@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import styles from "@/app/page.module.css";
 import {
   createMember,
@@ -21,6 +29,23 @@ import type {
   PaymentMethod
 } from "@/lib/types";
 
+function formatMemberBalance(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  if (hours > 0 && remainingMinutes > 0) {
+    return `${hours} hr ${remainingMinutes} min`;
+  }
+
+  if (hours > 0) {
+    return `${hours} hr`;
+  }
+
+  return `${minutes} min`;
+}
+
 function describeActivity(transaction: MemberTimeTransaction): {
   title: string;
   detail: string;
@@ -28,7 +53,7 @@ function describeActivity(transaction: MemberTimeTransaction): {
   isTechnical: boolean;
 } {
   const delta = Math.abs(transaction.seconds_delta);
-  const balance = formatNaturalDuration(transaction.balance_after_seconds);
+  const balance = formatMemberBalance(transaction.balance_after_seconds);
 
   switch (transaction.transaction_type) {
     case "membership_purchase":
@@ -93,6 +118,66 @@ function describeActivity(transaction: MemberTimeTransaction): {
   }
 }
 
+function useModalFocus(
+  isOpen: boolean,
+  modalRef: RefObject<HTMLElement | null>,
+  onClose: () => void
+) {
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const modal = modalRef.current;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    window.setTimeout(() => {
+      const firstField = modal?.querySelector<HTMLElement>(
+        "input, select, button, textarea, [href], [tabindex]:not([tabindex='-1'])"
+      );
+      firstField?.focus();
+    }, 0);
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== "Tab" || modal === null) {
+        return;
+      }
+
+      const focusable = Array.from(
+        modal.querySelectorAll<HTMLElement>(
+          "input, select, button, textarea, [href], [tabindex]:not([tabindex='-1'])"
+        )
+      ).filter((element) => !element.hasAttribute("disabled"));
+
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [isOpen, modalRef, onClose]);
+}
+
 export function MembersManager() {
   const [members, setMembers] = useState<MemberRecord[]>([]);
   const [products, setProducts] = useState<MembershipProduct[]>([]);
@@ -104,6 +189,13 @@ export function MembersManager() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [selectedProductId, setSelectedProductId] = useState("");
   const [showAdvancedActivity, setShowAdvancedActivity] = useState(false);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [confirmingStatusMember, setConfirmingStatusMember] = useState<MemberRecord | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const createModalRef = useRef<HTMLElement | null>(null);
+  const detailModalRef = useRef<HTMLElement | null>(null);
+  const confirmModalRef = useRef<HTMLElement | null>(null);
 
   const activeProducts = useMemo(() => products.filter((product) => product.is_active), [products]);
   const selectedProduct =
@@ -117,7 +209,22 @@ export function MembersManager() {
         .filter(({ activity }) => showAdvancedActivity || !activity.isTechnical),
     [ledger, showAdvancedActivity]
   );
+  const filteredMembers = useMemo(
+    () =>
+      statusFilter === "all"
+        ? members
+        : members.filter((member) => member.status === statusFilter),
+    [members, statusFilter]
+  );
   const canManagePins = currentUser?.role === "owner";
+  const hasSearch = query.trim().length > 0 || statusFilter !== "all";
+  const closeCreateDialog = useCallback(() => setIsCreateOpen(false), []);
+  const closeDetailDialog = useCallback(() => setSelectedMember(null), []);
+  const closeConfirmDialog = useCallback(() => setConfirmingStatusMember(null), []);
+
+  useModalFocus(isCreateOpen, createModalRef, closeCreateDialog);
+  useModalFocus(selectedMember !== null, detailModalRef, closeDetailDialog);
+  useModalFocus(confirmingStatusMember !== null, confirmModalRef, closeConfirmDialog);
 
   async function refresh(search = query) {
     const [nextMembers, nextProducts] = await Promise.all([
@@ -130,17 +237,47 @@ export function MembersManager() {
   }
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      Promise.all([refresh(), fetchCurrentUser().then(setCurrentUser)]).catch((error) => {
-        setMessage(error instanceof Error ? error.message : "Could not load members.");
+    let isMounted = true;
+    Promise.all([fetchMembers(""), fetchMembershipProducts(), fetchCurrentUser()])
+      .then(([nextMembers, nextProducts, nextUser]) => {
+        if (!isMounted) {
+          return;
+        }
+        setMembers(nextMembers);
+        setProducts(nextProducts);
+        setCurrentUser(nextUser);
+        setMessage(null);
+      })
+      .catch((error) => {
+        if (isMounted) {
+          setMessage(error instanceof Error ? error.message : "Could not load members.");
+        }
       });
-    }, 0);
-    return () => window.clearTimeout(timeoutId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  async function handleCreate(formData: FormData) {
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      refresh(query).catch((error) => {
+        setMessage(error instanceof Error ? error.message : "Could not load members.");
+      });
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
+  async function handleCreate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isSaving) {
+      return;
+    }
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     setIsSaving(true);
+    setCreateError(null);
     try {
       await createMember({
         member_code: String(formData.get("memberCode") ?? ""),
@@ -149,8 +286,12 @@ export function MembersManager() {
       });
       setMessage("Member created.");
       await refresh();
+      form.reset();
+      setIsCreateOpen(false);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not create member.");
+      const errorText = error instanceof Error ? error.message : "Could not create member.";
+      setCreateError(errorText);
+      setMessage(errorText);
     } finally {
       setIsSaving(false);
     }
@@ -214,6 +355,7 @@ export function MembersManager() {
       await updateMemberStatus(member.member_id, member.status === "active" ? "inactive" : "active");
       await refresh();
       setMessage(member.status === "active" ? "Member disabled." : "Member enabled.");
+      setConfirmingStatusMember(null);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not update member.");
     } finally {
@@ -221,266 +363,434 @@ export function MembersManager() {
     }
   }
 
+  function clearSearch() {
+    setQuery("");
+    setStatusFilter("all");
+  }
+
   return (
     <main className={styles.page}>
-      <div className={styles.topBar}>
+      <div className={styles.memberHeader}>
         <div className={styles.brandBlock}>
           <h1>Members</h1>
-          <p>Member play balances, purchases, and activity history.</p>
+          <p>Member balances, purchases, and activity.</p>
         </div>
+        <div className={styles.memberHeaderActions}>
+          <label className={styles.memberSearch}>
+            <span className="srOnly">Search members</span>
+            <input
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search by code, name, or phone"
+              value={query}
+            />
+            {query ? (
+              <button aria-label="Clear member search" onClick={clearSearch} type="button">
+                Clear
+              </button>
+            ) : null}
+          </label>
+          <button
+            className={styles.primaryButton}
+            onClick={() => {
+              setCreateError(null);
+              setIsCreateOpen(true);
+            }}
+            type="button"
+          >
+            Add Member
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.memberToolbar}>
+        <div className={styles.memberFilterGroup} aria-label="Member status filter">
+          {(["all", "active", "inactive"] as const).map((filter) => (
+            <button
+              className={statusFilter === filter ? styles.memberFilterActive : ""}
+              key={filter}
+              onClick={() => setStatusFilter(filter)}
+              type="button"
+            >
+              {filter === "all" ? "All Members" : filter === "active" ? "Active" : "Disabled"}
+            </button>
+          ))}
+        </div>
+        <span>
+          {filteredMembers.length} {filteredMembers.length === 1 ? "member" : "members"}
+          {hasSearch ? " matched" : ""}
+        </span>
       </div>
 
       {message ? <div className={styles.statusMessage}>{message}</div> : null}
 
-      <section className={styles.paymentBox}>
-        <form
-          className={styles.amountPanel}
-          onSubmit={(event) => {
-            event.preventDefault();
-            void refresh(query);
-          }}
-        >
-          <label className={styles.field}>
-            Search members
-            <input
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Code, name, or phone"
-              value={query}
-            />
-          </label>
-          <button className={styles.secondaryButton} type="submit">
-            Search
-          </button>
-        </form>
-        <form
-          className={styles.optionGrid}
-          onSubmit={(event) => {
-            event.preventDefault();
-            void handleCreate(new FormData(event.currentTarget));
-            event.currentTarget.reset();
-          }}
-        >
-          <label className={styles.field}>
-            Member code
-            <input name="memberCode" placeholder="SG-001" required />
-          </label>
-          <label className={styles.field}>
-            Full name
-            <input name="fullName" placeholder="Customer name" required />
-          </label>
-          <label className={styles.field}>
-            Phone
-            <input name="phoneNumber" placeholder="Optional" />
-          </label>
-          <button className={styles.primaryButton} disabled={isSaving} type="submit">
-            Create Member
-          </button>
-        </form>
+      <section className={styles.memberDirectory} aria-label="Member directory">
+        {filteredMembers.length === 0 ? (
+          <div className={styles.memberEmptyState}>
+            <h2>{hasSearch ? "No members found" : "No members yet"}</h2>
+            <p>
+              {hasSearch
+                ? "Try another code, name, or phone number."
+                : "Create the first member to begin storing reusable play balances."}
+            </p>
+            {hasSearch ? (
+              <button className={styles.secondaryButton} onClick={clearSearch} type="button">
+                Clear Search
+              </button>
+            ) : (
+              <button
+                className={styles.primaryButton}
+                onClick={() => {
+                  setCreateError(null);
+                  setIsCreateOpen(true);
+                }}
+                type="button"
+              >
+                Add Member
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className={styles.memberTableWrap}>
+            <table className={styles.memberTable}>
+              <thead>
+                <tr>
+                  <th>Member</th>
+                  <th>Code</th>
+                  <th>Balance</th>
+                  <th>Phone</th>
+                  <th>PIN</th>
+                  <th>Joined</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredMembers.map((member) => (
+                  <tr key={member.member_id}>
+                    <td data-label="Member">
+                      <strong>{member.full_name}</strong>
+                    </td>
+                    <td data-label="Code">{member.member_code}</td>
+                    <td data-label="Balance">
+                      <span className={styles.memberBalance}>
+                        {formatMemberBalance(member.time_balance_seconds)}
+                      </span>
+                    </td>
+                    <td data-label="Phone">{member.phone_number || "No phone"}</td>
+                    <td data-label="PIN">{member.has_pin ? "PIN enabled" : "PIN not set"}</td>
+                    <td data-label="Joined">{formatDateTime(member.joined_at)}</td>
+                    <td data-label="Status">
+                      <span
+                        className={`${styles.statusPill} ${
+                          member.status === "active" ? styles.badgeOnline : styles.badgeOffline
+                        }`}
+                      >
+                        {member.status === "active" ? "Active" : "Disabled"}
+                      </span>
+                    </td>
+                    <td data-label="Actions">
+                      <div className={styles.memberActions}>
+                        <button
+                          className={styles.secondaryButton}
+                          onClick={() => void handleSelect(member)}
+                          type="button"
+                        >
+                          View Member
+                        </button>
+                        <details className={styles.memberMoreMenu}>
+                          <summary aria-label={`More actions for ${member.member_code}`}>More</summary>
+                          <div>
+                            <button onClick={() => void handleSelect(member)} type="button">
+                              View Activity
+                            </button>
+                            <button
+                              onClick={() => setConfirmingStatusMember(member)}
+                              type="button"
+                            >
+                              {member.status === "active" ? "Disable Member" : "Enable Member"}
+                            </button>
+                          </div>
+                        </details>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
-      <section className={styles.pcGrid}>
-        {members.length === 0 ? <div className={styles.emptyState}>No members yet.</div> : null}
-        {members.map((member) => (
-          <article className={styles.pcCard} key={member.member_id}>
-            <div className={styles.pcHeader}>
+      {isCreateOpen ? (
+        <div className={styles.overlay} role="presentation">
+          <section
+            aria-label="Add member"
+            aria-modal="true"
+            className={styles.memberModal}
+            ref={createModalRef}
+            role="dialog"
+          >
+            <div className={styles.memberModalHeader}>
               <div>
-                <div className={styles.pcName}>{member.member_code}</div>
-                <p>{member.full_name}</p>
+                <h2>Add Member</h2>
+                <p>Create a reusable play-balance profile.</p>
               </div>
-              <span
-                className={`${styles.statusPill} ${
-                  member.status === "active" ? styles.badgeOnline : styles.badgeOffline
-                }`}
+              <button
+                aria-label="Close add member dialog"
+                className={styles.iconButton}
+                onClick={() => setIsCreateOpen(false)}
+                type="button"
               >
-                {member.status}
-              </span>
+                X
+              </button>
             </div>
-            <dl className={styles.detailList}>
-              <div className={styles.detailRow}>
-                <span>Balance</span>
-                <strong>{formatNaturalDuration(member.time_balance_seconds)}</strong>
+            {createError ? <div className={styles.memberDialogMessage}>{createError}</div> : null}
+            <form className={styles.memberFormGrid} onSubmit={handleCreate}>
+              <label className={styles.field}>
+                Member code
+                <input name="memberCode" placeholder="SG-001" required />
+              </label>
+              <label className={styles.field}>
+                Full name
+                <input name="fullName" placeholder="Customer name" required />
+              </label>
+              <label className={styles.field}>
+                Phone, optional
+                <input name="phoneNumber" placeholder="No phone" />
+              </label>
+              <div className={styles.dialogActions}>
+                <button
+                  className={styles.secondaryButton}
+                  onClick={() => setIsCreateOpen(false)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button className={styles.primaryButton} disabled={isSaving} type="submit">
+                  {isSaving ? "Creating..." : "Create Member"}
+                </button>
               </div>
-              <div className={styles.detailRow}>
-                <span>Phone</span>
-                <strong>{member.phone_number ?? "None"}</strong>
-              </div>
-              <div className={styles.detailRow}>
-                <span>PIN</span>
-                <strong>{member.has_pin ? "Enabled" : "Not set"}</strong>
-              </div>
-              <div className={styles.detailRow}>
-                <span>Joined</span>
-                <strong>{formatDateTime(member.joined_at)}</strong>
-              </div>
-            </dl>
-            <div className={styles.actions}>
+            </form>
+          </section>
+        </div>
+      ) : null}
+
+      {confirmingStatusMember ? (
+        <div className={styles.overlay} role="presentation">
+          <section
+            aria-label="Confirm member status change"
+            aria-modal="true"
+            className={styles.confirmDialog}
+            ref={confirmModalRef}
+            role="dialog"
+          >
+            <h2>
+              {confirmingStatusMember.status === "active" ? "Disable" : "Enable"}{" "}
+              {confirmingStatusMember.member_code} - {confirmingStatusMember.full_name}?
+            </h2>
+            <p>
+              {confirmingStatusMember.status === "active"
+                ? "This member will no longer be available for new sessions, but their history and balance records will remain preserved."
+                : "This member will become available for member-balance sessions again."}
+            </p>
+            <div className={styles.dialogActions}>
               <button
                 className={styles.secondaryButton}
-                onClick={() => void handleSelect(member)}
+                onClick={() => setConfirmingStatusMember(null)}
                 type="button"
               >
-                View Activity
+                Cancel
               </button>
               <button
-                className={styles.dangerButton}
+                className={
+                  confirmingStatusMember.status === "active"
+                    ? styles.dangerButton
+                    : styles.primaryButton
+                }
                 disabled={isSaving}
-                onClick={() => void toggleStatus(member)}
+                onClick={() => void toggleStatus(confirmingStatusMember)}
                 type="button"
               >
-                {member.status === "active" ? "Disable" : "Enable"}
+                {confirmingStatusMember.status === "active" ? "Disable Member" : "Enable Member"}
               </button>
             </div>
-          </article>
-        ))}
-      </section>
+          </section>
+        </div>
+      ) : null}
 
       {selectedMember ? (
         <div className={styles.overlay} role="presentation">
           <section
-            className={styles.dialog}
-            role="dialog"
             aria-label="Member detail"
             aria-modal="true"
+            className={styles.memberDetailModal}
+            ref={detailModalRef}
+            role="dialog"
           >
-            <h2>
-              {selectedMember.member_code} - {selectedMember.full_name}
-            </h2>
-            <div className={styles.paymentSummary}>
-              <span>Current balance</span>
-              <strong>{formatNaturalDuration(selectedMember.time_balance_seconds)}</strong>
-            </div>
-            <form
-              className={styles.paymentBox}
-              onSubmit={(event) => {
-                event.preventDefault();
-                void handlePurchase(new FormData(event.currentTarget));
-              }}
-            >
-              <div className={styles.optionGrid}>
-                {activeProducts.map((product) => (
-                  <button
-                    className={`${styles.rateOption} ${
-                      selectedProduct?.product_id === product.product_id
-                        ? styles.rateOptionSelected
-                        : ""
-                    }`}
-                    key={product.product_id}
-                    onClick={() => setSelectedProductId(product.product_id)}
-                    type="button"
-                  >
-                    <span className={styles.rateTitle}>{product.name}</span>
-                    <span className={styles.rateDuration}>
-                      Adds {formatNaturalDuration(product.time_seconds)}
-                    </span>
-                    <span className={styles.ratePrice}>{formatMoney(product.price)}</span>
-                  </button>
-                ))}
-              </div>
-              {selectedProduct ? (
-                <div className={styles.amountPreview}>
-                  <span>Balance preview</span>
-                  <strong>
-                    {formatNaturalDuration(selectedMember.time_balance_seconds)} +{" "}
-                    {formatNaturalDuration(selectedProduct.time_seconds)} ={" "}
-                    {formatNaturalDuration(
-                      selectedMember.time_balance_seconds + selectedProduct.time_seconds
-                    )}
-                  </strong>
-                </div>
-              ) : null}
-              <label className={styles.field}>
-                Payment method
-                <select name="paymentMethod">
-                  <option value="cash">Cash</option>
-                  <option value="gcash">GCash</option>
-                  <option value="maya">Maya</option>
-                  <option value="other">Other</option>
-                </select>
-              </label>
-              <label className={styles.field}>
-                Cash received / reference
-                <input name="cashReceived" placeholder="100.00 or reference number" />
-              </label>
-              <button className={styles.primaryButton} disabled={isSaving} type="submit">
-                Add Member Time
-              </button>
-            </form>
-
-            {canManagePins ? (
-              <form
-                className={styles.paymentBox}
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void handlePinReset(new FormData(event.currentTarget));
-                  event.currentTarget.reset();
-                }}
-              >
-                <div className={styles.amountPreview}>
-                  <span>Member PIN</span>
-                  <strong>
-                    {selectedMember.has_pin
-                      ? "PIN enabled. Enter a new PIN to reset it, or leave blank to remove it."
-                      : "Optional 4-6 digit PIN. Required only when this member starts play."}
-                  </strong>
-                </div>
-                <label className={styles.field}>
-                  New PIN
-                  <input
-                    inputMode="numeric"
-                    maxLength={6}
-                    minLength={4}
-                    name="memberPin"
-                    placeholder="4-6 digits, blank removes"
-                    type="password"
-                  />
-                </label>
-                <button className={styles.secondaryButton} disabled={isSaving} type="submit">
-                  {selectedMember.has_pin ? "Reset PIN" : "Set PIN"}
-                </button>
-              </form>
-            ) : null}
-
-            <div className={styles.sectionHeader}>
+            <div className={styles.memberModalHeader}>
               <div>
-                <h2>Activity</h2>
-                <p className={styles.panelText}>Purchases and actual play time deducted.</p>
+                <h2>{selectedMember.full_name}</h2>
+                <p>
+                  {selectedMember.member_code} /{" "}
+                  {selectedMember.status === "active" ? "Active" : "Disabled"}
+                </p>
               </div>
-              {currentUser?.role === "admin" || currentUser?.role === "owner" ? (
-                <button
-                  className={styles.secondaryButton}
-                  onClick={() => setShowAdvancedActivity((value) => !value)}
-                  type="button"
-                >
-                  {showAdvancedActivity ? "Hide Technical" : "Show Technical"}
-                </button>
-              ) : null}
-            </div>
-            <div className={styles.detailList}>
-              {visibleLedger.length === 0 ? (
-                <div className={styles.emptyState}>No member activity yet.</div>
-              ) : null}
-              {visibleLedger.map(({ transaction, activity }) => (
-                <div className={styles.detailRow} key={transaction.transaction_id}>
-                  <span>
-                    {activity.title}
-                    <small>{formatDateTime(transaction.created_at)}</small>
-                  </span>
-                  <strong>
-                    {activity.amount ? `${formatMoney(activity.amount)} - ` : ""}
-                    {activity.detail}
-                  </strong>
-                </div>
-              ))}
-            </div>
-            <div className={styles.dialogActions}>
               <button
-                className={styles.secondaryButton}
+                aria-label="Close member detail"
+                className={styles.iconButton}
                 onClick={() => setSelectedMember(null)}
                 type="button"
               >
-                Close
+                X
               </button>
             </div>
+
+            <div className={styles.memberDetailGrid}>
+              <section className={styles.controlSection}>
+                <h3>Member Profile</h3>
+                <dl className={styles.compactDetailList}>
+                  <div className={styles.detailRow}>
+                    <span>Current balance</span>
+                    <strong>{formatMemberBalance(selectedMember.time_balance_seconds)}</strong>
+                  </div>
+                  <div className={styles.detailRow}>
+                    <span>Phone</span>
+                    <strong>{selectedMember.phone_number || "No phone"}</strong>
+                  </div>
+                  <div className={styles.detailRow}>
+                    <span>PIN</span>
+                    <strong>{selectedMember.has_pin ? "PIN enabled" : "PIN not set"}</strong>
+                  </div>
+                  <div className={styles.detailRow}>
+                    <span>Joined</span>
+                    <strong>{formatDateTime(selectedMember.joined_at)}</strong>
+                  </div>
+                </dl>
+              </section>
+
+              <section className={styles.controlSection}>
+                <h3>Add Balance / Purchase Time</h3>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handlePurchase(new FormData(event.currentTarget));
+                  }}
+                >
+                  <div className={styles.memberProductGrid}>
+                    {activeProducts.map((product) => (
+                      <button
+                        className={`${styles.rateOption} ${
+                          selectedProduct?.product_id === product.product_id
+                            ? styles.rateOptionSelected
+                            : ""
+                        }`}
+                        key={product.product_id}
+                        onClick={() => setSelectedProductId(product.product_id)}
+                        type="button"
+                      >
+                        <span className={styles.rateTitle}>{product.name}</span>
+                        <span className={styles.rateDuration}>
+                          Adds {formatMemberBalance(product.time_seconds)}
+                        </span>
+                        <span className={styles.ratePrice}>{formatMoney(product.price)}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {selectedProduct ? (
+                    <div className={styles.amountPreview}>
+                      <span>Balance preview</span>
+                      <strong>
+                        {formatMemberBalance(selectedMember.time_balance_seconds)} +{" "}
+                        {formatMemberBalance(selectedProduct.time_seconds)} ={" "}
+                        {formatMemberBalance(
+                          selectedMember.time_balance_seconds + selectedProduct.time_seconds
+                        )}
+                      </strong>
+                    </div>
+                  ) : null}
+                  <label className={styles.field}>
+                    Payment method
+                    <select name="paymentMethod">
+                      <option value="cash">Cash</option>
+                      <option value="gcash">GCash</option>
+                      <option value="maya">Maya</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                  <label className={styles.field}>
+                    Cash received / reference
+                    <input name="cashReceived" placeholder="100.00 or reference number" />
+                  </label>
+                  <button className={styles.primaryButton} disabled={isSaving} type="submit">
+                    {isSaving ? "Processing..." : "Add Member Time"}
+                  </button>
+                </form>
+              </section>
+            </div>
+
+            {canManagePins ? (
+              <section className={styles.controlSection}>
+                <h3>PIN Management</h3>
+                <form
+                  className={styles.memberPinForm}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handlePinReset(new FormData(event.currentTarget));
+                    event.currentTarget.reset();
+                  }}
+                >
+                  <label className={styles.field}>
+                    New PIN
+                    <input
+                      inputMode="numeric"
+                      maxLength={6}
+                      minLength={4}
+                      name="memberPin"
+                      placeholder="4-6 digits, blank removes"
+                      type="password"
+                    />
+                  </label>
+                  <button className={styles.secondaryButton} disabled={isSaving} type="submit">
+                    {selectedMember.has_pin ? "Reset PIN" : "Set PIN"}
+                  </button>
+                </form>
+              </section>
+            ) : null}
+
+            <section className={styles.controlSection}>
+              <div className={styles.memberSectionHeader}>
+                <div>
+                  <h3>Recent Activity</h3>
+                  <p>Purchases and actual play time deducted.</p>
+                </div>
+                {currentUser?.role === "admin" || currentUser?.role === "owner" ? (
+                  <button
+                    className={styles.secondaryButton}
+                    onClick={() => setShowAdvancedActivity((value) => !value)}
+                    type="button"
+                  >
+                    {showAdvancedActivity ? "Hide Technical" : "Show Technical"}
+                  </button>
+                ) : null}
+              </div>
+              <div className={styles.memberActivityList}>
+                {visibleLedger.length === 0 ? (
+                  <div className={styles.memberMiniEmpty}>No member activity yet.</div>
+                ) : null}
+                {visibleLedger.map(({ transaction, activity }) => (
+                  <div className={styles.memberActivityRow} key={transaction.transaction_id}>
+                    <div>
+                      <strong>{activity.title}</strong>
+                      <span>{formatDateTime(transaction.created_at)}</span>
+                    </div>
+                    <p>
+                      {activity.amount ? `${formatMoney(activity.amount)} - ` : ""}
+                      {activity.detail}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
           </section>
         </div>
       ) : null}

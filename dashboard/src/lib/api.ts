@@ -2,6 +2,8 @@ import type {
   BillingSummary,
   CashierShiftDetail,
   CashierShiftRecord,
+  AdminSettings,
+  AdminSettingsResponse,
   CurrentUser,
   ForceEndSessionResponse,
   MemberRecord,
@@ -9,6 +11,8 @@ import type {
   MemberSessionSelection,
   MemberTimeTransaction,
   OperatorAccess,
+  OperatorActivityRecord,
+  OperatorManagementRecord,
   PcLayoutSlot,
   PcSummary,
   CalculatedTimeResponse,
@@ -18,6 +22,8 @@ import type {
   RemoteCommandRecord,
   RemoteCommandResponse,
   MessageSeverity,
+  SalesPeriod,
+  SalesReport,
   UserAdminRecord,
   UserCreateInput,
   UserUpdateInput,
@@ -126,6 +132,28 @@ export async function fetchCurrentUser(): Promise<CurrentUser> {
   });
 }
 
+export async function fetchAdminSettings(): Promise<AdminSettingsResponse> {
+  return requestJson<AdminSettingsResponse>(`${getApiBaseUrl()}/settings`, {
+    cache: "no-store"
+  });
+}
+
+export async function updateAdminSettings(settings: AdminSettings): Promise<AdminSettingsResponse> {
+  return requestJson<AdminSettingsResponse>(`${getApiBaseUrl()}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function resetAdminSettings(category: keyof AdminSettings | "all"): Promise<AdminSettingsResponse> {
+  return requestJson<AdminSettingsResponse>(`${getApiBaseUrl()}/settings/reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category })
+  });
+}
+
 export async function fetchCurrentShift(): Promise<CashierShiftDetail | null> {
   return requestJson<CashierShiftDetail | null>(`${getApiBaseUrl()}/shifts/current`, {
     cache: "no-store"
@@ -171,6 +199,69 @@ export async function fetchUsers(): Promise<UserAdminRecord[]> {
   return requestJson<UserAdminRecord[]>(`${getApiBaseUrl()}/users`, {
     cache: "no-store"
   });
+}
+
+export async function fetchAdminOperators(): Promise<OperatorManagementRecord[]> {
+  return requestJson<OperatorManagementRecord[]>(`${getApiBaseUrl()}/admin/operators`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchOperatorActivity(params: {
+  dateScope?: "today" | "all";
+  operatorId?: string;
+  category?: string;
+} = {}): Promise<OperatorActivityRecord[]> {
+  const search = new URLSearchParams();
+  search.set("date_scope", params.dateScope ?? "today");
+  if (params.operatorId) {
+    search.set("operator_id", params.operatorId);
+  }
+  if (params.category) {
+    search.set("category", params.category);
+  }
+  return requestJson<OperatorActivityRecord[]>(
+    `${getApiBaseUrl()}/operator-activity?${search.toString()}`,
+    { cache: "no-store" }
+  );
+}
+
+export interface SalesReportFilters {
+  period: SalesPeriod;
+  startDate?: string;
+  endDate?: string;
+}
+
+function appendSalesFilters(search: URLSearchParams, filters: SalesReportFilters) {
+  search.set("period", filters.period);
+  if (filters.period === "custom") {
+    if (filters.startDate) {
+      search.set("start_date", filters.startDate);
+    }
+    if (filters.endDate) {
+      search.set("end_date", filters.endDate);
+    }
+  }
+}
+
+export async function fetchSalesReport(filters: SalesReportFilters): Promise<SalesReport> {
+  const search = new URLSearchParams();
+  appendSalesFilters(search, filters);
+  return requestJson<SalesReport>(`${getApiBaseUrl()}/sales/report?${search.toString()}`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchDashboardTodaySales(): Promise<string> {
+  return requestJson<string>(`${getApiBaseUrl()}/dashboard/today-sales`, {
+    cache: "no-store"
+  });
+}
+
+export function getSalesExportUrl(filters: SalesReportFilters): string {
+  const search = new URLSearchParams();
+  appendSalesFilters(search, filters);
+  return `${getApiBaseUrl()}/sales/export.csv?${search.toString()}`;
 }
 
 export async function fetchPcLayouts(includeDisabled = false): Promise<PcLayoutSlot[]> {

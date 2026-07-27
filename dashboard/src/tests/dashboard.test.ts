@@ -6,24 +6,30 @@ import {
   calculateTime,
   createUser,
   createRate,
+  fetchAdminSettings,
   fetchCurrentUser,
+  fetchDashboardTodaySales,
   fetchLoginOperators,
   fetchPcLayouts,
   fetchRates,
+  fetchSalesReport,
   fetchUsers,
   forceEndSession,
   getApiBaseUrl,
+  getSalesExportUrl,
   login,
   logout,
   quickOperatorLogin,
   recordPayment,
   resetMemberPin,
+  resetAdminSettings,
   resetUserPassword,
   sendPcMessage,
   sendPowerCommand,
   startMemberSession,
   startSession,
   toCashierMessage,
+  updateAdminSettings,
   updateRate,
   updatePcLayout,
   updateRateStatus,
@@ -231,7 +237,7 @@ assert.equal(getPcActionAvailability(settlementPc).canStart, false);
 assert.equal(getPcActionAvailability(settlementPc).canEnd, false);
 assert.equal(getPcActionAvailability(settlementPc).canCollectPayment, true);
 assert.deepEqual(getPcMonitorPresentation(settlementPc), {
-  className: "monitorTileWarning",
+  className: "monitorTileSettlement",
   label: "Settlement"
 });
 
@@ -242,7 +248,7 @@ const gracePc = makePc({
 });
 assert.equal(getPcActionAvailability(gracePc).canAddTime, true);
 assert.deepEqual(getPcMonitorPresentation(gracePc), {
-  className: "monitorTileWarning",
+  className: "monitorTileGrace",
   label: "Grace Period"
 });
 
@@ -252,7 +258,7 @@ const shuttingDownPc = makePc({
   active_session_id: "session-shutdown"
 });
 assert.deepEqual(getPcMonitorPresentation(shuttingDownPc), {
-  className: "monitorTileWarning",
+  className: "monitorTileDanger",
   label: "Shutting Down"
 });
 
@@ -262,7 +268,7 @@ const recoveryPc = makePc({
   recovery_reason: "server-only active session"
 });
 assert.deepEqual(getPcMonitorPresentation(recoveryPc), {
-  className: "monitorTileWarning",
+  className: "monitorTileDanger",
   label: "Recovery"
 });
 
@@ -280,13 +286,10 @@ assert.deepEqual(getPcMonitorPresentation(offlinePc), {
 
 assert.deepEqual(summarizePcs([availablePc, activePc, gracePc, shuttingDownPc, settlementPc, offlinePc]), {
   total: 6,
-  inUse: 1,
-  gracePeriod: 1,
-  shuttingDown: 1,
-  settlementPending: 1,
+  inUse: 3,
   available: 1,
-  offline: 1,
-  poweredOff: 1
+  paymentDue: 1,
+  settlementDueAmount: "20.00"
 });
 
 assert.equal(
@@ -394,6 +397,44 @@ async function runAsyncAssertions() {
     await adminOperatorLogin("password123");
     await fetchCurrentUser();
     await fetchUsers();
+    await fetchSalesReport({ period: "today" });
+    await fetchDashboardTodaySales();
+    await fetchAdminSettings();
+    await updateAdminSettings({
+      general: {
+        shop_display_name: "Secret Grounds",
+        shop_subtitle: "Computer Shop",
+        pc_naming_prefix: "PC",
+        timezone_display: "Asia/Manila"
+      },
+      sessions: {
+        expiration_grace_seconds: 120,
+        automatic_shutdown_on_expiration: false,
+        reminder_thresholds_seconds: [900, 300, 60],
+        manual_end_default_behavior: "lock_only"
+      },
+      customer_client: {
+        reminder_sounds_enabled: true,
+        final_warning_sound_enabled: true,
+        active_overlay_enabled: true,
+        overlay_position: "top-right",
+        customer_branding_text: "Ask the cashier to add more time to continue."
+      },
+      wake_power: {
+        wake_on_lan_enabled: true,
+        shutdown_on_expiration_enabled: false,
+        expected_shutdown_timeout_seconds: 60,
+        power_command_safety_status: "Test mode active"
+      },
+      members: {
+        default_member_pin_policy: "optional"
+      },
+      reports: {
+        default_sales_period: "today",
+        csv_timezone_display: "Asia/Manila"
+      }
+    });
+    await resetAdminSettings("general");
     await fetchPcLayouts(true);
     await createUser({
       username: "cashier",
@@ -467,6 +508,11 @@ async function runAsyncAssertions() {
         { method: "POST", url: "http://127.0.0.1:8000/auth/operator/admin" },
         { method: "GET", url: "http://127.0.0.1:8000/auth/me" },
         { method: "GET", url: "http://127.0.0.1:8000/users" },
+        { method: "GET", url: "http://127.0.0.1:8000/sales/report?period=today" },
+        { method: "GET", url: "http://127.0.0.1:8000/dashboard/today-sales" },
+        { method: "GET", url: "http://127.0.0.1:8000/settings" },
+        { method: "PUT", url: "http://127.0.0.1:8000/settings" },
+        { method: "POST", url: "http://127.0.0.1:8000/settings/reset" },
         { method: "GET", url: "http://127.0.0.1:8000/pcs/layout?include_disabled=true" },
         { method: "POST", url: "http://127.0.0.1:8000/users" },
         { method: "PUT", url: "http://127.0.0.1:8000/users/user-1" },
@@ -500,15 +546,20 @@ async function runAsyncAssertions() {
     assert.deepEqual(fetchCalls[3].body, {
       password: "password123"
     });
-    assert.deepEqual(fetchCalls[10].body, {
+    assert.deepEqual(fetchCalls[15].body, {
       password: "new-password"
     });
-    assert.deepEqual(fetchCalls[12].body, {
+    assert.deepEqual(fetchCalls[17].body, {
       pin: "1234"
     });
-    assert.equal((fetchCalls[16].body as RateProfileInput).price, "50.00");
-    assert.equal((fetchCalls[16].body as RateProfileInput).duration_seconds, 1800);
-    assert.deepEqual(fetchCalls[18].body, {
+    assert.equal((fetchCalls[9].body as { general: { shop_display_name: string } }).general.shop_display_name, "Secret Grounds");
+    assert.deepEqual(fetchCalls[10].body, {
+      category: "general"
+    });
+    assert.equal((fetchCalls[20].body as RateProfileInput).price, "12.30");
+    assert.equal((fetchCalls[21].body as RateProfileInput).price, "50.00");
+    assert.equal((fetchCalls[21].body as RateProfileInput).duration_seconds, 1800);
+    assert.deepEqual(fetchCalls[23].body, {
       display_name: "PC 3",
       area_label: "SECRET GROUND SHOP",
       layout_order: 30,
@@ -516,32 +567,36 @@ async function runAsyncAssertions() {
       is_enabled: false,
       mac_address: null
     });
-    assert.deepEqual(fetchCalls[19].body, {
+    assert.deepEqual(fetchCalls[24].body, {
       pc_name: "PC-01",
       member_id: "member-1",
       duration_seconds: 3600,
       member_pin: "1234"
     });
-    assert.deepEqual(fetchCalls[20].body, {
+    assert.deepEqual(fetchCalls[25].body, {
       pc_name: "PC-01",
       amount: "20.00"
     });
-    assert.deepEqual(fetchCalls[21].body, {
+    assert.deepEqual(fetchCalls[26].body, {
       title: "Secret Grounds",
       message: "Please return to the cashier.",
       severity: "info",
       require_acknowledgement: false
     });
-    assert.deepEqual(fetchCalls[22].body, {});
-    assert.deepEqual(fetchCalls[23].body, {
+    assert.deepEqual(fetchCalls[27].body, {});
+    assert.deepEqual(fetchCalls[28].body, {
       amount: "5.00"
     });
-    assert.deepEqual(fetchCalls[24].body, null);
-    assert.deepEqual(fetchCalls[25].body, {
+    assert.deepEqual(fetchCalls[29].body, null);
+    assert.deepEqual(fetchCalls[30].body, {
       payment_method: "cash",
       amount: "20.00",
       cash_received: "50.00"
     });
+    assert.equal(
+      getSalesExportUrl({ period: "custom", startDate: "2026-07-01", endDate: "2026-07-31" }),
+      "http://127.0.0.1:8000/sales/export.csv?period=custom&start_date=2026-07-01&end_date=2026-07-31"
+    );
 
     const saveEvents: string[] = [];
     const updatedMessage = await saveRateProfile({
@@ -609,6 +664,13 @@ async function runAsyncAssertions() {
     const dashboardCss = readFileSync("src/app/page.module.css", "utf8");
     assert.match(dashboardCss, /\.monitorTileSelected/);
     assert.match(dashboardCss, /\.monitorGrid/);
+    assert.match(dashboardCss, /\.dashboardWorkspace/);
+    assert.match(dashboardCss, /\.selectedPcRail/);
+    assert.match(dashboardCss, /\.noSelectionPanel/);
+    assert.match(dashboardCss, /\.pcControlDock/);
+    assert.match(dashboardCss, /\.monitorTileGrace/);
+    assert.match(dashboardCss, /\.monitorTileSettlement/);
+    assert.match(dashboardCss, /\.monitorTileDanger/);
     assert.match(dashboardCss, /@media \(max-width: 900px\)/);
     assert.match(dashboardCss, /max-height: calc\(100vh - 48px\)/);
     assert.match(dashboardCss, /\.pcControlModal/);
@@ -619,8 +681,10 @@ async function runAsyncAssertions() {
     assert.match(dashboardCss, /backdrop-filter: none/);
 
     const pcDetailsSource = readFileSync("src/components/PcDetailsPanel.tsx", "utf8");
-    assert.match(pcDetailsSource, /role="dialog"/);
-    assert.match(pcDetailsSource, /aria-modal="true"/);
+    assert.match(pcDetailsSource, /variant = "modal"/);
+    assert.match(pcDetailsSource, /pcControlDock/);
+    assert.match(pcDetailsSource, /role=\{variant === "modal" \? "dialog" : "region"\}/);
+    assert.match(pcDetailsSource, /aria-modal=\{variant === "modal" \? "true" : undefined\}/);
     assert.match(pcDetailsSource, /event\.key === "Escape"/);
     assert.match(pcDetailsSource, /querySelectorAll<HTMLElement>/);
     assert.match(pcDetailsSource, /Session Actions/);
@@ -651,6 +715,93 @@ async function runAsyncAssertions() {
     const dashboardSource = readFileSync("src/components/DashboardClient.tsx", "utf8");
     assert.doesNotMatch(dashboardSource, /Sino ang naka-bantay ngayon/);
     assert.doesNotMatch(dashboardSource, /Current on-duty operator/);
+    assert.match(dashboardSource, /fetchDashboardTodaySales/);
+    assert.match(dashboardSource, /Select a PC to view controls/);
+    assert.match(dashboardSource, /Register First PC/);
+    assert.match(dashboardSource, /variant="dock"/);
+
+    const membersSource = readFileSync("src/components/MembersManager.tsx", "utf8");
+    assert.match(membersSource, /Search by code, name, or phone/);
+    assert.match(membersSource, /setIsCreateOpen\(true\)/);
+    assert.match(membersSource, /role="dialog"/);
+    assert.match(membersSource, /Create Member/);
+    assert.match(membersSource, /View Member/);
+    assert.match(membersSource, /No members yet/);
+    assert.match(membersSource, /No members found/);
+    assert.match(membersSource, /No phone/);
+    assert.match(membersSource, /PIN enabled/);
+    assert.match(membersSource, /PIN not set/);
+    assert.match(membersSource, /createError/);
+    assert.match(membersSource, /confirmingStatusMember/);
+    assert.match(membersSource, /This member will no longer be available for new sessions/);
+    assert.doesNotMatch(membersSource, /phone_number \?\? "None"/);
+
+    const membersCss = readFileSync("src/app/page.module.css", "utf8");
+    assert.match(membersCss, /\.memberTable/);
+    assert.match(membersCss, /\.memberModal/);
+    assert.match(membersCss, /\.memberDetailModal/);
+    assert.match(membersCss, /\.memberDialogMessage/);
+    assert.match(membersCss, /\.memberMoreMenu/);
+    assert.match(membersCss, /@media \(max-width: 760px\)/);
+    assert.match(membersCss, /content: attr\(data-label\)/);
+
+    const authShellSource = readFileSync("src/components/AuthShell.tsx", "utf8");
+    assert.match(authShellSource, /isAdminOperator/);
+    assert.match(authShellSource, /appShell__adminMenu/);
+    assert.match(authShellSource, /Admin/);
+    assert.match(authShellSource, /Operator Activity/);
+    assert.match(authShellSource, /Staff/);
+    assert.match(authShellSource, /Sales/);
+    assert.match(authShellSource, /Settings/);
+    assert.match(authShellSource, /href="\/settings"/);
+    assert.match(authShellSource, /href="\/rates"/);
+    assert.doesNotMatch(authShellSource, /href="\/shifts">Shifts/);
+    assert.doesNotMatch(authShellSource, /href="\/users">Users/);
+
+    const operatorsSource = readFileSync("src/components/OperatorsManager.tsx", "utf8");
+    assert.match(operatorsSource, /staffGrid/);
+    assert.match(operatorsSource, /staffCard/);
+    assert.match(operatorsSource, /Quick Access/);
+
+    const operatorActivitySource = readFileSync("src/components/OperatorActivity.tsx", "utf8");
+    assert.match(operatorActivitySource, /compactFilters/);
+    assert.match(operatorActivitySource, /No activity yet today/);
+    assert.match(operatorActivitySource, /Session started/);
+    assert.match(operatorActivitySource, /Payment collected/);
+
+    const settingsPageSource = readFileSync("src/app/settings/page.tsx", "utf8");
+    assert.match(settingsPageSource, /Admin Settings/);
+    assert.match(settingsPageSource, /SettingsManager/);
+
+    const settingsSource = readFileSync("src/components/SettingsManager.tsx", "utf8");
+    assert.match(settingsSource, /fetchAdminSettings/);
+    assert.match(settingsSource, /updateAdminSettings/);
+    assert.match(settingsSource, /resetAdminSettings/);
+    assert.match(settingsSource, /Expiration grace period/);
+    assert.match(settingsSource, /Reminder thresholds/);
+    assert.match(settingsSource, /Power command safety status/);
+    assert.match(settingsSource, /Reset Unsaved Changes/);
+    assert.match(settingsSource, /Reset All Defaults/);
+    assert.doesNotMatch(settingsSource, /SECRET_GROUNDS_TEST_MODE/);
+    assert.doesNotMatch(settingsSource, /password_hash/);
+
+    const settingsCss = readFileSync("src/app/settings/settings.module.css", "utf8");
+    assert.match(settingsCss, /\.categoryNav/);
+    assert.match(settingsCss, /\.switchField/);
+    assert.match(settingsCss, /color: #f8fafc/);
+
+    const salesSource = readFileSync("src/components/SalesManager.tsx", "utf8");
+    assert.match(salesSource, /Total Sales/);
+    assert.match(salesSource, /Outstanding Settlements/);
+    assert.match(salesSource, /Export CSV/);
+    assert.match(salesSource, /Sales by Operator/);
+    assert.match(salesSource, /Sales by PC/);
+    assert.match(salesSource, /No sales recorded for this period/);
+
+    const salesCss = readFileSync("src/app/sales/sales.module.css", "utf8");
+    assert.match(salesCss, /\.summaryGrid/);
+    assert.match(salesCss, /\.chartRow/);
+    assert.match(salesCss, /@media \(max-width: 760px\)/);
 
     const operatorConfigSource = readFileSync("../server/operator_config.py", "utf8");
     for (const name of ["Mama", "Neil", "Tyrone", "Rogene", "Rojan", "Bel", "Karen", "Admin"]) {

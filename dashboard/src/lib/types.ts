@@ -185,12 +185,9 @@ export interface ForceEndSessionResponse {
 export interface DashboardSummary {
   total: number;
   inUse: number;
-  gracePeriod: number;
-  shuttingDown: number;
-  settlementPending: number;
   available: number;
-  offline: number;
-  poweredOff: number;
+  paymentDue: number;
+  settlementDueAmount: string;
 }
 
 export interface RemoteCommandRecord {
@@ -319,6 +316,168 @@ export interface UserAdminRecord extends CurrentUser {
   created_at: string;
   updated_at: string;
   last_login_at: string | null;
+}
+
+export interface OperatorManagementRecord extends CurrentUser {
+  operator_id: string;
+  password_required: boolean;
+  is_active: boolean;
+  last_login_at: string | null;
+}
+
+export interface OperatorActivityRecord {
+  timestamp: string;
+  operator_id: string | null;
+  operator_name: string;
+  action: string;
+  category: string;
+  pc_name: string | null;
+  customer: string | null;
+  amount: string | null;
+  payment_method: string | null;
+  result: string;
+}
+
+export type SalesPeriod = "today" | "yesterday" | "this_week" | "this_month" | "custom";
+export type SalesGrouping = "hour" | "day";
+export type SalesType = "pc_session" | "member_purchase" | "other";
+
+export interface SalesSummary {
+  total_sales: string;
+  cash_total: string;
+  gcash_total: string;
+  maya_total: string;
+  other_total: string;
+  payment_count: number;
+  outstanding_amount: string;
+  session_revenue: string;
+  member_purchase_revenue: string;
+  other_revenue: string;
+  average_transaction_value: string;
+}
+
+export interface SalesPaymentMethodBreakdown {
+  payment_method: PaymentMethod;
+  amount: string;
+  payment_count: number;
+}
+
+export interface SalesTypeBreakdown {
+  sales_type: SalesType;
+  label: string;
+  amount: string;
+  payment_count: number;
+}
+
+export interface SalesOperatorBreakdown {
+  operator_id: string | null;
+  operator_name: string;
+  total_amount: string;
+  payment_count: number;
+  cash_total: string;
+  gcash_total: string;
+  maya_total: string;
+  other_total: string;
+}
+
+export interface SalesPCBreakdown {
+  pc_name: string;
+  total_amount: string;
+  payment_count: number;
+  paid_session_count: number;
+  billable_seconds: number | null;
+}
+
+export interface SalesTimeseriesPoint {
+  label: string;
+  start_at: string;
+  amount: string;
+  payment_count: number;
+}
+
+export interface SalesRecentPayment {
+  payment_id: string;
+  timestamp: string;
+  operator_name: string;
+  customer: string | null;
+  pc_name: string | null;
+  sales_type: SalesType;
+  payment_method: PaymentMethod;
+  amount: string;
+  status: PaymentStatus;
+  related_reference: string | null;
+}
+
+export interface SalesOutstandingSettlement {
+  session_id: string;
+  pc_name: string;
+  customer: string | null;
+  session_end_time: string | null;
+  amount_due: string;
+  status: SessionStatus;
+  payment_status: BillingPaymentStatus;
+}
+
+export interface SalesReport {
+  period: SalesPeriod;
+  start_at: string;
+  end_at: string;
+  grouping: SalesGrouping;
+  summary: SalesSummary;
+  payment_methods: SalesPaymentMethodBreakdown[];
+  sales_types: SalesTypeBreakdown[];
+  operators: SalesOperatorBreakdown[];
+  pcs: SalesPCBreakdown[];
+  timeseries: SalesTimeseriesPoint[];
+  recent_payments: SalesRecentPayment[];
+  outstanding_settlements: SalesOutstandingSettlement[];
+}
+
+export type ManualEndBehavior = "lock_only" | "lock_and_settle";
+export type OverlayPosition = "top-right" | "top-left" | "bottom-right" | "bottom-left";
+export type SettingsSalesPeriod = "today" | "yesterday" | "this_week" | "this_month";
+
+export interface AdminSettings {
+  general: {
+    shop_display_name: string;
+    shop_subtitle: string | null;
+    pc_naming_prefix: string;
+    timezone_display: string;
+  };
+  sessions: {
+    expiration_grace_seconds: number;
+    automatic_shutdown_on_expiration: boolean;
+    reminder_thresholds_seconds: number[];
+    manual_end_default_behavior: ManualEndBehavior;
+  };
+  customer_client: {
+    reminder_sounds_enabled: boolean;
+    final_warning_sound_enabled: boolean;
+    active_overlay_enabled: boolean;
+    overlay_position: OverlayPosition;
+    customer_branding_text: string;
+  };
+  wake_power: {
+    wake_on_lan_enabled: boolean;
+    shutdown_on_expiration_enabled: boolean;
+    expected_shutdown_timeout_seconds: number;
+    power_command_safety_status: string;
+  };
+  members: {
+    default_member_pin_policy: "optional";
+  };
+  reports: {
+    default_sales_period: SettingsSalesPeriod;
+    csv_timezone_display: string;
+  };
+}
+
+export interface AdminSettingsResponse {
+  settings: AdminSettings;
+  environment_only: Record<string, string>;
+  read_only: Record<string, string>;
+  restart_required_fields: string[];
+  updated_at: string | null;
 }
 
 export interface UserCreateInput {

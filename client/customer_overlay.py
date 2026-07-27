@@ -3,12 +3,29 @@ from threading import Lock, Thread
 
 
 DEFAULT_REMINDER_THRESHOLDS_SECONDS = [15 * 60, 5 * 60, 60, 0]
+TIME_ADDED_CONFIRMATION_TICKS = 6
+
+
+@dataclass(frozen=True)
+class CustomerOverlayViewModel:
+    eyebrow: str
+    title: str
+    timer_label: str
+    timer_value: str
+    pc_name: str
+    customer_name: str
+    session_type: str
+    connection_label: str
+    connection_online: bool
+    notice: str | None = None
+    accent: str = "#22D3EE"
 
 
 @dataclass
 class CustomerOverlayState:
     is_visible: bool = False
     pc_name: str = ""
+    shop_display_name: str = "Secret Grounds"
     customer_name: str | None = None
     session_type: str = "Session"
     seconds_value: int | None = None
@@ -16,15 +33,17 @@ class CustomerOverlayState:
     connection_online: bool = True
     last_seconds_value: int | None = None
     fired_thresholds: set[int] = field(default_factory=set)
+    notice: str | None = None
+    notice_ticks_remaining: int = 0
 
 
 class CustomerOverlayController:
     """Thread-safe boundary for customer-facing session status.
 
-    The first production milestone keeps this lightweight and Tkinter-free by
-    default so it cannot destabilize games. The state boundary is separate from
-    client.py, making it straightforward to replace with a compact always-on-top
-    Tkinter window later.
+    Command, heartbeat, and timer threads update this controller instead of
+    touching Tkinter widgets. The controller stores pure state and schedules all
+    GUI refreshes on the Tkinter thread, which keeps customer UI changes isolated
+    from the networking and recovery loops.
     """
 
     def __init__(
@@ -42,7 +61,12 @@ class CustomerOverlayController:
         self.gui_started = False
         self.gui_ready = False
         self.root = None
-        self.text_var = None
+        self.title_label = None
+        self.timer_label = None
+        self.timer_value_label = None
+        self.meta_label = None
+        self.connection_label = None
+        self.notice_label = None
 
     def show_session(
         self,
@@ -57,15 +81,37 @@ class CustomerOverlayController:
             self.state.is_elapsed = is_elapsed
             self.state.fired_thresholds.clear()
             self.state.last_seconds_value = None
+            self.state.notice = None
+            self.state.notice_ticks_remaining = 0
         self.ensure_gui()
         self.schedule_gui_refresh()
         print(f"Customer overlay shown for {self.state.pc_name}: {session_type}.")
+
+    def apply_settings(
+        self,
+        shop_display_name: str | None = None,
+        thresholds_seconds: list[int] | None = None,
+        position: str | None = None,
+        enable_gui: bool | None = None,
+    ) -> None:
+        with self.lock:
+            if shop_display_name:
+                self.state.shop_display_name = shop_display_name
+            if thresholds_seconds:
+                self.thresholds_seconds = thresholds_seconds
+            if position:
+                self.position = position
+            if enable_gui is not None:
+                self.enable_gui = enable_gui
+        self.schedule_gui_refresh()
 
     def hide(self) -> None:
         with self.lock:
             self.state.is_visible = False
             self.state.seconds_value = None
             self.state.fired_thresholds.clear()
+            self.state.notice = None
+            self.state.notice_ticks_remaining = 0
         self.schedule_gui_refresh()
         print("Customer overlay hidden.")
 
@@ -81,10 +127,12 @@ class CustomerOverlayController:
         with self.lock:
             self.state.seconds_value = seconds_value
             if self.state.is_elapsed or seconds_value is None:
+                self._tick_notice_locked()
                 return messages
 
             previous_seconds = self.state.last_seconds_value
             self.state.last_seconds_value = seconds_value
+            self._tick_notice_locked()
             for threshold in self.thresholds_seconds:
                 crossed_threshold = (
                     threshold == 0 and seconds_value <= 0
@@ -101,6 +149,24 @@ class CustomerOverlayController:
         self.schedule_gui_refresh()
         return messages
 
+    def show_time_added_confirmation(
+        self,
+        added_seconds: int,
+        remaining_seconds: int | None,
+    ) -> None:
+        with self.lock:
+            self.state.seconds_value = remaining_seconds
+            self.state.notice = (
+                f"Time added: {self.format_timer(added_seconds)}. "
+                "Your session has been extended."
+            )
+            self.state.notice_ticks_remaining = TIME_ADDED_CONFIRMATION_TICKS
+        print(
+            "Customer time-added confirmation shown: "
+            f"added_seconds={added_seconds}, remaining_seconds={remaining_seconds}."
+        )
+        self.schedule_gui_refresh()
+
     def reset_reminders_after_add_time(self) -> None:
         with self.lock:
             self.state.fired_thresholds = {
@@ -109,6 +175,48 @@ class CustomerOverlayController:
                 if self.state.seconds_value is not None
                 and self.state.seconds_value <= threshold
             }
+
+    def build_view_model(self) -> CustomerOverlayViewModel:
+        with self.lock:
+            state = CustomerOverlayState(
+                is_visible=self.state.is_visible,
+                pc_name=self.state.pc_name,
+                shop_display_name=self.state.shop_display_name,
+                customer_name=self.state.customer_name,
+                session_type=self.state.session_type,
+                seconds_value=self.state.seconds_value,
+                is_elapsed=self.state.is_elapsed,
+                connection_online=self.state.connection_online,
+                fired_thresholds=set(self.state.fired_thresholds),
+                last_seconds_value=self.state.last_seconds_value,
+                notice=self.state.notice,
+                notice_ticks_remaining=self.state.notice_ticks_remaining,
+            )
+        timer_label = "Elapsed Time" if state.is_elapsed else "Time Remaining"
+        title = "Session Active" if not state.is_elapsed else "Open Time Active"
+        if state.session_type == "Member Time":
+            title = "Member Session Active"
+        return CustomerOverlayViewModel(
+            eyebrow=state.shop_display_name.upper(),
+            title=title,
+            timer_label=timer_label,
+            timer_value=self.format_timer(state.seconds_value),
+            pc_name=state.pc_name,
+            customer_name=state.customer_name or "Guest",
+            session_type=state.session_type,
+            connection_label="Online" if state.connection_online else "Reconnecting",
+            connection_online=state.connection_online,
+            notice=state.notice,
+            accent="#38BDF8" if state.connection_online else "#F97316",
+        )
+
+    def _tick_notice_locked(self) -> None:
+        if self.state.notice_ticks_remaining <= 0:
+            self.state.notice = None
+            return
+        self.state.notice_ticks_remaining -= 1
+        if self.state.notice_ticks_remaining <= 0:
+            self.state.notice = None
 
     def build_reminder_message(self, threshold: int) -> str:
         if threshold == 15 * 60:
@@ -136,22 +244,85 @@ class CustomerOverlayController:
             root = tk.Tk()
             root.overrideredirect(True)
             root.attributes("-topmost", True)
-            root.configure(bg="#020617")
-            root.geometry(self.geometry_for_position(root, 260, 126))
-            text_var = tk.StringVar(value="")
-            label = tk.Label(
+            root.configure(bg="#05070D")
+            root.geometry(self.geometry_for_position(root, 360, 182))
+            root.resizable(False, False)
+            container = tk.Frame(
                 root,
-                textvariable=text_var,
-                bg="#020617",
-                fg="#e0faff",
-                justify="left",
-                padx=14,
-                pady=12,
-                font=("Segoe UI", 10, "bold"),
+                bg="#05070D",
+                highlightthickness=1,
+                highlightbackground="#0891B2",
+                padx=18,
+                pady=14,
             )
-            label.pack(fill="both", expand=True)
+            container.pack(fill="both", expand=True)
+            eyebrow = tk.Label(
+                container,
+                text="SECRET GROUNDS",
+                bg="#05070D",
+                fg="#67E8F9",
+                font=("Segoe UI", 8, "bold"),
+                anchor="w",
+            )
+            eyebrow.pack(fill="x")
+            self.title_label = tk.Label(
+                container,
+                text="Session Active",
+                bg="#05070D",
+                fg="#F8FAFC",
+                font=("Segoe UI", 14, "bold"),
+                anchor="w",
+            )
+            self.title_label.pack(fill="x", pady=(5, 0))
+            self.timer_label = tk.Label(
+                container,
+                text="Time Remaining",
+                bg="#05070D",
+                fg="#94A3B8",
+                font=("Segoe UI", 8, "bold"),
+                anchor="w",
+            )
+            self.timer_label.pack(fill="x", pady=(12, 0))
+            label = tk.Label(
+                container,
+                text="--:--",
+                bg="#05070D",
+                fg="#22D3EE",
+                font=("Consolas", 28, "bold"),
+                anchor="w",
+            )
+            label.pack(fill="x")
+            self.timer_value_label = label
+            self.meta_label = tk.Label(
+                container,
+                text="",
+                bg="#05070D",
+                fg="#CBD5E1",
+                font=("Segoe UI", 9),
+                anchor="w",
+                justify="left",
+            )
+            self.meta_label.pack(fill="x", pady=(2, 0))
+            self.connection_label = tk.Label(
+                container,
+                text="Online",
+                bg="#05070D",
+                fg="#86EFAC",
+                font=("Segoe UI", 8, "bold"),
+                anchor="w",
+            )
+            self.connection_label.pack(fill="x", pady=(8, 0))
+            self.notice_label = tk.Label(
+                container,
+                text="",
+                bg="#082F49",
+                fg="#E0FAFF",
+                font=("Segoe UI", 8, "bold"),
+                anchor="w",
+                padx=8,
+                pady=5,
+            )
             self.root = root
-            self.text_var = text_var
             self.gui_ready = True
             self.refresh_gui()
             root.mainloop()
@@ -175,38 +346,51 @@ class CustomerOverlayController:
             pass
 
     def refresh_gui(self) -> None:
-        if self.root is None or self.text_var is None:
+        if self.root is None:
             return
         with self.lock:
-            state = CustomerOverlayState(
-                is_visible=self.state.is_visible,
-                pc_name=self.state.pc_name,
-                customer_name=self.state.customer_name,
-                session_type=self.state.session_type,
-                seconds_value=self.state.seconds_value,
-                is_elapsed=self.state.is_elapsed,
-                connection_online=self.state.connection_online,
-                fired_thresholds=set(self.state.fired_thresholds),
-                last_seconds_value=self.state.last_seconds_value,
-            )
-        if not state.is_visible:
+            is_visible = self.state.is_visible
+        if not is_visible:
             self.root.withdraw()
             return
-        heading = "Elapsed" if state.is_elapsed else "Time Remaining"
-        warning = "" if state.connection_online else "\nConnection warning"
-        self.text_var.set(
-            "SECRET GROUNDS\n"
-            f"{state.pc_name}\n"
-            f"{state.customer_name or 'Guest'}\n"
-            f"{heading}: {self.format_timer(state.seconds_value)}\n"
-            f"{state.session_type}{warning}"
+        model = self.build_view_model()
+        if self.title_label is not None:
+            self.title_label.configure(text=model.title)
+        if self.timer_label is not None:
+            self.timer_label.configure(text=model.timer_label.upper())
+        if self.timer_value_label is not None:
+            self.timer_value_label.configure(
+                text=model.timer_value,
+                foreground=model.accent,
+            )
+        if self.meta_label is not None:
+            self.meta_label.configure(
+                text=(
+                    f"{model.pc_name}  |  {model.customer_name}  |  "
+                    f"{model.session_type}"
+                )
+            )
+        if self.connection_label is not None:
+            self.connection_label.configure(
+                text=f"Connection: {model.connection_label}",
+                foreground="#86EFAC" if model.connection_online else "#FDBA74",
+            )
+        if self.notice_label is not None:
+            if model.notice:
+                self.notice_label.configure(text=model.notice)
+                self.notice_label.pack(fill="x", pady=(8, 0))
+            else:
+                self.notice_label.pack_forget()
+        self.root.geometry(
+            self.geometry_for_position(self.root, 360, 218 if model.notice else 182)
         )
         self.root.deiconify()
         self.root.attributes("-topmost", True)
 
     def format_timer(self, total_seconds: int | None) -> str:
-        if total_seconds is None or total_seconds < 0:
+        if total_seconds is None:
             return "--:--"
+        total_seconds = max(0, total_seconds)
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60

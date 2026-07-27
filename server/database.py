@@ -1080,6 +1080,35 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS admin_settings (
+                setting_key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_by_user_id TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (updated_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_settings_audit_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL CHECK (
+                    event_type IN ('settings_updated', 'settings_reset')
+                ),
+                category TEXT NOT NULL,
+                changed_fields_json TEXT NOT NULL,
+                old_values_json TEXT NOT NULL,
+                new_values_json TEXT NOT NULL,
+                applied_immediately INTEGER NOT NULL DEFAULT 1,
+                performed_by_user_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (performed_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS payments (
                 payment_id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
@@ -1299,6 +1328,12 @@ def initialize_database() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_token
             ON auth_sessions (token_hash)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_admin_settings_audit_created
+            ON admin_settings_audit_events (created_at)
             """
         )
         connection.execute(

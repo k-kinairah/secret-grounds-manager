@@ -16,6 +16,9 @@ export interface PcMonitorPresentation {
     | "monitorTileActive"
     | "monitorTileLowTime"
     | "monitorTileWarning"
+    | "monitorTileGrace"
+    | "monitorTileSettlement"
+    | "monitorTileDanger"
     | "monitorTileOffline"
     | "monitorTileWaking";
   label:
@@ -33,7 +36,7 @@ export interface PcMonitorPresentation {
 
 export function getPcMonitorPresentation(pc: PcSummary): PcMonitorPresentation {
   if (pc.recovery_required || pc.session_status === "unknown") {
-    return { className: "monitorTileWarning", label: "Recovery" };
+    return { className: "monitorTileDanger", label: "Recovery" };
   }
 
   if (pc.startup_status !== null || pc.power_state === "waking" || pc.power_state === "starting") {
@@ -41,19 +44,19 @@ export function getPcMonitorPresentation(pc: PcSummary): PcMonitorPresentation {
   }
 
   if (pc.power_state === "shutdown_failed") {
-    return { className: "monitorTileWarning", label: "Shutdown Failed" };
+    return { className: "monitorTileDanger", label: "Shutdown Failed" };
   }
 
   if (pc.power_state === "shutting_down" || pc.session_status === "shutting_down") {
-    return { className: "monitorTileWarning", label: "Shutting Down" };
+    return { className: "monitorTileDanger", label: "Shutting Down" };
   }
 
   if (pc.session_status === "settlement_pending" || pc.session_status === "ending") {
-    return { className: "monitorTileWarning", label: "Settlement" };
+    return { className: "monitorTileSettlement", label: "Settlement" };
   }
 
   if (pc.session_status === "grace_period") {
-    return { className: "monitorTileWarning", label: "Grace Period" };
+    return { className: "monitorTileGrace", label: "Grace Period" };
   }
 
   if (pc.session_status === "active") {
@@ -132,20 +135,34 @@ export function getPcActionAvailability(pc: PcSummary): PcActionAvailability {
 }
 
 export function summarizePcs(pcs: PcSummary[]): DashboardSummary {
+  const settlementDueCents = pcs.reduce((total, pc) => {
+    if (pc.session_status !== "settlement_pending") {
+      return total;
+    }
+    const cents = Math.round(Number.parseFloat(pc.balance_due || "0") * 100);
+    return total + (Number.isFinite(cents) && cents > 0 ? cents : 0);
+  }, 0);
+
   return {
     total: pcs.length,
-    inUse: pcs.filter((pc) => pc.session_status === "active").length,
-    gracePeriod: pcs.filter((pc) => pc.session_status === "grace_period").length,
-    shuttingDown: pcs.filter(
-      (pc) => pc.session_status === "shutting_down" || pc.power_state === "shutting_down"
+    inUse: pcs.filter(
+      (pc) =>
+        pc.session_status === "active" ||
+        pc.session_status === "grace_period" ||
+        pc.session_status === "shutting_down" ||
+        pc.session_status === "ending"
     ).length,
-    settlementPending: pcs.filter((pc) => pc.session_status === "settlement_pending").length,
     available: pcs.filter(
-      (pc) => pc.connection_status === "online" && pc.session_status === "idle"
+      (pc) =>
+        pc.session_status === "idle" &&
+        pc.startup_status === null &&
+        (pc.connection_status === "online" || (pc.connection_status === "offline" && pc.mac_address !== null))
     ).length,
-    offline: pcs.filter(
-      (pc) => pc.connection_status === "offline" && pc.startup_status === null
+    paymentDue: pcs.filter(
+      (pc) =>
+        pc.session_status === "settlement_pending" &&
+        Number.parseFloat(pc.balance_due) > 0
     ).length,
-    poweredOff: pcs.filter((pc) => pc.power_state === "powered_off").length
+    settlementDueAmount: `${Math.floor(settlementDueCents / 100)}.${String(settlementDueCents % 100).padStart(2, "0")}`
   };
 }

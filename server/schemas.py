@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def normalize_money(value: Decimal) -> Decimal:
@@ -82,6 +82,9 @@ RemoteCommandStatus = Literal[
     "timed_out",
 ]
 MessageSeverity = Literal["info", "warning", "urgent"]
+ManualEndBehavior = Literal["lock_only", "lock_and_settle"]
+OverlayPosition = Literal["top-right", "top-left", "bottom-right", "bottom-left"]
+SalesPeriodSetting = Literal["today", "yesterday", "this_week", "this_month"]
 
 
 class PCRegistration(BaseModel):
@@ -172,6 +175,141 @@ class PCDashboardRecord(BaseModel):
 
 class PCRegistrationResponse(PCRecord):
     message: str
+
+
+class SettingsGeneral(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    shop_display_name: str = Field(..., min_length=1, max_length=60)
+    shop_subtitle: str | None = Field(default=None, max_length=80)
+    pc_naming_prefix: str = Field(..., min_length=1, max_length=12)
+    timezone_display: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator("shop_display_name", "shop_subtitle", "pc_naming_prefix", "timezone_display")
+    @classmethod
+    def clean_display_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = " ".join(value.replace("\x00", "").replace("<", "").replace(">", "").split())
+        if not cleaned:
+            raise ValueError("Text value must not be blank")
+        return cleaned
+
+
+class SettingsSessions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expiration_grace_seconds: int = Field(..., ge=30, le=600)
+    automatic_shutdown_on_expiration: bool
+    reminder_thresholds_seconds: list[int] = Field(..., min_length=1, max_length=6)
+    manual_end_default_behavior: ManualEndBehavior
+
+    @field_validator("reminder_thresholds_seconds")
+    @classmethod
+    def validate_reminder_thresholds(cls, value: list[int]) -> list[int]:
+        if any(item <= 0 for item in value):
+            raise ValueError("Reminder thresholds must be positive seconds")
+        if len(set(value)) != len(value):
+            raise ValueError("Reminder thresholds must be unique")
+        if value != sorted(value, reverse=True):
+            raise ValueError("Reminder thresholds must be in descending order")
+        if any(item > 24 * 60 * 60 for item in value):
+            raise ValueError("Reminder thresholds must be less than or equal to 24 hours")
+        return value
+
+
+class SettingsCustomerClient(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reminder_sounds_enabled: bool
+    final_warning_sound_enabled: bool
+    active_overlay_enabled: bool
+    overlay_position: OverlayPosition
+    customer_branding_text: str = Field(..., min_length=1, max_length=160)
+
+    @field_validator("customer_branding_text")
+    @classmethod
+    def clean_customer_text(cls, value: str) -> str:
+        cleaned = " ".join(value.replace("\x00", "").replace("<", "").replace(">", "").split())
+        if not cleaned:
+            raise ValueError("Customer text must not be blank")
+        return cleaned
+
+
+class SettingsWakePower(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    wake_on_lan_enabled: bool
+    shutdown_on_expiration_enabled: bool
+    expected_shutdown_timeout_seconds: int = Field(..., ge=10, le=300)
+    power_command_safety_status: str
+
+
+class SettingsMembers(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    default_member_pin_policy: Literal["optional"] = "optional"
+
+
+class SettingsReports(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    default_sales_period: SalesPeriodSetting
+    csv_timezone_display: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator("csv_timezone_display")
+    @classmethod
+    def clean_timezone(cls, value: str) -> str:
+        cleaned = " ".join(value.replace("\x00", "").replace("<", "").replace(">", "").split())
+        if not cleaned:
+            raise ValueError("Timezone display must not be blank")
+        return cleaned
+
+
+class AdminSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    general: SettingsGeneral
+    sessions: SettingsSessions
+    customer_client: SettingsCustomerClient
+    wake_power: SettingsWakePower
+    members: SettingsMembers
+    reports: SettingsReports
+
+
+class AdminSettingsResponse(BaseModel):
+    settings: AdminSettings
+    environment_only: dict[str, str]
+    read_only: dict[str, str]
+    restart_required_fields: list[str] = Field(default_factory=list)
+    updated_at: datetime | None = None
+
+
+class AdminSettingsUpdateRequest(AdminSettings):
+    pass
+
+
+class AdminSettingsResetRequest(BaseModel):
+    category: Literal[
+        "general",
+        "sessions",
+        "customer_client",
+        "wake_power",
+        "members",
+        "reports",
+        "all",
+    ] = "all"
+
+
+class ClientSafeSettings(BaseModel):
+    shop_display_name: str
+    shop_subtitle: str | None = None
+    reminder_thresholds_seconds: list[int]
+    reminder_sounds_enabled: bool
+    final_warning_sound_enabled: bool
+    active_overlay_enabled: bool
+    overlay_position: OverlayPosition
+    customer_branding_text: str
 
 
 class ClientCommand(BaseModel):
@@ -920,6 +1058,123 @@ class UserAdminRecord(UserPublic):
     created_at: datetime
     updated_at: datetime
     last_login_at: datetime | None = None
+
+
+class OperatorManagementRecord(BaseModel):
+    operator_id: str
+    username: str
+    display_name: str
+    password_required: bool
+    role: UserRole
+    is_active: bool
+    last_login_at: datetime | None = None
+
+
+class OperatorActivityRecord(BaseModel):
+    timestamp: datetime
+    operator_id: str | None = None
+    operator_name: str
+    action: str
+    category: str
+    pc_name: str | None = None
+    customer: str | None = None
+    amount: Decimal | None = None
+    payment_method: str | None = None
+    result: str
+
+
+SalesPeriod = Literal["today", "yesterday", "this_week", "this_month", "custom"]
+
+
+class SalesSummary(BaseModel):
+    total_sales: Decimal = Decimal("0.00")
+    cash_total: Decimal = Decimal("0.00")
+    gcash_total: Decimal = Decimal("0.00")
+    maya_total: Decimal = Decimal("0.00")
+    other_total: Decimal = Decimal("0.00")
+    payment_count: int = 0
+    outstanding_amount: Decimal = Decimal("0.00")
+    session_revenue: Decimal = Decimal("0.00")
+    member_purchase_revenue: Decimal = Decimal("0.00")
+    other_revenue: Decimal = Decimal("0.00")
+    average_transaction_value: Decimal = Decimal("0.00")
+
+
+class SalesPaymentMethodBreakdown(BaseModel):
+    payment_method: PaymentMethod
+    amount: Decimal = Decimal("0.00")
+    payment_count: int = 0
+
+
+class SalesTypeBreakdown(BaseModel):
+    sales_type: Literal["pc_session", "member_purchase", "other"]
+    label: str
+    amount: Decimal = Decimal("0.00")
+    payment_count: int = 0
+
+
+class SalesOperatorBreakdown(BaseModel):
+    operator_id: str | None = None
+    operator_name: str
+    total_amount: Decimal = Decimal("0.00")
+    payment_count: int = 0
+    cash_total: Decimal = Decimal("0.00")
+    gcash_total: Decimal = Decimal("0.00")
+    maya_total: Decimal = Decimal("0.00")
+    other_total: Decimal = Decimal("0.00")
+
+
+class SalesPCBreakdown(BaseModel):
+    pc_name: str
+    total_amount: Decimal = Decimal("0.00")
+    payment_count: int = 0
+    paid_session_count: int = 0
+    billable_seconds: int | None = None
+
+
+class SalesTimeseriesPoint(BaseModel):
+    label: str
+    start_at: datetime
+    amount: Decimal = Decimal("0.00")
+    payment_count: int = 0
+
+
+class SalesRecentPayment(BaseModel):
+    payment_id: str
+    timestamp: datetime
+    operator_name: str
+    customer: str | None = None
+    pc_name: str | None = None
+    sales_type: Literal["pc_session", "member_purchase", "other"]
+    payment_method: PaymentMethod
+    amount: Decimal
+    status: PaymentStatus
+    related_reference: str | None = None
+
+
+class SalesOutstandingSettlement(BaseModel):
+    session_id: str
+    pc_name: str
+    customer: str | None = None
+    session_end_time: datetime | None = None
+    amount_due: Decimal
+    status: SessionStatus
+    payment_status: BillingPaymentStatus
+
+
+class SalesReport(BaseModel):
+    period: SalesPeriod
+    start_at: datetime
+    end_at: datetime
+    grouping: Literal["hour", "day"]
+    summary: SalesSummary
+    payment_methods: list[SalesPaymentMethodBreakdown] = Field(default_factory=list)
+    sales_types: list[SalesTypeBreakdown] = Field(default_factory=list)
+    operators: list[SalesOperatorBreakdown] = Field(default_factory=list)
+    pcs: list[SalesPCBreakdown] = Field(default_factory=list)
+    timeseries: list[SalesTimeseriesPoint] = Field(default_factory=list)
+    recent_payments: list[SalesRecentPayment] = Field(default_factory=list)
+    outstanding_settlements: list[SalesOutstandingSettlement] = Field(default_factory=list)
 
 
 class LoginRequest(BaseModel):

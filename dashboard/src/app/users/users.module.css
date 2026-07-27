@@ -1,7 +1,7 @@
 .page {
   display: grid;
-  gap: 28px;
-  padding: 32px;
+  gap: 18px;
+  padding: 30px 28px 44px;
 }
 
 .header {
@@ -173,6 +173,123 @@
   margin-bottom: 6px;
 }
 
+.staffPanel {
+  background:
+    linear-gradient(180deg, rgba(17, 27, 45, 0.96), rgba(8, 17, 31, 0.96));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+}
+
+.staffPanelHeader {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.staffPanelHeader h2,
+.staffCard h3 {
+  color: var(--text);
+  margin: 0;
+}
+
+.staffPanelHeader p,
+.staffCard p {
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+
+.staffCount {
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 999px;
+  color: #bfdbfe;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 7px 10px;
+  text-transform: uppercase;
+}
+
+.staffGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.staffCard {
+  background:
+    radial-gradient(circle at top right, rgba(34, 211, 238, 0.12), transparent 9rem),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.86), rgba(8, 13, 24, 0.94));
+  border: 1px solid rgba(56, 189, 248, 0.16);
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgb(0 0 0 / 0.22);
+  min-height: 210px;
+  padding: 16px;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.staffCard:hover {
+  border-color: rgba(34, 211, 238, 0.42);
+  box-shadow: var(--shadow-hover);
+  transform: translateY(-2px);
+}
+
+.staffCardTop {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.staffAvatar {
+  align-items: center;
+  background: linear-gradient(135deg, #22d3ee, #2563eb);
+  border: 1px solid rgba(125, 211, 252, 0.78);
+  border-radius: 10px;
+  box-shadow: 0 0 24px rgb(34 211 238 / 0.24);
+  color: #020617;
+  display: inline-flex;
+  font-size: 20px;
+  font-weight: 1000;
+  height: 44px;
+  justify-content: center;
+  width: 44px;
+}
+
+.staffMeta {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+}
+
+.staffMeta div {
+  display: grid;
+  gap: 3px;
+}
+
+.staffMeta dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.staffMeta dd {
+  color: #dbeafe;
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0;
+}
+
 .activeBadge,
 .disabledBadge {
   border-radius: 999px;
@@ -202,6 +319,11 @@
   }
 
   .userCard {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .staffPanelHeader {
     align-items: flex-start;
     flex-direction: column;
   }

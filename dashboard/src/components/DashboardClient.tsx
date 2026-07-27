@@ -6,6 +6,7 @@ import {
   broadcastAnnouncement,
   cancelPreparedSession,
   endSession,
+  fetchDashboardTodaySales,
   fetchPcs,
   fetchCurrentUser,
   fetchPcLayouts,
@@ -46,6 +47,7 @@ export function DashboardClient() {
   const [pcs, setPcs] = useState<PcSummary[]>([]);
   const [rates, setRates] = useState<RateProfile[]>([]);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [todaySales, setTodaySales] = useState<string | null>(null);
   const [layoutSlots, setLayoutSlots] = useState<PcLayoutSlot[]>([]);
   const [showSetupLayout, setShowSetupLayout] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -70,6 +72,9 @@ export function DashboardClient() {
         fetchRates(),
         fetchCurrentUser()
       ]);
+      fetchDashboardTodaySales()
+        .then(setTodaySales)
+        .catch(() => setTodaySales(null));
       setPcs(nextPcs);
       setRates(nextRates);
       setCurrentUser(nextUser);
@@ -158,6 +163,10 @@ export function DashboardClient() {
     [pcs, now]
   );
   const summary = summarizePcs(livePcs);
+  const selectedPc = useMemo(
+    () => livePcs.find((pc) => pc.pc_name === selectedPcName) ?? null,
+    [livePcs, selectedPcName]
+  );
   const groupedPcs = useMemo(() => {
     const groups = new Map<string, PcSummary[]>();
     for (const pc of livePcs) {
@@ -338,7 +347,7 @@ export function DashboardClient() {
 
   function openDetails(pc: PcSummary) {
     setSelectedPcName(pc.pc_name);
-    setDialog({ type: "details", pc });
+    setDialog(null);
   }
 
   const currentTime = now === null ? "Loading time..." : now.toLocaleString();
@@ -382,37 +391,74 @@ export function DashboardClient() {
         </div>
       </header>
 
-      <DashboardSummary summary={summary} />
+      <DashboardSummary
+        currentOperator={currentUser?.display_name ?? "Loading"}
+        summary={summary}
+        todaySales={todaySales}
+      />
 
       {message ? <div className={styles.statusMessage}>{message}</div> : null}
 
-      <section className={styles.pcGrid} aria-label="PC grid">
-        {!hasLoadedOnce
-          ? Array.from({ length: 4 }, (_, index) => (
-              <div className={styles.loadingCard} key={index}>
-                Loading PC status...
+      <div className={styles.dashboardWorkspace}>
+        <section className={styles.pcGrid} aria-label="PC grid">
+          {!hasLoadedOnce
+            ? Array.from({ length: 12 }, (_, index) => (
+                <div className={styles.loadingCard} key={index}>
+                  Loading station...
+                </div>
+              ))
+            : null}
+          {hasLoadedOnce && livePcs.length === 0 ? (
+            <div className={styles.emptyState}>
+              <div>
+                <h2>No registered stations yet.</h2>
+                <p>Install and register the first Secret Grounds client to begin operations.</p>
+                <button className={styles.primaryButton} type="button">
+                  Register First PC
+                </button>
               </div>
-            ))
-          : null}
-        {hasLoadedOnce && livePcs.length === 0 ? (
-          <div className={styles.emptyState}>No registered PCs.</div>
-        ) : null}
-        {groupedPcs.map(([groupLabel, groupPcs]) => (
-          <section className={styles.pcLayoutGroup} key={groupLabel} aria-label={groupLabel}>
-            <h2>{groupLabel}</h2>
-            <div className={styles.monitorGrid}>
-              {groupPcs.map((pc) => (
-                <PcMonitorTile
-                  key={pc.pc_name}
-                  isSelected={selectedPcName === pc.pc_name && dialog?.type === "details"}
-                  pc={pc}
-                  onSelect={openDetails}
-                />
-              ))}
             </div>
-          </section>
-        ))}
-      </section>
+          ) : null}
+          {groupedPcs.map(([groupLabel, groupPcs]) => (
+            <section className={styles.pcLayoutGroup} key={groupLabel} aria-label={groupLabel}>
+              <h2>{groupLabel}</h2>
+              <div className={styles.monitorGrid}>
+                {groupPcs.map((pc) => (
+                  <PcMonitorTile
+                    key={pc.pc_name}
+                    isSelected={selectedPcName === pc.pc_name}
+                    pc={pc}
+                    onSelect={openDetails}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </section>
+        <aside className={styles.selectedPcRail} aria-label="Selected PC controls">
+          {selectedPc ? (
+            <PcDetailsPanel
+              currentUserRole={currentUser?.role ?? null}
+              onActionComplete={() => void refresh()}
+              onAddTime={(selectedPanelPc) => setDialog({ type: "add", pc: selectedPanelPc })}
+              onCancelPrepared={(selectedPanelPc) => void cancelPreparedAction(selectedPanelPc)}
+              pc={selectedPc}
+              onClose={() => setSelectedPcName(null)}
+              onEnd={(selectedPanelPc) => setDialog({ type: "end", pc: selectedPanelPc })}
+              onPayment={(selectedPanelPc) => setDialog({ type: "payment", pc: selectedPanelPc })}
+              onResolve={(selectedPanelPc) => setDialog({ type: "resolve", pc: selectedPanelPc })}
+              onRetryWake={(selectedPanelPc) => void retryWakeAction(selectedPanelPc)}
+              onStart={(selectedPanelPc) => setDialog({ type: "start", pc: selectedPanelPc })}
+              variant="dock"
+            />
+          ) : (
+            <div className={styles.noSelectionPanel}>
+              <h2>Select a PC to view controls.</h2>
+              <p>Start sessions, add time, collect payments, send messages, and manage power from the selected station panel.</p>
+            </div>
+          )}
+        </aside>
+      </div>
 
       {showSetupLayout && currentUser?.role === "owner" ? (
         <section className={styles.setupLayoutSection} aria-label="Setup layout slots">
