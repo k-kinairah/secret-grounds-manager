@@ -67,6 +67,16 @@ def row_to_session(row: Any) -> SessionRecord:
         member_name_snapshot=row["member_name_snapshot"],
         member_balance_before_seconds=row["member_balance_before_seconds"],
         member_balance_after_seconds=row["member_balance_after_seconds"],
+        grace_started_at=(
+            datetime.fromisoformat(row["grace_started_at"])
+            if "grace_started_at" in row.keys() and row["grace_started_at"] is not None
+            else None
+        ),
+        shutdown_at=(
+            datetime.fromisoformat(row["shutdown_at"])
+            if "shutdown_at" in row.keys() and row["shutdown_at"] is not None
+            else None
+        ),
     )
 
 
@@ -125,9 +135,11 @@ class SessionRepository:
                     member_code_snapshot,
                     member_name_snapshot,
                     member_balance_before_seconds,
-                    member_balance_after_seconds
+                    member_balance_after_seconds,
+                    grace_started_at,
+                    shutdown_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.session_id,
@@ -161,6 +173,8 @@ class SessionRepository:
                     session.member_name_snapshot,
                     session.member_balance_before_seconds,
                     session.member_balance_after_seconds,
+                    datetime_to_storage(session.grace_started_at),
+                    datetime_to_storage(session.shutdown_at),
                 ),
             )
 
@@ -221,7 +235,7 @@ class SessionRepository:
             row = connection.execute(
                 """
                 SELECT * FROM sessions
-                WHERE pc_name = ? AND status IN ('active', 'ending', 'settlement_pending')
+                WHERE pc_name = ? AND status IN ('active', 'grace_period', 'shutting_down', 'ending', 'settlement_pending')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -238,7 +252,7 @@ class SessionRepository:
             rows = connection.execute(
                 """
                 SELECT * FROM sessions
-                WHERE status IN ('active', 'ending', 'settlement_pending')
+                WHERE status IN ('active', 'grace_period', 'shutting_down', 'ending', 'settlement_pending')
                 ORDER BY created_at DESC
                 """
             ).fetchall()
@@ -288,7 +302,9 @@ class SessionRepository:
                     member_code_snapshot = ?,
                     member_name_snapshot = ?,
                     member_balance_before_seconds = ?,
-                    member_balance_after_seconds = ?
+                    member_balance_after_seconds = ?,
+                    grace_started_at = ?,
+                    shutdown_at = ?
                 WHERE session_id = ?
                 """,
                 (
@@ -322,6 +338,8 @@ class SessionRepository:
                     session.member_name_snapshot,
                     session.member_balance_before_seconds,
                     session.member_balance_after_seconds,
+                    datetime_to_storage(session.grace_started_at),
+                    datetime_to_storage(session.shutdown_at),
                     session.session_id,
                 ),
             )

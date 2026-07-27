@@ -12,6 +12,7 @@ import requests
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import client.client as client_module
 from client.client import SecretGroundsClient
 from client.session_recovery import SessionRecoveryStore
 from client.websocket_transport import SimpleWebSocketClient
@@ -53,6 +54,9 @@ def login_owner() -> requests.Session:
 def start_server(database_path: str) -> subprocess.Popen[str]:
     environment = os.environ.copy()
     environment["SECRET_GROUNDS_DB_PATH"] = database_path
+    environment["SECRET_GROUNDS_TEST_MODE"] = "true"
+    environment["SECRET_GROUNDS_EXPIRATION_GRACE_SECONDS"] = "1"
+    environment["SECRET_GROUNDS_AUTOMATIC_SHUTDOWN_ON_EXPIRATION"] = "false"
 
     return subprocess.Popen(
         [
@@ -173,6 +177,10 @@ def create_smoke_client(temp_directory: str) -> SecretGroundsClient:
 
 
 def main() -> None:
+    os.environ["SECRET_GROUNDS_TEST_MODE"] = "true"
+    os.environ["SECRET_GROUNDS_AUTOMATIC_SHUTDOWN_ON_EXPIRATION"] = "false"
+    client_module.EXPIRATION_GRACE_SECONDS = 1
+    client_module.AUTOMATIC_SHUTDOWN_ON_EXPIRATION = False
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
         database_path = str(Path(temp_directory) / "secret_grounds_test.sqlite3")
         bootstrap_owner(database_path)

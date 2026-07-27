@@ -14,6 +14,10 @@ class LockScreenState:
     is_locked: bool = True
     is_online: bool = False
     dev_escape_active: bool = False
+    headline: str = "This computer is currently unavailable"
+    instruction: str = "Please ask the cashier to start a session"
+    countdown: str | None = None
+    is_final_warning: bool = False
 
 
 class LockScreenController:
@@ -42,6 +46,9 @@ class LockScreenController:
         self.gui_thread: Thread | None = None
         self.root = None
         self.connection_label = None
+        self.headline_label = None
+        self.instruction_label = None
+        self.countdown_label = None
 
     def start(self) -> None:
         if self.enable_dev_escape:
@@ -67,10 +74,41 @@ class LockScreenController:
         with self.state_lock:
             self.state.is_locked = True
             self.state.dev_escape_active = False
+            self.state.headline = "This computer is currently unavailable"
+            self.state.instruction = "Please ask the cashier to start a session"
+            self.state.countdown = None
+            self.state.is_final_warning = False
 
         if reason:
             print(reason)
         print("Lock screen shown.")
+
+        if self.enable_gui:
+            self._schedule(self._show_window)
+
+    def show_expiration_grace(self, remaining_seconds: int, final_warning: bool = False) -> None:
+        minutes = max(0, remaining_seconds) // 60
+        seconds = max(0, remaining_seconds) % 60
+        with self.state_lock:
+            self.state.is_locked = True
+            self.state.dev_escape_active = False
+            self.state.headline = (
+                f"PC shutting down in {max(0, remaining_seconds)} seconds."
+                if final_warning
+                else "YOUR SESSION HAS ENDED"
+            )
+            self.state.instruction = (
+                "Need more time?\n"
+                "Please ask the cashier to add time before the countdown ends.\n"
+                "Your open programs will remain available if time is added before shutdown."
+            )
+            self.state.countdown = f"{minutes:02d}:{seconds:02d}"
+            self.state.is_final_warning = final_warning
+
+        print(
+            "Expiration grace screen shown: "
+            f"shutdown in {minutes}:{seconds:02d}."
+        )
 
         if self.enable_gui:
             self._schedule(self._show_window)
@@ -187,6 +225,7 @@ class LockScreenController:
             background="#030712",
         )
         unavailable.pack(pady=8)
+        self.headline_label = unavailable
 
         cashier = tk.Label(
             container,
@@ -194,8 +233,19 @@ class LockScreenController:
             font=("Segoe UI", 18),
             foreground="#A7B8D4",
             background="#030712",
+            justify="center",
         )
         cashier.pack(pady=8)
+        self.instruction_label = cashier
+
+        self.countdown_label = tk.Label(
+            container,
+            text="",
+            font=("Segoe UI", 64, "bold"),
+            foreground="#22D3EE",
+            background="#030712",
+        )
+        self.countdown_label.pack(pady=(20, 8))
 
         pc_label = tk.Label(
             container,
@@ -238,6 +288,7 @@ class LockScreenController:
         if self.root is None:
             return
 
+        self._update_lock_text()
         self.root.deiconify()
         self.root.attributes("-topmost", True)
         self.root.lift()
@@ -273,3 +324,23 @@ class LockScreenController:
             text=f"Connection status: {label}",
             foreground=color,
         )
+
+    def _update_lock_text(self) -> None:
+        with self.state_lock:
+            headline = self.state.headline
+            instruction = self.state.instruction
+            countdown = self.state.countdown
+            is_final_warning = self.state.is_final_warning
+
+        if self.headline_label is not None:
+            self.headline_label.configure(
+                text=headline,
+                foreground="#FCA5A5" if is_final_warning else "#F9FAFB",
+            )
+        if self.instruction_label is not None:
+            self.instruction_label.configure(text=instruction)
+        if self.countdown_label is not None:
+            self.countdown_label.configure(
+                text=countdown or "",
+                foreground="#F87171" if is_final_warning else "#22D3EE",
+            )

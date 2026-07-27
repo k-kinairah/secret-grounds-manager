@@ -13,7 +13,7 @@ export function PcMonitorTile({ pc, isSelected, onSelect }: PcMonitorTileProps) 
   const displayName = pc.display_name ?? pc.pc_name;
   const presentation = getPcMonitorPresentation(pc);
   const showCompactTime =
-    pc.session_status === "active" &&
+    (pc.session_status === "active" || pc.session_status === "grace_period") &&
     pc.session_mode !== "open_time" &&
     pc.remaining_seconds !== null;
   const secondaryLabel =

@@ -74,6 +74,8 @@ function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
     active_session_id: null,
     started_at: null,
     scheduled_end_at: null,
+    grace_started_at: null,
+    shutdown_at: null,
     remaining_seconds: null,
     rate_name_snapshot: null,
     base_amount: "0.00",
@@ -163,7 +165,7 @@ assert.deepEqual(
   }
 );
 
-const offlinePc = makePc({ connection_status: "offline" });
+const offlinePc = makePc({ connection_status: "offline", power_state: "powered_off" });
 assert.equal(getPcCardTone(offlinePc), "offline");
 assert.deepEqual(getPcActionAvailability(offlinePc), {
   canStart: false,
@@ -233,6 +235,27 @@ assert.deepEqual(getPcMonitorPresentation(settlementPc), {
   label: "Settlement"
 });
 
+const gracePc = makePc({
+  session_status: "grace_period",
+  active_session_id: "session-grace",
+  remaining_seconds: 90
+});
+assert.equal(getPcActionAvailability(gracePc).canAddTime, true);
+assert.deepEqual(getPcMonitorPresentation(gracePc), {
+  className: "monitorTileWarning",
+  label: "Grace Period"
+});
+
+const shuttingDownPc = makePc({
+  session_status: "shutting_down",
+  power_state: "shutting_down",
+  active_session_id: "session-shutdown"
+});
+assert.deepEqual(getPcMonitorPresentation(shuttingDownPc), {
+  className: "monitorTileWarning",
+  label: "Shutting Down"
+});
+
 const recoveryPc = makePc({
   session_status: "unknown",
   recovery_required: true,
@@ -255,11 +278,15 @@ assert.deepEqual(getPcMonitorPresentation(offlinePc), {
   label: "Powered Off"
 });
 
-assert.deepEqual(summarizePcs([availablePc, activePc, offlinePc]), {
-  total: 3,
+assert.deepEqual(summarizePcs([availablePc, activePc, gracePc, shuttingDownPc, settlementPc, offlinePc]), {
+  total: 6,
   inUse: 1,
+  gracePeriod: 1,
+  shuttingDown: 1,
+  settlementPending: 1,
   available: 1,
-  offline: 1
+  offline: 1,
+  poweredOff: 1
 });
 
 assert.equal(

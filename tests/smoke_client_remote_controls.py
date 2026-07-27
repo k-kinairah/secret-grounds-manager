@@ -1,4 +1,5 @@
 import sys
+import os
 from pathlib import Path
 
 
@@ -19,6 +20,9 @@ class NoGuiLockScreen:
     def show_locked(self, reason: str | None = None) -> None:
         pass
 
+    def show_expiration_grace(self, remaining_seconds: int, final_warning: bool = False) -> None:
+        pass
+
     def set_connection_online(self, is_online: bool) -> None:
         pass
 
@@ -29,8 +33,17 @@ def main() -> None:
     from client.remote_controls import RemoteControlHandler
 
     original_platform_system = remote_controls_module.platform.system
+    original_test_mode = os.environ.get("SECRET_GROUNDS_TEST_MODE")
     remote_controls_module.platform.system = lambda: "Windows"  # type: ignore[assignment]
     try:
+        os.environ["SECRET_GROUNDS_TEST_MODE"] = "true"
+        try:
+            remote_controls_module.default_power_executor(["shutdown", "/s", "/t", "3"])
+        except RuntimeError as error:
+            assert "blocked_in_test_mode" in str(error)
+        else:
+            raise AssertionError("Real power executor must be blocked in test mode")
+
         executed: list[list[str]] = []
         handler = RemoteControlHandler("PC-TEST", power_executor=lambda command: executed.append(command))
         handler._show_message_window = lambda *args, **kwargs: None  # type: ignore[method-assign]
@@ -77,6 +90,10 @@ def main() -> None:
         print("Client remote controls smoke test passed.")
     finally:
         remote_controls_module.platform.system = original_platform_system  # type: ignore[assignment]
+        if original_test_mode is None:
+            os.environ.pop("SECRET_GROUNDS_TEST_MODE", None)
+        else:
+            os.environ["SECRET_GROUNDS_TEST_MODE"] = original_test_mode
 
 
 if __name__ == "__main__":

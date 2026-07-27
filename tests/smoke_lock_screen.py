@@ -2,10 +2,12 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import client.client as client_module
 from client.client import SecretGroundsClient
 from client.session_recovery import SessionRecoveryStore
 
@@ -19,6 +21,7 @@ class CapturingWebSocket:
 
 
 def create_client() -> SecretGroundsClient:
+    client_module.AUTOMATIC_SHUTDOWN_ON_EXPIRATION = False
     temp_directory = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
     recovery_store = SessionRecoveryStore(Path(temp_directory.name) / "recovery.json")
     client = SecretGroundsClient(
@@ -91,6 +94,7 @@ def test_manual_end_locks() -> None:
 
 
 def test_timer_expiration_locks() -> None:
+    client_module.EXPIRATION_SOUND_ENABLED = False
     client = create_client()
     websocket = CapturingWebSocket()
     client.set_current_websocket(websocket)
@@ -98,8 +102,49 @@ def test_timer_expiration_locks() -> None:
         client.start_local_session(start_command("session-expire", 1), websocket)
         time.sleep(1.5)
         assert client.lock_screen.is_locked()
-        assert websocket.sent_messages[-1]["event_type"] == "session_finished"
+        assert websocket.sent_messages[-1]["event_type"] == "expiration_grace_started"
         assert websocket.sent_messages[-1]["session_id"] == "session-expire"
+    finally:
+        client.stop()
+
+
+def test_final_warning_triggers_once() -> None:
+    client_module.EXPIRATION_SOUND_ENABLED = False
+    client = create_client()
+    websocket = CapturingWebSocket()
+    client.set_current_websocket(websocket)
+    try:
+        client.start_local_session(start_command("session-warning", 10), websocket)
+        client.maybe_send_final_warning("session-warning", 30)
+        client.maybe_send_final_warning("session-warning", 29)
+        final_warning_events = [
+            message
+            for message in websocket.sent_messages
+            if message.get("event_type") == "expiration_final_warning"
+        ]
+        assert len(final_warning_events) == 1
+    finally:
+        client.end_local_session(end_command("session-warning"))
+        client.stop()
+
+
+def test_grace_reconnect_uses_authoritative_shutdown_at() -> None:
+    client = create_client()
+    now = datetime.now(timezone.utc)
+    shutdown_at = now + timedelta(seconds=45)
+    try:
+        adopted = client.initialize_grace_period_from_server(
+            session_id="session-reconnect-grace",
+            scheduled_end_at=(now - timedelta(seconds=10)).isoformat(),
+            shutdown_at=shutdown_at.isoformat(),
+            server_time=now.isoformat(),
+            session_mode="prepaid",
+        )
+        assert adopted
+        assert client.active_session is not None
+        assert client.active_session.expiration_state == "grace_period"
+        remaining = int((client.active_session.grace_shutdown_monotonic or 0) - time.monotonic())
+        assert 40 <= remaining <= 45
     finally:
         client.stop()
 
@@ -143,6 +188,8 @@ def main() -> None:
     test_start_session_unlocks()
     test_manual_end_locks()
     test_timer_expiration_locks()
+    test_final_warning_triggers_once()
+    test_grace_reconnect_uses_authoritative_shutdown_at()
     test_disconnect_during_active_session_stays_unlocked()
     test_disconnect_while_idle_remains_locked()
     test_development_escape_hides_locked_screen()

@@ -26,6 +26,7 @@ from server.schemas import (
 )
 from server.prepared_session_repository import PreparedSessionRepository, payment_from_json, payment_to_json
 from server.session_repository import SessionRepository
+from server.settings import EXPIRATION_GRACE_SECONDS
 from server.time_utils import current_utc_time
 
 
@@ -528,6 +529,101 @@ class SessionService:
             created_at=current_utc_time(),
         )
 
+    def begin_expiration_grace(
+        self,
+        session_id: str,
+        grace_started_at: datetime | None = None,
+    ) -> SessionRecord | None:
+        session = self.repository.get_session(session_id)
+        if session is None:
+            return None
+        if session.status in {"settlement_pending", "completed", "ended_manually", "cancelled", "failed"}:
+            return session
+        if session.session_mode == "open_time":
+            return session
+        if session.status == "grace_period":
+            return session
+        if session.status == "shutting_down":
+            return session
+        if session.status != "active":
+            return session
+
+        started_at = grace_started_at or current_utc_time()
+        shutdown_at = started_at + timedelta(seconds=EXPIRATION_GRACE_SECONDS)
+        updated = session.model_copy(
+            update={
+                "status": "grace_period",
+                "grace_started_at": started_at,
+                "shutdown_at": shutdown_at,
+            }
+        )
+        self.repository.update_session(updated)
+        self.create_event(
+            session.session_id,
+            "time_expired",
+            message="Time expired; shutdown grace period started",
+        )
+        self.create_event(
+            session.session_id,
+            "shutdown_grace_started",
+            seconds=EXPIRATION_GRACE_SECONDS,
+            message=f"Shutdown scheduled at {shutdown_at.isoformat()}",
+        )
+        return updated
+
+    def finalize_expiration_shutdown(
+        self,
+        session_id: str,
+        message: str | None = None,
+    ) -> bool:
+        session = self.repository.get_session(session_id)
+        if session is None:
+            return False
+        if session.status in {"completed", "settlement_pending", "ended_manually"}:
+            return True
+        if session.status not in {"grace_period", "shutting_down", "active"}:
+            return False
+
+        shutting_down = session.model_copy(
+            update={
+                "status": "shutting_down",
+                "ended_reason": "expiration_shutdown",
+            }
+        )
+        self.repository.update_session(shutting_down)
+        self.create_event(
+            session_id,
+            "shutdown_grace_completed",
+            message=message or "Expiration grace period completed",
+        )
+        self.create_event(
+            session_id,
+            "automatic_shutdown_initiated",
+            message=message or "Expiration grace period completed",
+        )
+        self.create_event(
+            session_id,
+            "shutdown_command_acknowledged",
+            message="Client acknowledged automatic shutdown finalization",
+        )
+        completed = self.finalize_ended_session(
+            shutting_down,
+            "timer_finished",
+            None,
+        )
+        self.create_event(
+            session_id,
+            "session_completed",
+            message=message or "Timer finished after grace period",
+        )
+        if completed.status == "settlement_pending":
+            self.create_event(
+                session_id,
+                "session_moved_to_settlement",
+                message="Session moved to settlement after expiration shutdown",
+            )
+        return True
+
     async def send_required_command(
         self,
         pc_name: str,
@@ -737,7 +833,8 @@ class SessionService:
         session = self.repository.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if session.status not in {"active", "ending"}:
+        is_grace_rescue = session.status == "grace_period"
+        if session.status not in {"active", "ending", "grace_period"}:
             raise HTTPException(status_code=409, detail="Session is not active")
         if session.session_mode == "open_time":
             raise HTTPException(status_code=400, detail="Open-time sessions do not support add time")
@@ -745,9 +842,31 @@ class SessionService:
             raise HTTPException(status_code=400, detail="Use member balance to add time to this session")
 
         self.require_available_client(session.pc_name)
+        now = current_utc_time()
+        updated_session = session.model_copy(
+            update={
+                "status": "active",
+                "added_seconds": session.added_seconds + seconds,
+                "total_seconds": session.total_seconds + seconds,
+                "scheduled_end_at": (
+                    now + timedelta(seconds=seconds)
+                    if is_grace_rescue
+                    else session.scheduled_end_at + timedelta(seconds=seconds)
+                ),
+                "additional_amount": session.additional_amount + amount,
+                "total_amount": session.total_amount + amount,
+                "grace_started_at": None,
+                "shutdown_at": None,
+            }
+        )
         command = self.create_command(
             "add_time",
-            {"session_id": session.session_id, "seconds": seconds},
+            {
+                "session_id": session.session_id,
+                "seconds": seconds,
+                "cancel_expiration": is_grace_rescue,
+                "scheduled_end_at": updated_session.scheduled_end_at.isoformat(),
+            },
         )
         try:
             acknowledgements = await self.send_required_command(
@@ -765,27 +884,23 @@ class SessionService:
                 status_code=502,
                 detail=f"Add time command failed: {error}",
             ) from error
-
-        updated_session = session.model_copy(
-            update={
-                "added_seconds": session.added_seconds + seconds,
-                "total_seconds": session.total_seconds + seconds,
-                "scheduled_end_at": session.scheduled_end_at
-                + timedelta(seconds=seconds),
-                "additional_amount": session.additional_amount + amount,
-                "total_amount": session.total_amount + amount,
-            }
-        )
         self.repository.update_session(updated_session)
         self.create_event(
             session.session_id,
-            "time_added",
+            "time_added_during_grace" if is_grace_rescue else "time_added",
             seconds=seconds,
             rate_id=resolved_rate_id,
             rate_name_snapshot=rate_name_snapshot,
             amount=amount,
             performed_by_user_id=actor_user_id,
         )
+        if is_grace_rescue:
+            self.create_event(
+                session.session_id,
+                "automatic_shutdown_cancelled",
+                message="Time added during grace period",
+                performed_by_user_id=actor_user_id,
+            )
 
         response_session = (
             self.billing_service.enrich_session(updated_session)
@@ -932,24 +1047,32 @@ class SessionService:
         session = self.repository.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if session.status != "active":
+        is_grace_rescue = session.status == "grace_period"
+        if session.status not in {"active", "grace_period"}:
             raise HTTPException(status_code=409, detail="Session is not active")
         if session.session_mode == "open_time":
             raise HTTPException(status_code=400, detail="Open-time sessions do not support add time")
         if session.session_mode == "member_balance":
             raise HTTPException(status_code=400, detail="Use member balance to add time to this session")
 
+        now = current_utc_time()
         self.require_available_client(session.pc_name)
         updated_session = session.model_copy(
             update={
+                "status": "active",
                 "added_seconds": session.added_seconds + seconds,
                 "total_seconds": session.total_seconds + seconds,
-                "scheduled_end_at": session.scheduled_end_at + timedelta(seconds=seconds),
+                "scheduled_end_at": (
+                    now + timedelta(seconds=seconds)
+                    if is_grace_rescue
+                    else session.scheduled_end_at + timedelta(seconds=seconds)
+                ),
                 "additional_amount": session.additional_amount + amount_due,
                 "total_amount": session.total_amount + amount_due,
+                "grace_started_at": None,
+                "shutdown_at": None,
             }
         )
-        self.repository.update_session(updated_session)
         billing = self.billing_service.record_payment(
             session.session_id,
             payment,
@@ -958,19 +1081,14 @@ class SessionService:
             actor_user_id=actor_user_id,
         )
         recorded_payment = billing.payments[-1]
-        self.create_event(
-            session.session_id,
-            "prepaid_add_time_paid",
-            seconds=seconds,
-            amount=recorded_payment.amount,
-            payment_id=recorded_payment.payment_id,
-            payment_method=recorded_payment.payment_method,
-            performed_by_user_id=actor_user_id,
-        )
-
         command = self.create_command(
             "add_time",
-            {"session_id": session.session_id, "seconds": seconds},
+            {
+                "session_id": session.session_id,
+                "seconds": seconds,
+                "cancel_expiration": is_grace_rescue,
+                "scheduled_end_at": updated_session.scheduled_end_at.isoformat(),
+            },
         )
         try:
             acknowledgements = await self.send_required_command(session.pc_name, command)
@@ -991,6 +1109,24 @@ class SessionService:
                 status_code=502,
                 detail=f"Payment was recorded but add-time command failed and needs review: {error}",
             ) from error
+
+        self.repository.update_session(updated_session)
+        self.create_event(
+            session.session_id,
+            "time_added_during_grace" if is_grace_rescue else "prepaid_add_time_paid",
+            seconds=seconds,
+            amount=recorded_payment.amount,
+            payment_id=recorded_payment.payment_id,
+            payment_method=recorded_payment.payment_method,
+            performed_by_user_id=actor_user_id,
+        )
+        if is_grace_rescue:
+            self.create_event(
+                session.session_id,
+                "automatic_shutdown_cancelled",
+                message="Prepaid time added during grace period",
+                performed_by_user_id=actor_user_id,
+            )
 
         return SessionCommandResponse(
             session=updated_session,
@@ -1211,7 +1347,8 @@ class SessionService:
         session = self.repository.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        if session.status != "active":
+        is_grace_rescue = session.status == "grace_period"
+        if session.status not in {"active", "grace_period"}:
             raise HTTPException(status_code=409, detail="Session is not active")
         if session.session_mode != "member_balance" or session.member_id != member_id:
             raise HTTPException(status_code=400, detail="Session is not funded by this member")
@@ -1220,9 +1357,20 @@ class SessionService:
         member = self.member_repository.require_usable_member(member_id)  # type: ignore[attr-defined]
         if member.time_balance_seconds < session.total_seconds + seconds:
             raise HTTPException(status_code=409, detail="Insufficient member time balance")
+        now = current_utc_time()
+        scheduled_end_at = (
+            now + timedelta(seconds=seconds)
+            if is_grace_rescue
+            else session.scheduled_end_at + timedelta(seconds=seconds)
+        )
         command = self.create_command(
             "add_time",
-            {"session_id": session.session_id, "seconds": seconds},
+            {
+                "session_id": session.session_id,
+                "seconds": seconds,
+                "cancel_expiration": is_grace_rescue,
+                "scheduled_end_at": scheduled_end_at.isoformat(),
+            },
         )
         try:
             acknowledgements = await self.send_required_command(session.pc_name, command)
@@ -1246,20 +1394,30 @@ class SessionService:
         )
         updated_session = session.model_copy(
             update={
+                "status": "active",
                 "added_seconds": session.added_seconds + seconds,
                 "total_seconds": session.total_seconds + seconds,
-                "scheduled_end_at": session.scheduled_end_at + timedelta(seconds=seconds),
+                "scheduled_end_at": scheduled_end_at,
                 "member_balance_after_seconds": member.time_balance_seconds,
+                "grace_started_at": None,
+                "shutdown_at": None,
             }
         )
         self.repository.update_session(updated_session)
         self.create_event(
             session.session_id,
-            "time_added",
+            "time_added_during_grace" if is_grace_rescue else "time_added",
             seconds=seconds,
             message=f"Member balance reservation extended to {reserved_seconds} seconds.",
             performed_by_user_id=actor_user_id,
         )
+        if is_grace_rescue:
+            self.create_event(
+                session.session_id,
+                "automatic_shutdown_cancelled",
+                message="Member time added during grace period",
+                performed_by_user_id=actor_user_id,
+            )
         return SessionCommandResponse(
             session=updated_session,
             command=command,
@@ -1443,8 +1601,18 @@ class SessionService:
         if session is None:
             return False
 
+        if message == "grace_started":
+            self.begin_expiration_grace(session_id)
+            return True
+
+        if session.status == "grace_period":
+            return self.finalize_expiration_shutdown(session_id, message)
+
+        if session.status == "shutting_down":
+            return True
+
         if session.status != "active":
-            return session.status == "completed"
+            return session.status in {"completed", "settlement_pending"}
 
         if self.repository.event_exists(session_id, "session_completed"):
             return True

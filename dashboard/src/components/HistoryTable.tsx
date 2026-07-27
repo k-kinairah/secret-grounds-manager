@@ -9,6 +9,8 @@ import styles from "@/app/history/history.module.css";
 const statuses: Array<SessionStatus | "all"> = [
   "all",
   "active",
+  "grace_period",
+  "shutting_down",
   "ending",
   "settlement_pending",
   "completed",
@@ -19,6 +21,8 @@ const statuses: Array<SessionStatus | "all"> = [
 
 const statusClassName: Record<SessionStatus, string> = {
   active: styles.statusActive,
+  grace_period: styles.statusEnded,
+  shutting_down: styles.statusEnded,
   ending: styles.statusEnded,
   settlement_pending: styles.statusEnded,
   completed: styles.statusCompleted,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import os
 import subprocess
 import time
 from threading import Thread
@@ -11,6 +12,10 @@ PowerExecutor = Callable[[list[str]], None]
 
 
 def default_power_executor(command: list[str]) -> None:
+    if os.getenv("SECRET_GROUNDS_TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise RuntimeError("real_power_executor_blocked_in_test_mode")
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        raise RuntimeError("real_power_executor_blocked_in_pytest")
     subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

@@ -597,19 +597,68 @@ async def client_websocket(websocket: WebSocket, pc_name: str) -> None:
             message = await websocket.receive_json()
             if "command_id" in message:
                 await connection_manager.record_acknowledgement(message)
-            elif message.get("event_type") == "session_finished":
+            elif message.get("event_type") in {
+                "session_finished",
+                "expiration_grace_started",
+                "expiration_final_warning",
+                "expiration_shutdown_started",
+                "expiration_shutdown_invoked",
+                "expiration_shutdown_failed",
+            }:
                 client_event = ClientEvent.model_validate(message)
-                recorded = session_service.complete_from_client(
-                    client_event.session_id,
-                    client_event.message,
-                )
-                recovery_flags.pop(cleaned_pc_name, None)
+                if client_event.event_type == "expiration_grace_started":
+                    grace_session = session_service.begin_expiration_grace(
+                        client_event.session_id
+                    )
+                    recorded = grace_session is not None
+                    response_event_type = "expiration_grace_recorded"
+                    extra_payload = {
+                        "shutdown_at": grace_session.shutdown_at.isoformat()
+                        if grace_session is not None and grace_session.shutdown_at is not None
+                        else None
+                    }
+                elif client_event.event_type == "expiration_final_warning":
+                    session_service.create_event(
+                        client_event.session_id,
+                        "expiration_final_warning_reached",
+                        message=client_event.message or "Final 30-second warning reached",
+                    )
+                    recorded = True
+                    response_event_type = "expiration_final_warning_recorded"
+                    extra_payload = {}
+                elif client_event.event_type == "expiration_shutdown_invoked":
+                    session_service.create_event(
+                        client_event.session_id,
+                        "shutdown_command_invoked",
+                        message=client_event.message or "Client invoked allowlisted shutdown handler",
+                    )
+                    recorded = True
+                    response_event_type = "expiration_shutdown_invocation_recorded"
+                    extra_payload = {}
+                elif client_event.event_type == "expiration_shutdown_failed":
+                    session_service.create_event(
+                        client_event.session_id,
+                        "automatic_shutdown_failed",
+                        message=client_event.message or client_event.reason,
+                    )
+                    recorded = True
+                    response_event_type = "expiration_shutdown_failure_recorded"
+                    extra_payload = {}
+                else:
+                    recorded = session_service.complete_from_client(
+                        client_event.session_id,
+                        client_event.message,
+                    )
+                    recovery_flags.pop(cleaned_pc_name, None)
+                    response_event_type = "session_completion_recorded"
+                    extra_payload = {}
                 await websocket.send_json(
                     {
-                        "event_type": "session_completion_recorded",
+                        "event_type": response_event_type,
                         "session_id": client_event.session_id,
                         "recorded": recorded,
                         "server_time": current_utc_time().isoformat(),
+                        **extra_payload,
                     }
                 )
             elif message.get("event_type") == "reconciliation_unresolved":
@@ -660,29 +709,42 @@ def get_registered_pcs(
         session_status = (
             active_session.status
             if active_session is not None
-            and active_session.status in {"active", "ending", "settlement_pending"}
+            and active_session.status
+            in {"active", "grace_period", "shutting_down", "ending", "settlement_pending"}
             else "idle"
         )
 
         if (
             connection_status == "offline"
             and active_session is not None
-            and active_session.status in {"active", "ending"}
+            and active_session.status in {"active", "grace_period", "ending"}
         ):
             session_status = "unknown"
         power_state = "online" if connection_status == "online" else "powered_off"
+        if active_session is not None and active_session.status == "shutting_down":
+            power_state = "shutting_down" if connection_status == "online" else "powered_off"
         if prepared is not None:
             power_state = "starting" if prepared.status == "starting" else "waking"
             session_status = "idle"
         if recovery_flag is not None:
             power_state = "recovery_required"
-        elif connection_status == "offline" and active_session is not None:
+        elif (
+            connection_status == "offline"
+            and active_session is not None
+            and active_session.status in {"active", "grace_period", "ending"}
+        ):
             power_state = "connection_problem"
 
         if active_session is not None:
+            remaining_target = (
+                active_session.shutdown_at
+                if active_session.status in {"grace_period", "shutting_down"}
+                and active_session.shutdown_at is not None
+                else active_session.scheduled_end_at
+            )
             remaining_seconds = max(
                 0,
-                int((active_session.scheduled_end_at - now).total_seconds()),
+                int((remaining_target - now).total_seconds()),
             )
             billing = billing_service.summarize_session(active_session)
             display_session = billing.session
@@ -729,6 +791,14 @@ def get_registered_pcs(
                     else None
                 ),
                 remaining_seconds=remaining_seconds,
+                grace_started_at=(
+                    active_session.grace_started_at
+                    if active_session is not None
+                    else None
+                ),
+                shutdown_at=(
+                    active_session.shutdown_at if active_session is not None else None
+                ),
                 rate_name_snapshot=(
                     display_session.rate_name_snapshot if display_session is not None else None
                 ),
@@ -837,7 +907,7 @@ def get_pc_session_state(pc_name: str) -> PCSessionStateResponse:
     active_session = session_repository.get_active_session_for_pc(cleaned_pc_name)
     has_client_active_session = (
         active_session is not None
-        and active_session.status in {"active", "ending"}
+        and active_session.status in {"active", "grace_period", "shutting_down", "ending"}
     )
 
     return PCSessionStateResponse(
@@ -849,6 +919,8 @@ def get_pc_session_state(pc_name: str) -> PCSessionStateResponse:
                 status=active_session.status,
                 started_at=active_session.started_at,
                 scheduled_end_at=active_session.scheduled_end_at,
+                grace_started_at=active_session.grace_started_at,
+                shutdown_at=active_session.shutdown_at,
                 total_seconds=active_session.total_seconds,
                 session_mode=active_session.session_mode,
             )

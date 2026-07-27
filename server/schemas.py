@@ -116,13 +116,23 @@ class PCDashboardRecord(BaseModel):
     power_state: Literal[
         "online",
         "powered_off",
+        "shutting_down",
+        "shutdown_failed",
         "waking",
         "starting",
         "connection_problem",
         "recovery_required",
     ] = "powered_off"
     last_seen: datetime
-    session_status: Literal["idle", "active", "ending", "settlement_pending", "unknown"]
+    session_status: Literal[
+        "idle",
+        "active",
+        "grace_period",
+        "shutting_down",
+        "ending",
+        "settlement_pending",
+        "unknown",
+    ]
     startup_status: PreparedSessionStatus | None = None
     prepared_session_id: str | None = None
     startup_elapsed_seconds: int | None = None
@@ -132,6 +142,8 @@ class PCDashboardRecord(BaseModel):
     started_at: datetime | None = None
     scheduled_end_at: datetime | None = None
     remaining_seconds: int | None = None
+    grace_started_at: datetime | None = None
+    shutdown_at: datetime | None = None
     rate_name_snapshot: str | None = None
     base_amount: Decimal = Decimal("0.00")
     additional_amount: Decimal = Decimal("0.00")
@@ -372,6 +384,8 @@ class OnDutyOperatorRecord(BaseModel):
 
 SessionStatus = Literal[
     "active",
+    "grace_period",
+    "shutting_down",
     "ending",
     "settlement_pending",
     "completed",
@@ -405,6 +419,16 @@ SessionEventType = Literal[
     "automatic_reminder_sent",
     "time_expired",
     "operator_changed",
+    "shutdown_grace_started",
+    "time_added_during_grace",
+    "automatic_shutdown_cancelled",
+    "shutdown_grace_completed",
+    "automatic_shutdown_initiated",
+    "shutdown_command_acknowledged",
+    "shutdown_command_invoked",
+    "automatic_shutdown_failed",
+    "session_moved_to_settlement",
+    "expiration_final_warning_reached",
 ]
 
 
@@ -445,6 +469,8 @@ class SessionRecord(BaseModel):
     member_name_snapshot: str | None = None
     member_balance_before_seconds: int | None = None
     member_balance_after_seconds: int | None = None
+    grace_started_at: datetime | None = None
+    shutdown_at: datetime | None = None
 
 
 class SessionEventRecord(BaseModel):
@@ -540,7 +566,15 @@ class ForceEndSessionResponse(BaseModel):
 
 
 class ClientEvent(BaseModel):
-    event_type: Literal["session_finished", "reconciliation_unresolved"]
+    event_type: Literal[
+        "session_finished",
+        "reconciliation_unresolved",
+        "expiration_grace_started",
+        "expiration_shutdown_started",
+        "expiration_shutdown_invoked",
+        "expiration_shutdown_failed",
+        "expiration_final_warning",
+    ]
     session_id: str
     message: str | None = None
     reason: str | None = None
@@ -551,6 +585,8 @@ class SessionStateSummary(BaseModel):
     status: SessionStatus
     started_at: datetime
     scheduled_end_at: datetime
+    grace_started_at: datetime | None = None
+    shutdown_at: datetime | None = None
     total_seconds: int
     session_mode: SessionMode = "prepaid"
 

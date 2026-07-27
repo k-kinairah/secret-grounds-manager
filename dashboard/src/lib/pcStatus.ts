@@ -18,7 +18,17 @@ export interface PcMonitorPresentation {
     | "monitorTileWarning"
     | "monitorTileOffline"
     | "monitorTileWaking";
-  label: "Available" | "In Use" | "Low Time" | "Powered Off" | "Waking" | "Settlement" | "Recovery";
+  label:
+    | "Available"
+    | "In Use"
+    | "Grace Period"
+    | "Low Time"
+    | "Shutting Down"
+    | "Shutdown Failed"
+    | "Powered Off"
+    | "Waking"
+    | "Settlement"
+    | "Recovery";
 }
 
 export function getPcMonitorPresentation(pc: PcSummary): PcMonitorPresentation {
@@ -30,8 +40,20 @@ export function getPcMonitorPresentation(pc: PcSummary): PcMonitorPresentation {
     return { className: "monitorTileWaking", label: "Waking" };
   }
 
+  if (pc.power_state === "shutdown_failed") {
+    return { className: "monitorTileWarning", label: "Shutdown Failed" };
+  }
+
+  if (pc.power_state === "shutting_down" || pc.session_status === "shutting_down") {
+    return { className: "monitorTileWarning", label: "Shutting Down" };
+  }
+
   if (pc.session_status === "settlement_pending" || pc.session_status === "ending") {
     return { className: "monitorTileWarning", label: "Settlement" };
+  }
+
+  if (pc.session_status === "grace_period") {
+    return { className: "monitorTileWarning", label: "Grace Period" };
   }
 
   if (pc.session_status === "active") {
@@ -62,7 +84,16 @@ export function getPcCardTone(pc: PcSummary): PcCardTone {
       : "offline";
   }
 
-  if (pc.session_status === "settlement_pending" || pc.session_status === "ending") {
+  if (pc.power_state === "shutdown_failed" || pc.power_state === "shutting_down") {
+    return "warning";
+  }
+
+  if (
+    pc.session_status === "settlement_pending" ||
+    pc.session_status === "ending" ||
+    pc.session_status === "grace_period" ||
+    pc.session_status === "shutting_down"
+  ) {
     return "warning";
   }
 
@@ -85,6 +116,7 @@ export function getPcActionAvailability(pc: PcSummary): PcActionAvailability {
     pc.mac_address !== null &&
     pc.startup_status === null;
   const isActive = pc.session_status === "active" && pc.active_session_id !== null;
+  const isGrace = pc.session_status === "grace_period" && pc.active_session_id !== null;
   const isSettlementPending =
     pc.session_status === "settlement_pending" && pc.active_session_id !== null;
 
@@ -92,8 +124,8 @@ export function getPcActionAvailability(pc: PcSummary): PcActionAvailability {
     canStart:
       (isOnline && pc.session_status === "idle" && pc.startup_status === null) ||
       isPoweredOffStartable,
-    canAddTime: isOnline && isActive,
-    canEnd: isOnline && isActive,
+    canAddTime: isOnline && (isActive || isGrace),
+    canEnd: isOnline && (isActive || isGrace),
     canCollectPayment: isSettlementPending,
     canViewDetails: true
   };
@@ -102,14 +134,18 @@ export function getPcActionAvailability(pc: PcSummary): PcActionAvailability {
 export function summarizePcs(pcs: PcSummary[]): DashboardSummary {
   return {
     total: pcs.length,
-    inUse: pcs.filter(
-      (pc) => pc.session_status === "active" || pc.session_status === "settlement_pending"
+    inUse: pcs.filter((pc) => pc.session_status === "active").length,
+    gracePeriod: pcs.filter((pc) => pc.session_status === "grace_period").length,
+    shuttingDown: pcs.filter(
+      (pc) => pc.session_status === "shutting_down" || pc.power_state === "shutting_down"
     ).length,
+    settlementPending: pcs.filter((pc) => pc.session_status === "settlement_pending").length,
     available: pcs.filter(
       (pc) => pc.connection_status === "online" && pc.session_status === "idle"
     ).length,
     offline: pcs.filter(
       (pc) => pc.connection_status === "offline" && pc.startup_status === null
-    ).length
+    ).length,
+    poweredOff: pcs.filter((pc) => pc.power_state === "powered_off").length
   };
 }

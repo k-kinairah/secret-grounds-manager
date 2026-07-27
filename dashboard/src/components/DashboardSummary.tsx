@@ -8,9 +8,12 @@ interface DashboardSummaryProps {
 export function DashboardSummary({ summary }: DashboardSummaryProps) {
   const cards = [
     ["Total PCs", summary.total],
-    ["In Use", summary.inUse],
+    ["Active PCs", summary.inUse],
+    ["Grace Period", summary.gracePeriod],
+    ["Shutting Down", summary.shuttingDown],
+    ["Settlement Pending", summary.settlementPending],
     ["Available", summary.available],
-    ["Offline", summary.offline]
+    ["Powered Off", summary.poweredOff]
   ];
 
   return (

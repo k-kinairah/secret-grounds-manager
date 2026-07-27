@@ -1,8 +1,17 @@
 export type ConnectionStatus = "online" | "offline";
-export type DashboardSessionStatus = "idle" | "active" | "ending" | "settlement_pending" | "unknown";
+export type DashboardSessionStatus =
+  | "idle"
+  | "active"
+  | "grace_period"
+  | "shutting_down"
+  | "ending"
+  | "settlement_pending"
+  | "unknown";
 export type PowerState =
   | "online"
   | "powered_off"
+  | "shutting_down"
+  | "shutdown_failed"
   | "waking"
   | "starting"
   | "connection_problem"
@@ -17,6 +26,8 @@ export type PreparedSessionStatus =
   | "cancelled";
 export type SessionStatus =
   | "active"
+  | "grace_period"
+  | "shutting_down"
   | "ending"
   | "settlement_pending"
   | "completed"
@@ -66,6 +77,8 @@ export interface PcSummary {
   active_session_id: string | null;
   started_at: string | null;
   scheduled_end_at: string | null;
+  grace_started_at: string | null;
+  shutdown_at: string | null;
   remaining_seconds: number | null;
   rate_name_snapshot: string | null;
   base_amount: string;
@@ -110,6 +123,8 @@ export interface SessionRecord {
   status: SessionStatus;
   started_at: string;
   scheduled_end_at: string;
+  grace_started_at: string | null;
+  shutdown_at: string | null;
   ended_at: string | null;
   original_seconds: number;
   added_seconds: number;
@@ -170,8 +185,12 @@ export interface ForceEndSessionResponse {
 export interface DashboardSummary {
   total: number;
   inUse: number;
+  gracePeriod: number;
+  shuttingDown: number;
+  settlementPending: number;
   available: number;
   offline: number;
+  poweredOff: number;
 }
 
 export interface RemoteCommandRecord {

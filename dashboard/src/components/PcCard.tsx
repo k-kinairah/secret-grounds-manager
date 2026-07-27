@@ -48,12 +48,20 @@ export function PcCard({
       ? "Waking"
       : pc.power_state === "starting"
         ? "Starting"
+        : pc.power_state === "shutting_down"
+          ? "Shutting Down"
+          : pc.power_state === "shutdown_failed"
+            ? "Shutdown Failed"
         : pc.connection_status === "online"
           ? "Online"
           : "Powered Off";
   const sessionLabel =
     pc.session_status === "active"
       ? "In Use"
+      : pc.session_status === "grace_period"
+        ? "Grace Period"
+      : pc.session_status === "shutting_down"
+        ? "Shutting Down"
       : pc.session_status === "ending"
         ? "Ending"
         : pc.session_status === "settlement_pending"
@@ -66,7 +74,10 @@ export function PcCard({
       ? styles.badgeWarning
       : pc.session_status === "active"
       ? styles.badgeActive
-      : pc.session_status === "ending" || pc.session_status === "settlement_pending"
+      : pc.session_status === "ending" ||
+          pc.session_status === "grace_period" ||
+          pc.session_status === "shutting_down" ||
+          pc.session_status === "settlement_pending"
         ? styles.badgeWarning
       : pc.session_status === "unknown"
         ? styles.badgeWarning

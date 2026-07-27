@@ -9,6 +9,7 @@ from uuid import uuid4
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import client.client as client_module
 from client.client import SecretGroundsClient
 from client.session_recovery import SessionRecoveryStore
 from server.database import initialize_database
@@ -38,6 +39,7 @@ def iso_in(seconds: int) -> str:
 
 
 def create_client(temp_directory: str) -> SecretGroundsClient:
+    client_module.AUTOMATIC_SHUTDOWN_ON_EXPIRATION = False
     return SecretGroundsClient(
         server_url="http://127.0.0.1:8000",
         pc_name="PC-RECOVERY",
@@ -297,7 +299,7 @@ def test_manual_end_clears_recovery(temp_directory: str) -> None:
     client.stop()
 
 
-def test_expiration_offline_creates_pending_completion(temp_directory: str) -> None:
+def test_expiration_offline_enters_grace_before_pending_completion(temp_directory: str) -> None:
     client = create_client(temp_directory)
     websocket = CapturingWebSocket()
     client.start_local_session(start_command("session-offline", 1, iso_in(1)), websocket)
@@ -305,7 +307,9 @@ def test_expiration_offline_creates_pending_completion(temp_directory: str) -> N
     time.sleep(1.5)
     loaded = client.recovery_store.load()
     assert loaded is not None
-    assert loaded.state == "pending_completion"
+    assert loaded.state == "active"
+    assert client.active_session is not None
+    assert client.active_session.expiration_state == "grace_period"
     assert client.lock_screen.is_locked()
     client.stop()
 
@@ -473,7 +477,7 @@ def main() -> None:
         test_duplicate_command_executes_once(temp_directory)
         test_add_time_updates_recovery(temp_directory)
         test_manual_end_clears_recovery(temp_directory)
-        test_expiration_offline_creates_pending_completion(temp_directory)
+        test_expiration_offline_enters_grace_before_pending_completion(temp_directory)
         test_reconnect_sends_pending_and_confirmation_clears(temp_directory)
         test_duplicate_completion_event_not_duplicated(temp_directory)
         test_force_end_server_only_open_time(temp_directory)

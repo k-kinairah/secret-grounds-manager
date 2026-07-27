@@ -116,10 +116,13 @@ export function DashboardClient() {
     () =>
       pcs.map((pc) => {
         const nowMs = now?.getTime();
-        if (pc.session_status !== "active" || nowMs === undefined) {
+        if (
+          !["active", "grace_period", "shutting_down"].includes(pc.session_status) ||
+          nowMs === undefined
+        ) {
           return pc;
         }
-        if (pc.session_mode === "open_time") {
+        if (pc.session_status === "active" && pc.session_mode === "open_time") {
           const estimate = calculateOpenTimeEstimate(
             pc.started_at,
             nowMs,
@@ -144,7 +147,12 @@ export function DashboardClient() {
 
         return {
           ...pc,
-          remaining_seconds: secondsFromScheduledEnd(pc.scheduled_end_at, nowMs)
+          remaining_seconds: secondsFromScheduledEnd(
+            pc.session_status === "grace_period" || pc.session_status === "shutting_down"
+              ? pc.shutdown_at
+              : pc.scheduled_end_at,
+            nowMs
+          )
         };
       }),
     [pcs, now]

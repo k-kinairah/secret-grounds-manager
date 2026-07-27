@@ -61,7 +61,7 @@ def ensure_session_events_accept_payment_events(connection: sqlite3.Connection) 
     row = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'session_events'"
     ).fetchone()
-    if row is None or "operator_changed" in (row["sql"] or ""):
+    if row is None or "shutdown_command_invoked" in (row["sql"] or ""):
         return
 
     connection.execute("ALTER TABLE session_events RENAME TO session_events_old")
@@ -96,7 +96,17 @@ def ensure_session_events_accept_payment_events(connection: sqlite3.Connection) 
                     'prepared_session_cancelled',
                     'automatic_reminder_sent',
                     'time_expired',
-                    'operator_changed'
+                    'operator_changed',
+                    'shutdown_grace_started',
+                    'time_added_during_grace',
+                    'automatic_shutdown_cancelled',
+                    'shutdown_grace_completed',
+                    'automatic_shutdown_initiated',
+                    'shutdown_command_acknowledged',
+                    'shutdown_command_invoked',
+                    'automatic_shutdown_failed',
+                    'session_moved_to_settlement',
+                    'expiration_final_warning_reached'
                 )
             ),
             seconds INTEGER,
@@ -143,6 +153,8 @@ def ensure_session_events_accept_payment_events(connection: sqlite3.Connection) 
 
 SESSION_STATUS_VALUES = (
     "active",
+    "grace_period",
+    "shutting_down",
     "ending",
     "settlement_pending",
     "completed",
@@ -183,6 +195,8 @@ SESSION_COLUMN_DEFINITIONS = {
     "settlement_pending": "INTEGER NOT NULL DEFAULT 0",
     "created_by_user_id": "TEXT",
     "ended_by_user_id": "TEXT",
+    "grace_started_at": "TEXT",
+    "shutdown_at": "TEXT",
 }
 
 
@@ -813,6 +827,8 @@ def initialize_database() -> None:
                 status TEXT NOT NULL CHECK (
                     status IN (
                         'active',
+                        'grace_period',
+                        'shutting_down',
                         'ending',
                         'settlement_pending',
                         'completed',
@@ -841,7 +857,9 @@ def initialize_database() -> None:
                 final_computed_amount TEXT,
                 metered_rate_price_snapshot TEXT,
                 metered_rate_duration_seconds_snapshot INTEGER,
-                settlement_pending INTEGER NOT NULL DEFAULT 0
+                settlement_pending INTEGER NOT NULL DEFAULT 0,
+                grace_started_at TEXT,
+                shutdown_at TEXT
             )
             """
         )
@@ -895,6 +913,8 @@ def initialize_database() -> None:
         )
         add_column_if_missing(connection, "sessions", "created_by_user_id", "TEXT")
         add_column_if_missing(connection, "sessions", "ended_by_user_id", "TEXT")
+        add_column_if_missing(connection, "sessions", "grace_started_at", "TEXT")
+        add_column_if_missing(connection, "sessions", "shutdown_at", "TEXT")
         add_column_if_missing(connection, "sessions", "member_id", "TEXT")
         add_column_if_missing(connection, "sessions", "member_code_snapshot", "TEXT")
         add_column_if_missing(connection, "sessions", "member_name_snapshot", "TEXT")
@@ -940,7 +960,17 @@ def initialize_database() -> None:
                     'prepared_session_cancelled',
                     'automatic_reminder_sent',
                     'time_expired',
-                    'operator_changed'
+                    'operator_changed',
+                    'shutdown_grace_started',
+                    'time_added_during_grace',
+                    'automatic_shutdown_cancelled',
+                    'shutdown_grace_completed',
+                    'automatic_shutdown_initiated',
+                    'shutdown_command_acknowledged',
+                    'shutdown_command_invoked',
+                    'automatic_shutdown_failed',
+                    'session_moved_to_settlement',
+                    'expiration_final_warning_reached'
                     )
                 ),
                 seconds INTEGER,

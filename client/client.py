@@ -13,7 +13,10 @@ from client.config import (
     ENABLE_DEV_ESCAPE,
     ENABLE_CUSTOMER_OVERLAY,
     ENABLE_LOCK_SCREEN,
+    AUTOMATIC_SHUTDOWN_ON_EXPIRATION,
     CUSTOMER_OVERLAY_POSITION,
+    EXPIRATION_GRACE_SECONDS,
+    EXPIRATION_SOUND_ENABLED,
     HEARTBEAT_INTERVAL_SECONDS,
     REQUEST_TIMEOUT_SECONDS,
     SESSION_RECOVERY_PATH,
@@ -37,6 +40,9 @@ class LocalSession:
     stop_event: Event
     timer_thread: Thread | None
     session_mode: str = "prepaid"
+    expiration_state: str = "active"
+    grace_shutdown_monotonic: float | None = None
+    final_warning_sent: bool = False
 
 
 class SecretGroundsClient:
@@ -471,6 +477,8 @@ class SecretGroundsClient:
 
         session_id = payload.get("session_id")
         seconds = payload.get("seconds")
+        authoritative_scheduled_end_at = payload.get("scheduled_end_at")
+        cancel_expiration = bool(payload.get("cancel_expiration", False))
 
         with self.active_session_lock:
             if (
@@ -491,11 +499,25 @@ class SecretGroundsClient:
             if not isinstance(seconds, int) or seconds <= 0:
                 return self.build_acknowledgement(command_id, "failed", "Invalid seconds")
 
-            self.active_session.deadline_monotonic += seconds
-            scheduled_end_at = self.parse_utc_datetime(
-                self.active_session.scheduled_end_at
-            ) + timedelta(seconds=seconds)
+            was_in_grace = (
+                cancel_expiration
+                or self.active_session.expiration_state == "grace_period"
+            )
+            if isinstance(authoritative_scheduled_end_at, str):
+                scheduled_end_at = self.parse_utc_datetime(authoritative_scheduled_end_at)
+                self.active_session.deadline_monotonic = (
+                    time.monotonic()
+                    + self.calculate_remaining_seconds(authoritative_scheduled_end_at)
+                )
+            else:
+                self.active_session.deadline_monotonic += seconds
+                scheduled_end_at = self.parse_utc_datetime(
+                    self.active_session.scheduled_end_at
+                ) + timedelta(seconds=seconds)
             self.active_session.scheduled_end_at = scheduled_end_at.isoformat()
+            self.active_session.expiration_state = "active"
+            self.active_session.grace_shutdown_monotonic = None
+            self.active_session.final_warning_sent = False
             self.recovery_store.save(
                 session_id=self.active_session.session_id,
                 pc_name=self.pc_name,
@@ -504,7 +526,20 @@ class SecretGroundsClient:
                 session_mode=self.active_session.session_mode,
             )
             self.customer_overlay.reset_reminders_after_add_time()
+            if was_in_grace:
+                self.lock_screen.hide_for_session()
+                self.customer_overlay.show_session(
+                    session_type=self.human_session_mode(
+                        self.active_session.session_mode
+                    ),
+                    is_elapsed=False,
+                )
 
+        if cancel_expiration:
+            print(
+                "Automatic shutdown cancelled; session resumed after grace add-time: "
+                f"session_id={session_id}, scheduled_end_at={authoritative_scheduled_end_at}"
+            )
         print(f"Added {seconds} seconds to session {session_id}.")
         return self.build_acknowledgement(command_id, "completed", "Time added")
 
@@ -601,38 +636,171 @@ class SecretGroundsClient:
             print(f"Session {session_id} remaining: {remaining_seconds} seconds")
 
             if remaining_seconds <= 0:
-                with self.active_session_lock:
-                    scheduled_end_at = ""
-                    if (
-                        self.active_session is not None
-                        and self.active_session.session_id == session_id
-                    ):
-                        scheduled_end_at = self.active_session.scheduled_end_at
-                        self.active_session = None
-
-                self.lock_screen.show_locked("Session locked after expiration.")
-                self.customer_overlay.update_time(0)
-                self.customer_overlay.hide()
-                self.recovery_store.mark_pending_completion(
-                    session_id=session_id,
-                    pc_name=self.pc_name,
-                    scheduled_end_at=scheduled_end_at
-                    or datetime.now(timezone.utc).isoformat(),
-                    session_mode="prepaid",
-                )
-                sent = self.send_client_event(
-                    {
-                        "event_type": "session_finished",
-                        "session_id": session_id,
-                        "message": "Timer finished",
-                    }
-                )
-                if not sent:
-                    print("Session completion is pending server confirmation.")
-                print(f"Session {session_id} finished.")
-                return
+                if not self.enter_expiration_grace(session_id):
+                    return
+                if self.run_expiration_grace_countdown(session_id, stop_event):
+                    return
+                continue
 
             stop_event.wait(min(5, remaining_seconds))
+
+    def enter_expiration_grace(self, session_id: str) -> bool:
+        with self.active_session_lock:
+            if self.active_session is None or self.active_session.session_id != session_id:
+                return False
+            if self.active_session.expiration_state == "grace_period":
+                return True
+            self.active_session.expiration_state = "grace_period"
+            self.active_session.grace_shutdown_monotonic = (
+                time.monotonic() + EXPIRATION_GRACE_SECONDS
+            )
+            scheduled_end_at = self.active_session.scheduled_end_at
+            session_mode = self.active_session.session_mode
+
+        self.customer_overlay.update_time(0)
+        self.customer_overlay.hide()
+        self.lock_screen.show_expiration_grace(EXPIRATION_GRACE_SECONDS)
+        self.recovery_store.save(
+            session_id=session_id,
+            pc_name=self.pc_name,
+            scheduled_end_at=scheduled_end_at or datetime.now(timezone.utc).isoformat(),
+            state="active",
+            session_mode=session_mode,
+        )
+        sent = self.send_client_event(
+            {
+                "event_type": "expiration_grace_started",
+                "session_id": session_id,
+                "message": "grace_started",
+            }
+        )
+        if not sent:
+            print("Expiration grace start is pending server confirmation.")
+        print(f"Session {session_id} entered expiration grace period.")
+        return True
+
+    def run_expiration_grace_countdown(
+        self,
+        session_id: str,
+        stop_event: Event,
+    ) -> bool:
+        while not stop_event.is_set():
+            with self.active_session_lock:
+                active_session = self.active_session
+                if active_session is None or active_session.session_id != session_id:
+                    return True
+                if active_session.expiration_state != "grace_period":
+                    return False
+                shutdown_monotonic = active_session.grace_shutdown_monotonic
+
+            if shutdown_monotonic is None:
+                return False
+
+            grace_remaining = max(0, int(shutdown_monotonic - time.monotonic()))
+            final_warning = grace_remaining <= 30
+            self.maybe_send_final_warning(session_id, grace_remaining)
+            self.lock_screen.show_expiration_grace(
+                grace_remaining,
+                final_warning=final_warning,
+            )
+            if grace_remaining <= 0:
+                self.finalize_expired_session_locally(session_id)
+                return True
+
+            stop_event.wait(min(1, grace_remaining))
+
+        return True
+
+    def finalize_expired_session_locally(self, session_id: str) -> None:
+        with self.active_session_lock:
+            if self.active_session is None or self.active_session.session_id != session_id:
+                return
+            scheduled_end_at = self.active_session.scheduled_end_at
+            session_mode = self.active_session.session_mode
+            self.active_session.expiration_state = "shutting_down"
+
+        print(f"Expiration shutdown finalization started for session {session_id}.")
+        sent = self.send_client_event(
+            {
+                "event_type": "expiration_shutdown_started",
+                "session_id": session_id,
+                "message": "Grace period ended; automatic shutdown starting",
+            }
+        )
+        if not sent:
+            print("Session completion is pending server confirmation.")
+
+        self.recovery_store.mark_pending_completion(
+            session_id=session_id,
+            pc_name=self.pc_name,
+            scheduled_end_at=scheduled_end_at or datetime.now(timezone.utc).isoformat(),
+            session_mode=session_mode,
+        )
+        self.lock_screen.show_locked("Session locked after expiration shutdown.")
+
+        if AUTOMATIC_SHUTDOWN_ON_EXPIRATION:
+            try:
+                message = self.remote_controls.handle_power_command("shutdown", {})
+                print(f"Automatic shutdown initiated for {session_id}: {message}")
+                self.send_client_event(
+                    {
+                        "event_type": "expiration_shutdown_invoked",
+                        "session_id": session_id,
+                        "message": message,
+                    }
+                )
+            except Exception as error:
+                print(f"Automatic shutdown failed for {session_id}: {error}")
+                self.send_client_event(
+                    {
+                        "event_type": "expiration_shutdown_failed",
+                        "session_id": session_id,
+                        "reason": str(error),
+                    }
+                )
+        else:
+            print("Automatic shutdown on expiration is disabled by configuration.")
+
+        with self.active_session_lock:
+            if self.active_session is not None and self.active_session.session_id == session_id:
+                self.active_session = None
+        print(f"Session {session_id} finished after grace period.")
+
+    def maybe_send_final_warning(self, session_id: str, remaining_seconds: int) -> None:
+        if remaining_seconds > 30:
+            return
+
+        should_warn = False
+        with self.active_session_lock:
+            if (
+                self.active_session is not None
+                and self.active_session.session_id == session_id
+                and not self.active_session.final_warning_sent
+            ):
+                self.active_session.final_warning_sent = True
+                should_warn = True
+
+        if not should_warn:
+            return
+
+        print(f"Final expiration warning reached for session {session_id}.")
+        self.send_client_event(
+            {
+                "event_type": "expiration_final_warning",
+                "session_id": session_id,
+                "message": "Final 30-second warning reached",
+            }
+        )
+        if EXPIRATION_SOUND_ENABLED:
+            self.play_final_warning_sound()
+
+    def play_final_warning_sound(self) -> None:
+        try:
+            import winsound
+
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception as error:
+            print(f"Final warning sound unavailable: {error}")
 
     def run_open_time_overlay_timer(
         self,
@@ -653,6 +821,10 @@ class SecretGroundsClient:
         command = websocket.receive_json()
         if command.get("event_type") == "session_completion_recorded":
             self.handle_session_completion_confirmation(command)
+            return
+        if command.get("event_type") == "expiration_grace_recorded":
+            self.apply_authoritative_shutdown_at(command)
+            print(f"Server recorded expiration grace event: {command}")
             return
 
         command_id = str(command.get("command_id", ""))
@@ -749,6 +921,29 @@ class SecretGroundsClient:
                 f"{recovery_record.session_id}"
             )
 
+    def apply_authoritative_shutdown_at(self, message: dict[str, Any]) -> None:
+        shutdown_at = message.get("shutdown_at")
+        server_time = message.get("server_time")
+        session_id = message.get("session_id")
+        if not isinstance(shutdown_at, str) or not isinstance(session_id, str):
+            return
+
+        remaining_seconds = self.calculate_remaining_seconds(
+            shutdown_at,
+            str(server_time) if server_time is not None else None,
+        )
+        with self.active_session_lock:
+            if self.active_session is None or self.active_session.session_id != session_id:
+                return
+            if self.active_session.expiration_state != "grace_period":
+                return
+            self.active_session.grace_shutdown_monotonic = time.monotonic() + remaining_seconds
+        print(
+            "Applied authoritative grace shutdown time: "
+            f"session_id={session_id}, shutdown_at={shutdown_at}, "
+            f"remaining_seconds={remaining_seconds}"
+        )
+
     def flush_pending_completion(self) -> None:
         recovery_record = self.recovery_store.load()
         if recovery_record is None or recovery_record.state != "pending_completion":
@@ -781,7 +976,9 @@ class SecretGroundsClient:
     ) -> bool:
         session_id = server_session.get("session_id")
         session_mode = server_session.get("session_mode", "prepaid")
+        session_status = server_session.get("status")
         scheduled_end_at = server_session.get("scheduled_end_at")
+        shutdown_at = server_session.get("shutdown_at")
         server_time = server_state.get("server_time")
 
         if not isinstance(session_id, str):
@@ -791,8 +988,28 @@ class SecretGroundsClient:
         session_mode = session_mode if isinstance(session_mode, str) else "prepaid"
         print(
             "Reconciliation adopting server session: "
-            f"server_session_id={session_id}, session_mode={session_mode}"
+            f"server_session_id={session_id}, session_mode={session_mode}, "
+            f"status={session_status}"
         )
+
+        if session_status == "grace_period":
+            if not isinstance(scheduled_end_at, str) or not isinstance(shutdown_at, str):
+                print(
+                    "Reconciliation failed: grace-period session is missing "
+                    f"scheduled_end_at or shutdown_at for session_id={session_id}."
+                )
+                return False
+            return self.initialize_grace_period_from_server(
+                session_id=session_id,
+                scheduled_end_at=scheduled_end_at,
+                shutdown_at=shutdown_at,
+                server_time=str(server_time) if server_time is not None else None,
+                session_mode=session_mode,
+            )
+
+        if session_status == "shutting_down":
+            self.lock_screen.show_locked("Session is shutting down after expiration.")
+            return True
 
         if session_mode == "open_time":
             return self.initialize_local_session(
@@ -835,6 +1052,54 @@ class SecretGroundsClient:
             scheduled_end_at=scheduled_end_at,
             session_mode=session_mode,
         )
+
+    def initialize_grace_period_from_server(
+        self,
+        session_id: str,
+        scheduled_end_at: str,
+        shutdown_at: str,
+        server_time: str | None,
+        session_mode: str,
+    ) -> bool:
+        grace_remaining = self.calculate_remaining_seconds(shutdown_at, server_time)
+        stop_event = Event()
+        timer_thread = Thread(
+            target=self.run_session_timer,
+            args=(session_id, time.monotonic(), stop_event),
+            daemon=True,
+        )
+        old_stop_event: Event | None = None
+        with self.active_session_lock:
+            if self.active_session is not None:
+                old_stop_event = self.active_session.stop_event
+            self.active_session = LocalSession(
+                session_id=session_id,
+                deadline_monotonic=time.monotonic(),
+                scheduled_end_at=scheduled_end_at,
+                stop_event=stop_event,
+                timer_thread=timer_thread,
+                session_mode=session_mode,
+                expiration_state="grace_period",
+                grace_shutdown_monotonic=time.monotonic() + grace_remaining,
+            )
+            self.recovery_store.save(
+                session_id=session_id,
+                pc_name=self.pc_name,
+                scheduled_end_at=scheduled_end_at,
+                state="active",
+                session_mode=session_mode,
+            )
+        if old_stop_event is not None:
+            old_stop_event.set()
+        self.customer_overlay.hide()
+        self.lock_screen.show_expiration_grace(grace_remaining)
+        timer_thread.start()
+        print(
+            "Reconciliation resumed expiration grace: "
+            f"session_id={session_id}, shutdown_at={shutdown_at}, "
+            f"remaining_seconds={grace_remaining}"
+        )
+        return True
 
     def reconcile_session_state(self) -> None:
         recovery_record = self.recovery_store.load()

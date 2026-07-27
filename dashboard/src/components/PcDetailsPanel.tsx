@@ -125,11 +125,23 @@ function Icon({ name }: { name: IconName }) {
 }
 
 function statusLabel(pc: PcSummary): string {
+  if (pc.power_state === "shutdown_failed") {
+    return "Shutdown Failed";
+  }
+  if (pc.power_state === "shutting_down") {
+    return "Shutting Down";
+  }
   if (pc.recovery_required) {
     return "Recovery Required";
   }
   if (pc.session_status === "active") {
     return "In Use";
+  }
+  if (pc.session_status === "grace_period") {
+    return "Time Ended";
+  }
+  if (pc.session_status === "shutting_down") {
+    return "Shutting Down";
   }
   if (pc.session_status === "settlement_pending") {
     return "Settlement Pending";
@@ -176,7 +188,8 @@ export function PcDetailsPanel({
   const [notice, setNotice] = useState<string | null>(null);
   const [isWorking, setIsWorking] = useState(false);
   const canPowerControl = currentUserRole === "owner" || currentUserRole === "admin";
-  const isActiveSession = pc.session_status === "active";
+  const isActiveSession =
+    pc.session_status === "active" || pc.session_status === "grace_period";
   const isOpenTime = pc.session_mode === "open_time";
   const canResolve =
     pc.recovery_required && (currentUserRole === "owner" || currentUserRole === "admin");
@@ -342,7 +355,13 @@ export function PcDetailsPanel({
                   <strong>{pc.started_at ? formatDateTime(pc.started_at) : "Not started"}</strong>
                 </div>
                 <div className={styles.detailRow}>
-                  <span>{pc.session_mode === "open_time" ? "Elapsed" : "Remaining"}</span>
+                  <span>
+                    {pc.session_mode === "open_time"
+                      ? "Elapsed"
+                      : pc.session_status === "grace_period"
+                        ? "Shutdown In"
+                        : "Remaining"}
+                  </span>
                   <strong>
                     {formatTimer(
                       pc.session_mode === "open_time"
