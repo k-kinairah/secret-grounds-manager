@@ -5,12 +5,27 @@ from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 DEFAULT_SERVER_HOST = "127.0.0.1"
-DEFAULT_SERVER_PORT = 8000
+DEFAULT_SERVER_PORT = 18001
 DEFAULT_PC_NAME = "PC-01"
+DEFAULT_DISPLAY_NAME = "Station 01"
 DEFAULT_AUTO_CONNECT = True
+DEFAULT_RECONNECT_INTERVAL_SECONDS = 5
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 5
+
+
+def get_app_version() -> str:
+    version_path = Path(__file__).resolve().parent.parent / "VERSION"
+    try:
+        return version_path.read_text(encoding="utf-8").strip() or "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+APP_VERSION = get_app_version()
 
 
 class ClientConfigError(ValueError):
@@ -22,7 +37,10 @@ class ClientConfig:
     server_host: str
     server_port: int
     pc_name: str
+    display_name: str
     auto_connect: bool
+    reconnect_interval_seconds: int
+    request_timeout_seconds: int
     config_path: Path
 
     @property
@@ -55,7 +73,10 @@ def default_config_payload() -> dict[str, object]:
         "server_host": DEFAULT_SERVER_HOST,
         "server_port": DEFAULT_SERVER_PORT,
         "pc_name": DEFAULT_PC_NAME,
+        "display_name": DEFAULT_DISPLAY_NAME,
         "auto_connect": DEFAULT_AUTO_CONNECT,
+        "reconnect_interval_seconds": DEFAULT_RECONNECT_INTERVAL_SECONDS,
+        "request_timeout_seconds": DEFAULT_REQUEST_TIMEOUT_SECONDS,
     }
 
 
@@ -79,7 +100,10 @@ def write_client_config(config: ClientConfig, config_path: Path | None = None) -
                 "server_host": config.server_host,
                 "server_port": config.server_port,
                 "pc_name": config.pc_name,
+                "display_name": config.display_name,
                 "auto_connect": config.auto_connect,
+                "reconnect_interval_seconds": config.reconnect_interval_seconds,
+                "request_timeout_seconds": config.request_timeout_seconds,
             },
             config_file,
             indent=2,
@@ -93,7 +117,7 @@ def load_client_config(config_path: Path | None = None) -> ClientConfig:
         raise ClientConfigError(f"config.json was not found at {resolved_path}.")
 
     try:
-        with resolved_path.open("r", encoding="utf-8") as config_file:
+        with resolved_path.open("r", encoding="utf-8-sig") as config_file:
             payload = json.load(config_file)
     except json.JSONDecodeError as error:
         raise ClientConfigError(
@@ -103,7 +127,42 @@ def load_client_config(config_path: Path | None = None) -> ClientConfig:
     except OSError as error:
         raise ClientConfigError(f"Could not read config.json: {error}") from error
 
-    return validate_client_config(payload, resolved_path)
+    config = validate_client_config(payload, resolved_path)
+    return apply_server_url_override(config)
+
+
+def apply_server_url_override(config: ClientConfig) -> ClientConfig:
+    override = os.getenv("SECRET_GROUNDS_SERVER_URL", "").strip()
+    if not override:
+        return config
+
+    parsed = urlparse(override)
+    if parsed.scheme != "http" or not parsed.hostname or parsed.path not in {"", "/"}:
+        raise ClientConfigError(
+            "SECRET_GROUNDS_SERVER_URL must be an http URL with host and optional port, "
+            "for example http://192.168.0.109:18001."
+        )
+    if parsed.username or parsed.password or parsed.params or parsed.query or parsed.fragment:
+        raise ClientConfigError("SECRET_GROUNDS_SERVER_URL must not include credentials, query, or fragment.")
+    try:
+        parsed_address = ip_address(parsed.hostname)
+    except ValueError as error:
+        if not is_valid_hostname(parsed.hostname):
+            raise ClientConfigError("SECRET_GROUNDS_SERVER_URL host must be a valid IPv4 address or hostname.") from error
+    else:
+        if parsed_address.version != 4:
+            raise ClientConfigError("SECRET_GROUNDS_SERVER_URL host must be a valid IPv4 address or hostname.")
+
+    return ClientConfig(
+        server_host=parsed.hostname,
+        server_port=parsed.port or DEFAULT_SERVER_PORT,
+        pc_name=config.pc_name,
+        display_name=config.display_name,
+        auto_connect=config.auto_connect,
+        reconnect_interval_seconds=config.reconnect_interval_seconds,
+        request_timeout_seconds=config.request_timeout_seconds,
+        config_path=config.config_path,
+    )
 
 
 def validate_client_config(payload: Any, config_path: Path) -> ClientConfig:
@@ -124,17 +183,19 @@ def validate_client_config(payload: Any, config_path: Path) -> ClientConfig:
     server_host = server_host.strip()
     if "://" in server_host or "/" in server_host or ":" in server_host:
         raise ClientConfigError(
-            "server_host must be only the server IP address, "
-            "for example 192.168.1.15."
+            "server_host must be only the server IP address or hostname, "
+            "for example 192.168.1.15 or cashier-pc."
         )
     try:
         parsed_address = ip_address(server_host)
     except ValueError as error:
-        raise ClientConfigError(
-            "Server IP must be a valid IPv4 address."
-        ) from error
-    if parsed_address.version != 4:
-        raise ClientConfigError("Server IP must be a valid IPv4 address.")
+        if not is_valid_hostname(server_host):
+            raise ClientConfigError(
+                "Server Host must be a valid IPv4 address or hostname."
+            ) from error
+    else:
+        if parsed_address.version != 4:
+            raise ClientConfigError("Server Host must be a valid IPv4 address or hostname.")
 
     server_port = payload["server_port"]
     if not isinstance(server_port, int) or isinstance(server_port, bool):
@@ -144,20 +205,60 @@ def validate_client_config(payload: Any, config_path: Path) -> ClientConfig:
 
     pc_name = payload["pc_name"]
     if not isinstance(pc_name, str) or not pc_name.strip():
-        raise ClientConfigError("PC Name is required.")
+        raise ClientConfigError("Station ID is required.")
     pc_name = pc_name.strip()
+    if not is_valid_station_id(pc_name):
+        raise ClientConfigError("Station ID may contain only letters, numbers, dash, and underscore.")
+
+    display_name = payload.get("display_name", pc_name)
+    if not isinstance(display_name, str) or not display_name.strip():
+        raise ClientConfigError("Display Name is required.")
+    display_name = " ".join(display_name.strip().split())
 
     auto_connect = payload["auto_connect"]
     if not isinstance(auto_connect, bool):
         raise ClientConfigError("auto_connect must be true or false.")
 
+    reconnect_interval_seconds = payload.get("reconnect_interval_seconds", DEFAULT_RECONNECT_INTERVAL_SECONDS)
+    if not isinstance(reconnect_interval_seconds, int) or isinstance(reconnect_interval_seconds, bool):
+        raise ClientConfigError("reconnect_interval_seconds must be a number.")
+    if reconnect_interval_seconds < 2 or reconnect_interval_seconds > 300:
+        raise ClientConfigError("reconnect_interval_seconds must be between 2 and 300.")
+
+    request_timeout_seconds = payload.get("request_timeout_seconds", DEFAULT_REQUEST_TIMEOUT_SECONDS)
+    if not isinstance(request_timeout_seconds, int) or isinstance(request_timeout_seconds, bool):
+        raise ClientConfigError("request_timeout_seconds must be a number.")
+    if request_timeout_seconds < 2 or request_timeout_seconds > 60:
+        raise ClientConfigError("request_timeout_seconds must be between 2 and 60.")
+
     return ClientConfig(
         server_host=server_host,
         server_port=server_port,
         pc_name=pc_name,
+        display_name=display_name,
         auto_connect=auto_connect,
+        reconnect_interval_seconds=reconnect_interval_seconds,
+        request_timeout_seconds=request_timeout_seconds,
         config_path=config_path,
     )
+
+
+def is_valid_hostname(value: str) -> bool:
+    if len(value) > 253:
+        return False
+    labels = value.rstrip(".").split(".")
+    return all(
+        label
+        and len(label) <= 63
+        and not label.startswith("-")
+        and not label.endswith("-")
+        and all(character.isalnum() or character == "-" for character in label)
+        for label in labels
+    )
+
+
+def is_valid_station_id(value: str) -> bool:
+    return bool(value) and all(character.isalnum() or character in {"-", "_"} for character in value)
 
 
 HEARTBEAT_INTERVAL_SECONDS = 5

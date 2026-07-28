@@ -32,6 +32,8 @@ import { PcDetailsPanel } from "./PcDetailsPanel";
 import { PcMonitorTile } from "./PcMonitorTile";
 import { PaymentDialog } from "./PaymentDialog";
 import { SessionDialog } from "./SessionDialog";
+import { ActivityDrawerTrigger } from "./ActivityFeed";
+import { useToast } from "./ToastProvider";
 
 type DialogState =
   | { type: "start"; pc: PcSummary }
@@ -42,6 +44,10 @@ type DialogState =
   | { type: "payment"; pc: PcSummary }
   | { type: "announcement" }
   | null;
+
+function displayAreaLabel(label: string | null): string {
+  return label === "SECRET GROUND SHOP" ? "SECRET GROUNDS SHOP" : label ?? "UNASSIGNED";
+}
 
 export function DashboardClient() {
   const [pcs, setPcs] = useState<PcSummary[]>([]);
@@ -59,6 +65,7 @@ export function DashboardClient() {
   const [now, setNow] = useState<Date | null>(null);
   const isPollingRef = useRef(false);
   const pollIntervalMs = getPollingIntervalMs();
+  const { pushToast } = useToast();
 
   const refresh = useCallback(async () => {
     if (isPollingRef.current) {
@@ -170,7 +177,7 @@ export function DashboardClient() {
   const groupedPcs = useMemo(() => {
     const groups = new Map<string, PcSummary[]>();
     for (const pc of livePcs) {
-      const label = pc.area_label ?? "UNASSIGNED";
+      const label = displayAreaLabel(pc.area_label);
       groups.set(label, [...(groups.get(label) ?? []), pc]);
     }
     return Array.from(groups.entries());
@@ -179,7 +186,7 @@ export function DashboardClient() {
   const groupedLayoutSlots = useMemo(() => {
     const groups = new Map<string, PcLayoutSlot[]>();
     for (const slot of layoutSlots) {
-      const label = slot.area_label || "UNASSIGNED";
+      const label = displayAreaLabel(slot.area_label);
       groups.set(label, [...(groups.get(label) ?? []), slot]);
     }
     return Array.from(groups.entries());
@@ -198,10 +205,13 @@ export function DashboardClient() {
     try {
       await action();
       setMessage(successMessage);
+      pushToast(successMessage, "success");
       setDialog(null);
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Action failed. Please try again.");
+      const errorMessage = error instanceof Error ? error.message : "Action failed. Please try again.";
+      setMessage(errorMessage);
+      pushToast(errorMessage, "error");
     } finally {
       setIsMutating(false);
     }
@@ -283,14 +293,18 @@ export function DashboardClient() {
           settlement_pending: response.session.settlement_pending
         };
         setMessage(`${pc.pc_name} open-time session ended. Settlement is pending.`);
+        pushToast(`${pc.pc_name} open-time session ended. Settlement is pending.`, "warning");
         setDialog({ type: "payment", pc: settlementPc });
       } else {
         setMessage(`${pc.pc_name} session ended.`);
+        pushToast(`${pc.pc_name} session ended.`, "success");
         setDialog(null);
       }
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Action failed. Please try again.");
+      const errorMessage = error instanceof Error ? error.message : "Action failed. Please try again.";
+      setMessage(errorMessage);
+      pushToast(errorMessage, "error");
     } finally {
       setIsMutating(false);
     }
@@ -323,14 +337,18 @@ export function DashboardClient() {
           recovery_reason: null
         };
         setMessage(`${pc.pc_name} recovery session force-ended. Settlement is pending.`);
+        pushToast(`${pc.pc_name} recovery session force-ended. Settlement is pending.`, "warning");
         setDialog({ type: "payment", pc: settlementPc });
       } else {
         setMessage(`${pc.pc_name} recovery session resolved.`);
+        pushToast(`${pc.pc_name} recovery session resolved.`, "success");
         setDialog(null);
       }
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Recovery action failed.");
+      const errorMessage = error instanceof Error ? error.message : "Recovery action failed.";
+      setMessage(errorMessage);
+      pushToast(errorMessage, "error");
     } finally {
       setIsMutating(false);
     }
@@ -371,6 +389,7 @@ export function DashboardClient() {
           <button className={styles.secondaryButton} onClick={() => setDialog({ type: "announcement" })} type="button">
             Announcement
           </button>
+          <ActivityDrawerTrigger />
           {currentUser?.role === "owner" ? (
             <button
               className={styles.secondaryButton}
@@ -453,8 +472,8 @@ export function DashboardClient() {
             />
           ) : (
             <div className={styles.noSelectionPanel}>
-              <h2>Select a PC to view controls.</h2>
-              <p>Start sessions, add time, collect payments, send messages, and manage power from the selected station panel.</p>
+              <h2>Select a PC</h2>
+              <p>Choose a station to view session, billing, messaging, and power controls.</p>
             </div>
           )}
         </aside>

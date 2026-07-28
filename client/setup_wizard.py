@@ -6,7 +6,10 @@ from client.config import (
     ClientConfig,
     ClientConfigError,
     DEFAULT_AUTO_CONNECT,
+    DEFAULT_DISPLAY_NAME,
     DEFAULT_PC_NAME,
+    DEFAULT_RECONNECT_INTERVAL_SECONDS,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_SERVER_HOST,
     DEFAULT_SERVER_PORT,
     load_client_config,
@@ -18,18 +21,30 @@ def build_setup_payload(
     server_host: str,
     server_port: str,
     pc_name: str,
+    display_name: str,
     auto_connect: bool,
+    reconnect_interval_seconds: str = str(DEFAULT_RECONNECT_INTERVAL_SECONDS),
+    request_timeout_seconds: str = str(DEFAULT_REQUEST_TIMEOUT_SECONDS),
 ) -> dict[str, object]:
     try:
         parsed_port = int(server_port)
     except ValueError as error:
         raise ClientConfigError("Server Port must be a number.") from error
 
+    try:
+        parsed_reconnect = int(reconnect_interval_seconds)
+        parsed_timeout = int(request_timeout_seconds)
+    except ValueError as error:
+        raise ClientConfigError("Reconnect interval and request timeout must be numbers.") from error
+
     return {
         "server_host": server_host.strip(),
         "server_port": parsed_port,
         "pc_name": pc_name.strip(),
+        "display_name": display_name.strip(),
         "auto_connect": bool(auto_connect),
+        "reconnect_interval_seconds": parsed_reconnect,
+        "request_timeout_seconds": parsed_timeout,
     }
 
 
@@ -40,14 +55,20 @@ def load_existing_or_default(config_path: Path) -> dict[str, object]:
             "server_host": config.server_host,
             "server_port": config.server_port,
             "pc_name": config.pc_name,
+            "display_name": config.display_name,
             "auto_connect": config.auto_connect,
+            "reconnect_interval_seconds": config.reconnect_interval_seconds,
+            "request_timeout_seconds": config.request_timeout_seconds,
         }
     except ClientConfigError:
         return {
             "server_host": DEFAULT_SERVER_HOST,
             "server_port": DEFAULT_SERVER_PORT,
             "pc_name": DEFAULT_PC_NAME,
+            "display_name": DEFAULT_DISPLAY_NAME,
             "auto_connect": DEFAULT_AUTO_CONNECT,
+            "reconnect_interval_seconds": DEFAULT_RECONNECT_INTERVAL_SECONDS,
+            "request_timeout_seconds": DEFAULT_REQUEST_TIMEOUT_SECONDS,
         }
 
 
@@ -96,7 +117,10 @@ def show_setup_wizard(
     server_host_var = tk.StringVar(value=str(initial_values["server_host"]))
     server_port_var = tk.StringVar(value=str(initial_values["server_port"]))
     pc_name_var = tk.StringVar(value=str(initial_values["pc_name"]))
+    display_name_var = tk.StringVar(value=str(initial_values["display_name"]))
     auto_connect_var = tk.BooleanVar(value=bool(initial_values["auto_connect"]))
+    reconnect_interval_var = tk.StringVar(value=str(initial_values["reconnect_interval_seconds"]))
+    request_timeout_var = tk.StringVar(value=str(initial_values["request_timeout_seconds"]))
     error_var = tk.StringVar(value="")
 
     def add_labeled_entry(row: int, label: str, variable: tk.StringVar) -> tk.Entry:
@@ -119,7 +143,10 @@ def show_setup_wizard(
 
     first_entry = add_labeled_entry(1, "Server IP", server_host_var)
     add_labeled_entry(2, "Server Port", server_port_var)
-    add_labeled_entry(3, "PC Name", pc_name_var)
+    add_labeled_entry(3, "Station ID", pc_name_var)
+    add_labeled_entry(4, "Display Name", display_name_var)
+    add_labeled_entry(5, "Reconnect Seconds", reconnect_interval_var)
+    add_labeled_entry(6, "Timeout Seconds", request_timeout_var)
 
     tk.Checkbutton(
         frame,
@@ -131,7 +158,7 @@ def show_setup_wizard(
         activeforeground="#E5E7EB",
         activebackground="#0F172A",
         selectcolor="#111827",
-    ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 4))
+    ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 4))
 
     error_label = tk.Label(
         frame,
@@ -142,10 +169,10 @@ def show_setup_wizard(
         wraplength=330,
         justify="left",
     )
-    error_label.grid(row=5, column=0, columnspan=2, sticky="w", pady=(3, 10))
+    error_label.grid(row=8, column=0, columnspan=2, sticky="w", pady=(3, 10))
 
     button_row = tk.Frame(frame, background="#0F172A")
-    button_row.grid(row=6, column=0, columnspan=2, sticky="e")
+    button_row.grid(row=9, column=0, columnspan=2, sticky="e")
 
     if allow_cancel:
         tk.Button(button_row, text="Cancel", width=10, command=cancel).pack(
@@ -160,7 +187,10 @@ def show_setup_wizard(
                 server_host_var.get(),
                 server_port_var.get(),
                 pc_name_var.get(),
+                display_name_var.get(),
                 auto_connect_var.get(),
+                reconnect_interval_var.get(),
+                request_timeout_var.get(),
             )
             saved_config = save_client_config(payload, config_path)
         except ClientConfigError as error:

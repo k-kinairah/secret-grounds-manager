@@ -6,7 +6,7 @@ from typing import Callable
 from fastapi import Cookie, Depends, HTTPException, Response
 
 from server.auth_repository import AuthSessionRepository
-from server.operator_config import FAMILY_OPERATOR_BY_ID, FAMILY_OPERATOR_BY_USERNAME, FAMILY_OPERATORS
+from server.operator_repository import OperatorRepository
 from server.passwords import verify_password
 from server.schemas import LoginRequest, OperatorAccessRecord, UserPublic, UserRecord, UserRole
 from server.user_repository import UserRepository
@@ -20,6 +20,7 @@ FAILED_ADMIN_OPERATOR_ATTEMPTS: dict[str, int] = defaultdict(int)
 
 user_repository = UserRepository()
 auth_session_repository = AuthSessionRepository()
+operator_repository = OperatorRepository()
 
 
 ROLE_RANK: dict[UserRole, int] = {
@@ -73,8 +74,8 @@ def authenticate_login(request: LoginRequest) -> UserRecord:
 
 def list_family_operator_access() -> list[OperatorAccessRecord]:
     records: list[OperatorAccessRecord] = []
-    for operator in FAMILY_OPERATORS:
-        user = user_repository.get_by_username(operator.username)
+    for operator in operator_repository.list_login_operators():
+        user = user_repository.get_user(operator.operator_id)
         records.append(
             OperatorAccessRecord(
                 operator_id=operator.operator_id,
@@ -87,13 +88,26 @@ def list_family_operator_access() -> list[OperatorAccessRecord]:
 
 
 def authenticate_quick_operator(operator_id: str) -> UserRecord:
-    operator = FAMILY_OPERATOR_BY_ID.get(operator_id)
-    if operator is None or operator.password_required:
+    operator = operator_repository.get_operator(operator_id)
+    if operator is None or operator.archived_at is not None or operator.password_required:
         raise HTTPException(status_code=403, detail="Operator quick access is not allowed")
 
-    user = user_repository.get_by_username(operator.username)
+    user = user_repository.get_user(operator.operator_id)
     if user is None or not user.is_active:
         raise HTTPException(status_code=404, detail="Operator is not configured")
+
+    user_repository.mark_login(user.user_id)
+    return user
+
+
+def authenticate_password_operator(operator_id: str, password: str) -> UserRecord:
+    operator = operator_repository.get_operator(operator_id)
+    if operator is None or operator.archived_at is not None or not operator.password_required:
+        raise HTTPException(status_code=403, detail="Password access is not allowed")
+
+    user = user_repository.get_user(operator.operator_id)
+    if user is None or not user.is_active or not verify_password(password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid operator password")
 
     user_repository.mark_login(user.user_id)
     return user
@@ -104,8 +118,7 @@ def authenticate_admin_operator(password: str, client_key: str = "admin") -> Use
     if attempts >= 3:
         time.sleep(min(2.0, 0.35 * attempts))
 
-    operator = FAMILY_OPERATOR_BY_USERNAME["admin"]
-    user = user_repository.get_by_username(operator.username)
+    user = user_repository.get_by_username("admin")
     if user is None or not user.is_active or not verify_password(password, user.password_hash):
         FAILED_ADMIN_OPERATOR_ATTEMPTS[client_key] += 1
         print("Failed Admin operator login attempt")

@@ -51,6 +51,7 @@ PreparedSessionStatus = Literal[
     "cancelled",
 ]
 UserRole = Literal["owner", "admin", "cashier"]
+OperatorAccessMethod = Literal["quick", "password"]
 ShiftStatus = Literal["open", "closed"]
 MemberStatus = Literal["active", "inactive"]
 MembershipProductType = Literal["initial_membership", "member_topup"]
@@ -89,12 +90,14 @@ SalesPeriodSetting = Literal["today", "yesterday", "this_week", "this_month"]
 
 class PCRegistration(BaseModel):
     pc_name: str = Field(..., min_length=1)
+    display_name: str | None = None
     ip_address: str = Field(..., min_length=1)
     mac_address: str | None = None
 
 
 class PCHeartbeat(BaseModel):
     pc_name: str = Field(..., min_length=1)
+    display_name: str | None = None
     ip_address: str = Field(..., min_length=1)
 
 
@@ -511,6 +514,11 @@ class QuickOperatorLoginRequest(BaseModel):
 
 
 class AdminOperatorLoginRequest(BaseModel):
+    password: str = Field(..., min_length=1)
+
+
+class PasswordOperatorLoginRequest(BaseModel):
+    operator_id: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
 
 
@@ -1064,10 +1072,35 @@ class OperatorManagementRecord(BaseModel):
     operator_id: str
     username: str
     display_name: str
+    access_method: OperatorAccessMethod
     password_required: bool
     role: UserRole
     is_active: bool
+    is_protected: bool = False
+    active_session_count: int = 0
+    archived_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     last_login_at: datetime | None = None
+
+
+class OperatorCreateRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=40)
+    display_name: str = Field(..., min_length=1, max_length=80)
+    access_method: OperatorAccessMethod
+    password: str | None = Field(default=None, min_length=8)
+    is_active: bool = True
+
+
+class OperatorUpdateRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=40)
+    display_name: str = Field(..., min_length=1, max_length=80)
+    access_method: OperatorAccessMethod
+    is_active: bool = True
+
+
+class OperatorPasswordResetRequest(BaseModel):
+    password: str = Field(..., min_length=8)
 
 
 class OperatorActivityRecord(BaseModel):

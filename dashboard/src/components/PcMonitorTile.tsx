@@ -1,3 +1,4 @@
+import { memo } from "react";
 import styles from "@/app/page.module.css";
 import { getPcMonitorPresentation } from "@/lib/pcStatus";
 import { formatMoney, formatNaturalDuration, formatTimer } from "@/lib/time";
@@ -9,7 +10,7 @@ interface PcMonitorTileProps {
   onSelect: (pc: PcSummary) => void;
 }
 
-export function PcMonitorTile({ pc, isSelected, onSelect }: PcMonitorTileProps) {
+function PcMonitorTileComponent({ pc, isSelected, onSelect }: PcMonitorTileProps) {
   const displayName = pc.display_name ?? pc.pc_name;
   const presentation = getPcMonitorPresentation(pc);
   const showCompactTime =
@@ -56,3 +57,5 @@ export function PcMonitorTile({ pc, isSelected, onSelect }: PcMonitorTileProps) 
     </button>
   );
 }
+
+export const PcMonitorTile = memo(PcMonitorTileComponent);

@@ -320,9 +320,30 @@ export interface UserAdminRecord extends CurrentUser {
 
 export interface OperatorManagementRecord extends CurrentUser {
   operator_id: string;
+  access_method: "quick" | "password";
   password_required: boolean;
   is_active: boolean;
+  is_protected: boolean;
+  active_session_count: number;
+  archived_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
   last_login_at: string | null;
+}
+
+export interface OperatorCreateInput {
+  username: string;
+  display_name: string;
+  access_method: "quick" | "password";
+  password?: string;
+  is_active: boolean;
+}
+
+export interface OperatorUpdateInput {
+  username: string;
+  display_name: string;
+  access_method: "quick" | "password";
+  is_active: boolean;
 }
 
 export interface OperatorActivityRecord {
@@ -478,6 +499,76 @@ export interface AdminSettingsResponse {
   read_only: Record<string, string>;
   restart_required_fields: string[];
   updated_at: string | null;
+}
+
+export type SystemStatus = "Healthy" | "Warning" | "Offline" | "Error";
+
+export interface SystemBackupRecord {
+  filename: string;
+  created_at: string;
+  size_bytes: number;
+  age_seconds: number;
+  verified: boolean;
+}
+
+export interface SystemHealth {
+  server_status: SystemStatus;
+  database_status: SystemStatus;
+  websocket_status: SystemStatus;
+  connected_clients: number;
+  offline_clients: number;
+  current_version: string;
+  database_size_bytes: number;
+  last_backup: SystemBackupRecord | null;
+  system_uptime_seconds: number;
+  storage_status: SystemStatus;
+}
+
+export interface SystemDatabaseHealth {
+  status: SystemStatus;
+  file_size_bytes: number;
+  last_modified_at: string | null;
+  estimated_row_counts: Record<string, number>;
+  integrity: string;
+  database_version: number;
+  path: string;
+}
+
+export interface SystemStorage {
+  status: SystemStatus;
+  available_bytes: number;
+  total_bytes: number;
+  backup_folder_size_bytes: number;
+  largest_backup: SystemBackupRecord | null;
+  backup_folder: string;
+  writable: boolean;
+}
+
+export interface SystemInfo {
+  secret_grounds_version: string;
+  python_version: string;
+  operating_system: string;
+  database_version: number;
+  server_start_time: string;
+  server_uptime_seconds: number;
+  application_mode: string;
+}
+
+export interface SystemLogEntry {
+  level: "Info" | "Warning" | "Error";
+  timestamp: string;
+  event: string;
+  message: string;
+}
+
+export interface SystemClientHealth {
+  pc_name: string;
+  display_name: string;
+  registered: boolean;
+  connected: boolean;
+  last_heartbeat: string | null;
+  version: string | null;
+  current_state: string;
 }
 
 export interface UserCreateInput {

@@ -1,6 +1,8 @@
 import asyncio
 import csv
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import os
 import socket
 from datetime import date, datetime, time, timedelta, timezone
@@ -10,8 +12,9 @@ from decimal import Decimal
 from typing import AsyncIterator
 from uuid import uuid4
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import Body, Cookie, Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from server.connection_manager import ClientConnectionManager
 from server.database import get_connection, initialize_database
@@ -67,8 +70,12 @@ from server.schemas import (
     OnDutyOperatorRecord,
     OperatorAccessRecord,
     OperatorActivityRecord,
+    OperatorCreateRequest,
     OperatorManagementRecord,
+    OperatorPasswordResetRequest,
     OperatorSelectionRequest,
+    OperatorUpdateRequest,
+    PasswordOperatorLoginRequest,
     PrepaidAddTimeRequest,
     PrepaidStartSessionRequest,
     OpenTimeStartRequest,
@@ -111,6 +118,7 @@ from server.auth import (
     auth_session_repository,
     authenticate_admin_operator,
     authenticate_login,
+    authenticate_password_operator,
     authenticate_quick_operator,
     clear_auth_cookie,
     get_actor_user_id,
@@ -124,6 +132,7 @@ from server.auth import (
 )
 from server.billing_service import BillingService
 from server.member_repository import MemberRepository
+from server.operator_repository import OperatorRepository
 from server.payment_repository import PaymentRepository
 from server.rate_calculator import calculate_metered_time
 from server.remote_command_repository import PCMetadataRepository, RemoteCommandRepository
@@ -134,8 +143,8 @@ from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
 from server.rate_repository import RateRepository
 from server.time_utils import current_utc_time
-from server.operator_config import FAMILY_OPERATORS
-from server.operator_config import FAMILY_OPERATOR_BY_USERNAME, FAMILY_OPERATORS
+from server.system_service import SystemService
+from server.version import APP_VERSION
 
 
 pc_registry: dict[str, PCRecord] = {}
@@ -145,6 +154,8 @@ session_repository = SessionRepository()
 payment_repository = PaymentRepository()
 shift_repository = ShiftRepository()
 admin_settings_service = AdminSettingsService()
+system_service = SystemService()
+SERVER_STARTED_AT = current_utc_time()
 
 
 def require_admin_operator(current_user=Depends(get_current_user)):
@@ -156,6 +167,7 @@ remote_command_repository = RemoteCommandRepository()
 pc_metadata_repository = PCMetadataRepository()
 pc_layout_repository = PCLayoutRepository()
 operator_state_repository = OperatorStateRepository()
+operator_repository = OperatorRepository()
 prepared_session_repository = PreparedSessionRepository()
 billing_service = BillingService(session_repository, payment_repository, shift_repository, user_repository)
 rate_repository = RateRepository()
@@ -173,6 +185,28 @@ OFFLINE_AFTER_SECONDS = 15
 MONITOR_INTERVAL_SECONDS = 5
 COMMAND_ACK_TIMEOUT_SECONDS = 5
 DEFAULT_CORS_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
+
+
+def configure_file_logging() -> None:
+    log_path = os.getenv("SECRET_GROUNDS_SERVER_LOG")
+    if not log_path:
+        return
+
+    resolved_path = os.path.abspath(os.path.expanduser(log_path))
+    os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
+    handler = RotatingFileHandler(
+        resolved_path,
+        maxBytes=int(os.getenv("SECRET_GROUNDS_LOG_MAX_BYTES", "1048576")),
+        backupCount=int(os.getenv("SECRET_GROUNDS_LOG_BACKUP_COUNT", "5")),
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(handler)
+    logging.getLogger("uvicorn").addHandler(handler)
+    logging.getLogger("uvicorn.error").addHandler(handler)
+    logging.info("Secret Grounds %s backend logging initialized.", APP_VERSION)
 
 
 def get_allowed_cors_origins() -> list[str]:
@@ -233,8 +267,48 @@ def clean_pc_payload(pc_name: str, ip_address: str) -> tuple[str, str]:
     return cleaned_pc_name, cleaned_ip_address
 
 
-def touch_pc(pc_name: str, ip_address: str) -> PCRecord:
+def upsert_client_display_name(pc_name: str, display_name: str | None, mac_address: str | None = None) -> None:
+    cleaned_display_name = " ".join((display_name or "").split())
+    if not cleaned_display_name:
+        return
+
+    existing_layout = pc_layout_repository.get_layout(pc_name)
+    pc_layout_repository.upsert_layout(
+        pc_name,
+        PCLayoutUpdate(
+            display_name=cleaned_display_name,
+            area_label=existing_layout.area_label if existing_layout is not None else "CLIENT",
+            layout_order=existing_layout.layout_order if existing_layout is not None else 10_000,
+            is_vip=existing_layout.is_vip if existing_layout is not None else False,
+            is_enabled=existing_layout.is_enabled if existing_layout is not None else True,
+            mac_address=mac_address or (existing_layout.mac_address if existing_layout is not None else None),
+        ),
+    )
+
+
+def reject_duplicate_station_id(pc_name: str, mac_address: str | None) -> None:
+    existing_pc = pc_registry.get(pc_name)
+    if existing_pc is None or existing_pc.status != "online":
+        return
+    existing_mac = pc_metadata_repository.get_mac_address(pc_name)
+    if existing_mac and mac_address and existing_mac.casefold() != mac_address.casefold():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Station ID {pc_name} is already online from another client. "
+                "Choose a unique station ID for this installation."
+            ),
+        )
+
+
+def touch_pc(
+    pc_name: str,
+    ip_address: str,
+    display_name: str | None = None,
+    mac_address: str | None = None,
+) -> PCRecord:
     # Registry writes live in one helper so registration and heartbeat stay in sync.
+    upsert_client_display_name(pc_name, display_name, mac_address)
     registered_pc = PCRecord(
         pc_name=pc_name,
         ip_address=ip_address,
@@ -270,27 +344,45 @@ async def monitor_pc_statuses() -> None:
         await asyncio.sleep(MONITOR_INTERVAL_SECONDS)
 
 
+async def run_scheduled_backups() -> None:
+    while True:
+        now = datetime.now().astimezone()
+        next_run = now.replace(hour=2, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        await asyncio.sleep(max(60, int((next_run - now).total_seconds())))
+        try:
+            system_service.create_backup()
+        except Exception as error:
+            print(f"Automatic backup failed: {error}")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    configure_file_logging()
+    logging.info("Secret Grounds %s backend startup at %s.", APP_VERSION, SERVER_STARTED_AT.isoformat())
     initialize_database()
     monitor_task = asyncio.create_task(monitor_pc_statuses())
+    backup_task = asyncio.create_task(run_scheduled_backups())
 
     try:
         yield
     finally:
+        logging.info("Secret Grounds backend shutdown requested.")
         monitor_task.cancel()
+        backup_task.cancel()
 
 
 app = FastAPI(
     title="Secret Grounds Management System",
-    version="1.0.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_cors_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -299,6 +391,15 @@ app.add_middleware(
 def home() -> dict[str, str]:
     return {
         "message": "Welcome to Secret Grounds Management System!"
+    }
+
+
+@app.get("/healthz")
+def readiness_health() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "version": app.version,
+        "started_at": SERVER_STARTED_AT.isoformat(),
     }
 
 
@@ -328,6 +429,15 @@ def admin_operator_login(
     response: Response,
 ) -> UserPublic:
     user = authenticate_admin_operator(request.password)
+    return issue_operator_session(user, response)
+
+
+@app.post("/auth/operator/password", response_model=UserPublic)
+def password_operator_login(
+    request: PasswordOperatorLoginRequest,
+    response: Response,
+) -> UserPublic:
+    user = authenticate_password_operator(request.operator_id, request.password)
     return issue_operator_session(user, response)
 
 
@@ -368,6 +478,105 @@ def reset_admin_settings(
     current_user=Depends(require_admin_operator),
 ) -> AdminSettingsResponse:
     return admin_settings_service.reset_settings(request, current_user.user_id)
+
+
+@app.get("/system/health")
+def get_system_health(_: object = Depends(require_admin_operator)) -> dict[str, object]:
+    mark_stale_pcs_offline()
+    return system_service.get_health(
+        app_version=app.version,
+        server_started_at=SERVER_STARTED_AT,
+        pc_registry=pc_registry,
+        active_websockets=connection_manager.active_pc_names(),
+    )
+
+
+@app.get("/system/database")
+def get_system_database(_: object = Depends(require_admin_operator)) -> dict[str, object]:
+    return system_service.get_database_health()
+
+
+@app.get("/system/backups")
+def get_system_backups(_: object = Depends(require_admin_operator)) -> list[dict[str, object]]:
+    return system_service.list_backups()
+
+
+@app.post("/system/backup")
+def create_system_backup(_: object = Depends(require_admin_operator)) -> dict[str, object]:
+    return system_service.create_backup()
+
+
+@app.post("/system/restore")
+def restore_system_backup(
+    payload: dict[str, object] = Body(...),
+    _: object = Depends(require_admin_operator),
+) -> dict[str, object]:
+    filename = str(payload.get("filename") or "")
+    confirm = bool(payload.get("confirm"))
+    return system_service.restore_backup(filename, confirm)
+
+
+@app.delete("/system/backups/{filename}")
+def delete_system_backup(
+    filename: str,
+    confirm: bool = Query(False),
+    _: object = Depends(require_admin_operator),
+) -> dict[str, str]:
+    return system_service.delete_backup(filename, confirm)
+
+
+@app.get("/system/backups/{filename}/download")
+def download_system_backup(
+    filename: str,
+    _: object = Depends(require_admin_operator),
+) -> FileResponse:
+    backup_path = system_service.resolve_backup_path(filename)
+    return FileResponse(
+        path=backup_path,
+        filename=backup_path.name,
+        media_type="application/vnd.sqlite3",
+    )
+
+
+@app.get("/system/storage")
+def get_system_storage(_: object = Depends(require_admin_operator)) -> dict[str, object]:
+    return system_service.get_storage()
+
+
+@app.get("/system/info")
+def get_system_info(_: object = Depends(require_admin_operator)) -> dict[str, object]:
+    return system_service.get_info(
+        app_version=app.version,
+        server_started_at=SERVER_STARTED_AT,
+    )
+
+
+@app.get("/system/logs")
+def get_system_logs(_: object = Depends(require_admin_operator)) -> list[dict[str, str]]:
+    return system_service.get_logs()
+
+
+@app.get("/system/clients")
+def get_system_clients(_: object = Depends(require_admin_operator)) -> list[dict[str, object]]:
+    mark_stale_pcs_offline()
+    layouts = {layout.pc_name: layout for layout in pc_layout_repository.list_layouts(include_disabled=True)}
+    clients: list[dict[str, object]] = []
+    for pc_name, layout in sorted(layouts.items(), key=lambda item: (item[1].layout_order, item[0])):
+        pc = pc_registry.get(pc_name)
+        active_session = session_repository.get_active_session_for_pc(pc_name)
+        connected = pc is not None and pc.status == "online"
+        clients.append(
+            {
+                "pc_name": pc_name,
+                "display_name": layout.display_name,
+                "registered": pc is not None,
+                "connected": connected,
+                "last_heartbeat": pc.last_seen.isoformat() if pc is not None else None,
+                "version": None,
+                "current_state": active_session.status if active_session is not None else ("connected" if connected else "disconnected"),
+            }
+        )
+    return clients
 
 
 @app.get("/client-settings", response_model=ClientSafeSettings)
@@ -607,6 +816,7 @@ IMPORTANT_SESSION_EVENTS: dict[str, tuple[str, str]] = {
     "automatic_shutdown_cancelled": ("Cancelled automatic shutdown", "session"),
     "session_ended_manually": ("Ended session", "session"),
     "session_completed": ("Session completed", "session"),
+    "client_connected": ("Client connected", "session"),
     "open_time_started": ("Started Open Time", "session"),
     "open_time_ended": ("Ended Open Time", "session"),
     "open_time_settled": ("Settled Open Time", "payment"),
@@ -624,24 +834,65 @@ IMPORTANT_SESSION_EVENTS: dict[str, tuple[str, str]] = {
 def list_admin_operators(
     _: object = Depends(require_admin_operator),
 ) -> list[OperatorManagementRecord]:
-    users = {user.username.casefold(): user for user in user_repository.list_users()}
-    records: list[OperatorManagementRecord] = []
-    for operator in FAMILY_OPERATORS:
-        user = users.get(operator.username.casefold())
-        if user is None:
-            continue
-        records.append(
-            OperatorManagementRecord(
-                operator_id=operator.operator_id,
-                username=user.username,
-                display_name=user.display_name,
-                password_required=operator.password_required,
-                role=user.role,
-                is_active=user.is_active,
-                last_login_at=user.last_login_at,
-            )
-        )
-    return records
+    return operator_repository.list_operators()
+
+
+@app.post("/admin/operators", response_model=OperatorManagementRecord)
+def create_admin_operator(
+    request: OperatorCreateRequest,
+    current_user=Depends(require_admin_operator),
+) -> OperatorManagementRecord:
+    return operator_repository.create_operator(request, current_user)
+
+
+@app.put("/admin/operators/{operator_id}", response_model=OperatorManagementRecord)
+def update_admin_operator(
+    operator_id: str,
+    request: OperatorUpdateRequest,
+    current_user=Depends(require_admin_operator),
+) -> OperatorManagementRecord:
+    return operator_repository.update_operator(operator_id, request, current_user)
+
+
+@app.post("/admin/operators/{operator_id}/enable", response_model=OperatorManagementRecord)
+def enable_admin_operator(
+    operator_id: str,
+    current_user=Depends(require_admin_operator),
+) -> OperatorManagementRecord:
+    return operator_repository.set_enabled(operator_id, True, current_user)
+
+
+@app.post("/admin/operators/{operator_id}/disable", response_model=OperatorManagementRecord)
+def disable_admin_operator(
+    operator_id: str,
+    current_user=Depends(require_admin_operator),
+) -> OperatorManagementRecord:
+    return operator_repository.set_enabled(operator_id, False, current_user)
+
+
+@app.post("/admin/operators/{operator_id}/reset-password", response_model=OperatorManagementRecord)
+def reset_admin_operator_password(
+    operator_id: str,
+    request: OperatorPasswordResetRequest,
+    current_user=Depends(require_admin_operator),
+) -> OperatorManagementRecord:
+    return operator_repository.reset_password(operator_id, request, current_user)
+
+
+@app.post("/admin/operators/{operator_id}/sign-out", response_model=OperatorManagementRecord)
+def sign_out_admin_operator(
+    operator_id: str,
+    current_user=Depends(require_admin_operator),
+) -> OperatorManagementRecord:
+    return operator_repository.sign_out_operator(operator_id, current_user)
+
+
+@app.delete("/admin/operators/{operator_id}", response_model=OperatorManagementRecord)
+def archive_admin_operator(
+    operator_id: str,
+    current_user=Depends(require_admin_operator),
+) -> OperatorManagementRecord:
+    return operator_repository.archive_operator(operator_id, current_user)
 
 
 @app.get("/operator-activity", response_model=list[OperatorActivityRecord])
@@ -651,6 +902,23 @@ def list_operator_activity(
     category: str | None = None,
     limit: int = Query(200, ge=1, le=500),
     _: object = Depends(require_admin_operator),
+) -> list[OperatorActivityRecord]:
+    return build_operator_activity(date_scope, operator_id, category, limit)
+
+
+@app.get("/activity", response_model=list[OperatorActivityRecord])
+def list_live_activity(
+    limit: int = Query(60, ge=1, le=120),
+    _: object = Depends(require_role("cashier")),
+) -> list[OperatorActivityRecord]:
+    return build_operator_activity("today", None, None, limit)
+
+
+def build_operator_activity(
+    date_scope: str,
+    operator_id: str | None,
+    category: str | None,
+    limit: int,
 ) -> list[OperatorActivityRecord]:
     since = current_utc_time().date().isoformat() if date_scope == "today" else None
     users = user_repository.list_users()
@@ -710,6 +978,14 @@ def list_operator_activity(
                 applied_immediately,
                 created_at
             FROM admin_settings_audit_events
+            ORDER BY created_at DESC
+            LIMIT 1000
+            """
+        ).fetchall()
+        audit_rows = connection.execute(
+            """
+            SELECT event_type, operator_display_name, selected_by_user_id, created_at
+            FROM operator_audit_events
             ORDER BY created_at DESC
             LIMIT 1000
             """
@@ -819,6 +1095,46 @@ def list_operator_activity(
                 action=f"Updated settings: {changed_fields}",
                 category="settings",
                 result="Applied" if row["applied_immediately"] else "Restart required",
+            )
+        )
+
+    for row in audit_rows:
+        event_type = str(row["event_type"])
+        if event_type == "operator_changed":
+            action = "Operator changed"
+            event_category = "operator"
+            result = "Active"
+        elif event_type == "backup_created":
+            action = "Backup created"
+            event_category = "system"
+            result = "Verified"
+        elif event_type == "restore_completed":
+            action = "Restore completed"
+            event_category = "system"
+            result = "Completed"
+        elif event_type == "backup_deleted":
+            action = "Backup deleted"
+            event_category = "system"
+            result = "Deleted"
+        else:
+            continue
+        timestamp = row["created_at"]
+        actor_id = row["selected_by_user_id"]
+        if since is not None and timestamp < since:
+            continue
+        if operator_id is not None and actor_id != operator_id:
+            continue
+        if category is not None and category != event_category:
+            continue
+        activity.append(
+            OperatorActivityRecord(
+                timestamp=timestamp,
+                operator_id=actor_id,
+                operator_name=operator_name_for_user(actor_id, users_by_id),
+                action=action,
+                category=event_category,
+                customer=row["operator_display_name"],
+                result=result,
             )
         )
 
@@ -1189,9 +1505,10 @@ def get_dashboard_today_sales(_: object = Depends(require_role("cashier"))) -> D
 @app.post("/register", response_model=PCRegistrationResponse)
 def register_pc(pc: PCRegistration) -> PCRegistrationResponse:
     pc_name, ip_address = clean_pc_payload(pc.pc_name, pc.ip_address)
+    reject_duplicate_station_id(pc_name, pc.mac_address)
     if pc.mac_address:
         pc_metadata_repository.set_mac_address(pc_name, pc.mac_address)
-    registered_pc = touch_pc(pc_name, ip_address)
+    registered_pc = touch_pc(pc_name, ip_address, pc.display_name, pc.mac_address)
 
     return PCRegistrationResponse(
         message=f"{pc_name} registered successfully",
@@ -1201,6 +1518,29 @@ def register_pc(pc: PCRegistration) -> PCRegistrationResponse:
         last_seen=registered_pc.last_seen,
         mac_address=registered_pc.mac_address,
     )
+
+
+@app.get("/client-registration/check")
+def check_client_registration(
+    pc_name: str = Query(..., min_length=1),
+    mac_address: str | None = None,
+) -> dict[str, object]:
+    cleaned_pc_name = pc_name.strip()
+    if not cleaned_pc_name:
+        raise HTTPException(status_code=400, detail="Station ID must not be blank")
+    try:
+        reject_duplicate_station_id(cleaned_pc_name, mac_address)
+    except HTTPException as error:
+        return {
+            "available": False,
+            "pc_name": cleaned_pc_name,
+            "detail": error.detail,
+        }
+    return {
+        "available": True,
+        "pc_name": cleaned_pc_name,
+        "detail": "Station ID is available",
+    }
 
 
 @app.post("/heartbeat", response_model=PCRecord)
@@ -1213,7 +1553,7 @@ def heartbeat(pc: PCHeartbeat) -> PCRecord:
             detail=f"{pc_name} is not registered",
         )
 
-    return touch_pc(pc_name, ip_address)
+    return touch_pc(pc_name, ip_address, pc.display_name)
 
 
 @app.websocket("/ws/{pc_name}")

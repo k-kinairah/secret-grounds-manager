@@ -12,7 +12,9 @@ import type {
   MemberTimeTransaction,
   OperatorAccess,
   OperatorActivityRecord,
+  OperatorCreateInput,
   OperatorManagementRecord,
+  OperatorUpdateInput,
   PcLayoutSlot,
   PcSummary,
   CalculatedTimeResponse,
@@ -24,6 +26,13 @@ import type {
   MessageSeverity,
   SalesPeriod,
   SalesReport,
+  SystemBackupRecord,
+  SystemClientHealth,
+  SystemDatabaseHealth,
+  SystemHealth,
+  SystemInfo,
+  SystemLogEntry,
+  SystemStorage,
   UserAdminRecord,
   UserCreateInput,
   UserUpdateInput,
@@ -120,6 +129,14 @@ export async function adminOperatorLogin(password: string): Promise<CurrentUser>
   });
 }
 
+export async function passwordOperatorLogin(operatorId: string, password: string): Promise<CurrentUser> {
+  return requestJson<CurrentUser>(`${getApiBaseUrl()}/auth/operator/password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ operator_id: operatorId, password })
+  });
+}
+
 export async function logout(): Promise<void> {
   await requestJson<{ message: string }>(`${getApiBaseUrl()}/auth/logout`, {
     method: "POST"
@@ -152,6 +169,61 @@ export async function resetAdminSettings(category: keyof AdminSettings | "all"):
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ category })
   });
+}
+
+export async function fetchSystemHealth(): Promise<SystemHealth> {
+  return requestJson<SystemHealth>(`${getApiBaseUrl()}/system/health`, { cache: "no-store" });
+}
+
+export async function fetchSystemDatabase(): Promise<SystemDatabaseHealth> {
+  return requestJson<SystemDatabaseHealth>(`${getApiBaseUrl()}/system/database`, { cache: "no-store" });
+}
+
+export async function fetchSystemBackups(): Promise<SystemBackupRecord[]> {
+  return requestJson<SystemBackupRecord[]>(`${getApiBaseUrl()}/system/backups`, { cache: "no-store" });
+}
+
+export async function createSystemBackup(): Promise<{
+  message: string;
+  backup: SystemBackupRecord;
+  validation: { valid: boolean; status: string };
+}> {
+  return requestJson(`${getApiBaseUrl()}/system/backup`, { method: "POST" });
+}
+
+export async function restoreSystemBackup(filename: string): Promise<{ message: string }> {
+  return requestJson<{ message: string }>(`${getApiBaseUrl()}/system/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename, confirm: true })
+  });
+}
+
+export async function deleteSystemBackup(filename: string): Promise<{ message: string }> {
+  return requestJson<{ message: string }>(
+    `${getApiBaseUrl()}/system/backups/${encodeURIComponent(filename)}?confirm=true`,
+    { method: "DELETE" }
+  );
+}
+
+export function getSystemBackupDownloadUrl(filename: string): string {
+  return `${getApiBaseUrl()}/system/backups/${encodeURIComponent(filename)}/download`;
+}
+
+export async function fetchSystemStorage(): Promise<SystemStorage> {
+  return requestJson<SystemStorage>(`${getApiBaseUrl()}/system/storage`, { cache: "no-store" });
+}
+
+export async function fetchSystemInfo(): Promise<SystemInfo> {
+  return requestJson<SystemInfo>(`${getApiBaseUrl()}/system/info`, { cache: "no-store" });
+}
+
+export async function fetchSystemLogs(): Promise<SystemLogEntry[]> {
+  return requestJson<SystemLogEntry[]>(`${getApiBaseUrl()}/system/logs`, { cache: "no-store" });
+}
+
+export async function fetchSystemClients(): Promise<SystemClientHealth[]> {
+  return requestJson<SystemClientHealth[]>(`${getApiBaseUrl()}/system/clients`, { cache: "no-store" });
 }
 
 export async function fetchCurrentShift(): Promise<CashierShiftDetail | null> {
@@ -207,6 +279,61 @@ export async function fetchAdminOperators(): Promise<OperatorManagementRecord[]>
   });
 }
 
+export async function createAdminOperator(payload: OperatorCreateInput): Promise<OperatorManagementRecord> {
+  return requestJson<OperatorManagementRecord>(`${getApiBaseUrl()}/admin/operators`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updateAdminOperator(
+  operatorId: string,
+  payload: OperatorUpdateInput
+): Promise<OperatorManagementRecord> {
+  return requestJson<OperatorManagementRecord>(`${getApiBaseUrl()}/admin/operators/${encodeURIComponent(operatorId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function enableAdminOperator(operatorId: string): Promise<OperatorManagementRecord> {
+  return requestJson<OperatorManagementRecord>(`${getApiBaseUrl()}/admin/operators/${encodeURIComponent(operatorId)}/enable`, {
+    method: "POST"
+  });
+}
+
+export async function disableAdminOperator(operatorId: string): Promise<OperatorManagementRecord> {
+  return requestJson<OperatorManagementRecord>(`${getApiBaseUrl()}/admin/operators/${encodeURIComponent(operatorId)}/disable`, {
+    method: "POST"
+  });
+}
+
+export async function resetAdminOperatorPassword(operatorId: string, password: string): Promise<OperatorManagementRecord> {
+  return requestJson<OperatorManagementRecord>(
+    `${getApiBaseUrl()}/admin/operators/${encodeURIComponent(operatorId)}/reset-password`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password })
+    }
+  );
+}
+
+export async function signOutAdminOperator(operatorId: string): Promise<OperatorManagementRecord> {
+  return requestJson<OperatorManagementRecord>(
+    `${getApiBaseUrl()}/admin/operators/${encodeURIComponent(operatorId)}/sign-out`,
+    { method: "POST" }
+  );
+}
+
+export async function archiveAdminOperator(operatorId: string): Promise<OperatorManagementRecord> {
+  return requestJson<OperatorManagementRecord>(`${getApiBaseUrl()}/admin/operators/${encodeURIComponent(operatorId)}`, {
+    method: "DELETE"
+  });
+}
+
 export async function fetchOperatorActivity(params: {
   dateScope?: "today" | "all";
   operatorId?: string;
@@ -222,6 +349,13 @@ export async function fetchOperatorActivity(params: {
   }
   return requestJson<OperatorActivityRecord[]>(
     `${getApiBaseUrl()}/operator-activity?${search.toString()}`,
+    { cache: "no-store" }
+  );
+}
+
+export async function fetchLiveActivity(limit = 60): Promise<OperatorActivityRecord[]> {
+  return requestJson<OperatorActivityRecord[]>(
+    `${getApiBaseUrl()}/activity?limit=${encodeURIComponent(String(limit))}`,
     { cache: "no-store" }
   );
 }

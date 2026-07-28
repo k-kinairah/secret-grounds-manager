@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { closeShift, fetchCurrentShift, fetchCurrentUser, logout, openShift } from "@/lib/api";
 import { formatDateTime, formatMoney } from "@/lib/time";
 import type { CashierShiftDetail, CurrentUser, UserRole } from "@/lib/types";
+import { ToastProvider } from "./ToastProvider";
 
 const ROLE_RANK: Record<UserRole, number> = {
   cashier: 1,
@@ -17,9 +18,18 @@ const ADMIN_ONLY_PATHS = [
   "/operators",
   "/sales",
   "/settings",
+  "/system",
   "/users",
   "/shifts",
   "/remote-commands"
+];
+const ADMIN_NAV_ITEMS = [
+  { href: "/operator-activity", label: "Operator Activity" },
+  { href: "/operators", label: "Staff" },
+  { href: "/remote-commands", label: "Commands" },
+  { href: "/sales", label: "Sales" },
+  { href: "/settings", label: "Settings" },
+  { href: "/system", label: "System" }
 ];
 
 function canAccess(user: CurrentUser | null, minimumRole: UserRole): boolean {
@@ -35,8 +45,12 @@ export function AuthShell({ children }: { children: ReactNode }) {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [shiftMessage, setShiftMessage] = useState<string | null>(null);
   const [isClosingShift, setIsClosingShift] = useState(false);
+  const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
+  const adminMenuRef = useRef<HTMLDivElement | null>(null);
+  const adminButtonRef = useRef<HTMLButtonElement | null>(null);
   const isLoginPage = pathname === "/login";
   const isAdminOperator = user?.username === "admin";
+  const isAdminPath = ADMIN_ONLY_PATHS.includes(pathname);
 
   useEffect(() => {
     let isMounted = true;
@@ -79,6 +93,37 @@ export function AuthShell({ children }: { children: ReactNode }) {
       isMounted = false;
     };
   }, [isLoginPage, pathname, router]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setIsAdminMenuOpen(false), 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!isAdminMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (adminMenuRef.current && !adminMenuRef.current.contains(event.target as Node)) {
+        setIsAdminMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsAdminMenuOpen(false);
+        adminButtonRef.current?.focus();
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isAdminMenuOpen]);
 
   useEffect(() => {
     if (user === null || isLoginPage) {
@@ -173,7 +218,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <>
+    <ToastProvider>
       <nav className="appShell" aria-label="Main navigation">
         <Link className="appShell__brand" href="/">
           <span className="appShell__mark" aria-hidden="true">
@@ -187,49 +232,43 @@ export function AuthShell({ children }: { children: ReactNode }) {
           <Link className={pathname === "/history" ? "appShell__linkActive" : ""} href="/history">History</Link>
           <Link className={pathname === "/rates" ? "appShell__linkActive" : ""} href="/rates">Rates</Link>
           {isAdminOperator ? (
-            <details className="appShell__adminMenu">
-              <summary
-                className={
-                  ["/operator-activity", "/operators", "/sales", "/remote-commands", "/settings"].includes(pathname)
-                    ? "appShell__linkActive"
-                    : ""
+            <div
+              className="appShell__adminMenu"
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setIsAdminMenuOpen(false);
                 }
+              }}
+              ref={adminMenuRef}
+            >
+              <button
+                aria-expanded={isAdminMenuOpen}
+                aria-haspopup="menu"
+                className={isAdminPath ? "appShell__linkActive" : ""}
+                onClick={() => setIsAdminMenuOpen((open) => !open)}
+                ref={adminButtonRef}
+                type="button"
               >
                 Admin
-              </summary>
-              <div className="appShell__adminDropdown">
-                <Link
-                  className={pathname === "/operator-activity" ? "appShell__linkActive" : ""}
-                  href="/operator-activity"
-                >
-                  Operator Activity
-                </Link>
-                <Link
-                  className={pathname === "/operators" ? "appShell__linkActive" : ""}
-                  href="/operators"
-                >
-                  Staff
-                </Link>
-                <Link
-                  className={pathname === "/remote-commands" ? "appShell__linkActive" : ""}
-                  href="/remote-commands"
-                >
-                  Commands
-                </Link>
-                <Link
-                  className={pathname === "/sales" ? "appShell__linkActive" : ""}
-                  href="/sales"
-                >
-                  Sales
-                </Link>
-                <Link
-                  className={pathname === "/settings" ? "appShell__linkActive" : ""}
-                  href="/settings"
-                >
-                  Settings
-                </Link>
-              </div>
-            </details>
+                <span className="appShell__chevron" aria-hidden="true" />
+              </button>
+              {isAdminMenuOpen ? (
+                <div className="appShell__adminDropdown" role="menu">
+                  {ADMIN_NAV_ITEMS.map((item) => (
+                    <Link
+                      aria-current={pathname === item.href ? "page" : undefined}
+                      className={pathname === item.href ? "appShell__linkActive" : ""}
+                      href={item.href}
+                      key={item.href}
+                      onClick={() => setIsAdminMenuOpen(false)}
+                      role="menuitem"
+                    >
+                      {item.label}
+                    </Link>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </div>
         <div className="appShell__account">
@@ -295,7 +334,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
           {children}
         </>
       )}
-    </>
+    </ToastProvider>
   );
 }
 

@@ -9,6 +9,8 @@ import {
   useRef,
   useState
 } from "react";
+import { createPortal } from "react-dom";
+import { usePathname } from "next/navigation";
 import styles from "@/app/page.module.css";
 import {
   createMember,
@@ -179,6 +181,7 @@ function useModalFocus(
 }
 
 export function MembersManager() {
+  const pathname = usePathname();
   const [members, setMembers] = useState<MemberRecord[]>([]);
   const [products, setProducts] = useState<MembershipProduct[]>([]);
   const [query, setQuery] = useState("");
@@ -196,6 +199,13 @@ export function MembersManager() {
   const createModalRef = useRef<HTMLElement | null>(null);
   const detailModalRef = useRef<HTMLElement | null>(null);
   const confirmModalRef = useRef<HTMLElement | null>(null);
+  const memberMenuTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const [openMemberMenu, setOpenMemberMenu] = useState<{
+    member: MemberRecord;
+    left: number;
+    top: number;
+    placement: "up" | "down";
+  } | null>(null);
 
   const activeProducts = useMemo(() => products.filter((product) => product.is_active), [products]);
   const selectedProduct =
@@ -221,10 +231,56 @@ export function MembersManager() {
   const closeCreateDialog = useCallback(() => setIsCreateOpen(false), []);
   const closeDetailDialog = useCallback(() => setSelectedMember(null), []);
   const closeConfirmDialog = useCallback(() => setConfirmingStatusMember(null), []);
+  const closeMemberMenu = useCallback(() => setOpenMemberMenu(null), []);
 
   useModalFocus(isCreateOpen, createModalRef, closeCreateDialog);
   useModalFocus(selectedMember !== null, detailModalRef, closeDetailDialog);
   useModalFocus(confirmingStatusMember !== null, confirmModalRef, closeConfirmDialog);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(closeMemberMenu, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [closeMemberMenu, pathname, selectedMember]);
+
+  useEffect(() => {
+    if (openMemberMenu === null) {
+      return;
+    }
+    const menuMemberId = openMemberMenu.member.member_id;
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Node;
+      const trigger = memberMenuTriggerRefs.current.get(menuMemberId);
+      const menu = document.getElementById("member-floating-menu");
+      if (trigger?.contains(target) || menu?.contains(target)) {
+        return;
+      }
+      closeMemberMenu();
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMemberMenu();
+        memberMenuTriggerRefs.current.get(menuMemberId)?.focus();
+      }
+    }
+
+    function handleViewportChange() {
+      closeMemberMenu();
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [closeMemberMenu, openMemberMenu]);
 
   async function refresh(search = query) {
     const [nextMembers, nextProducts] = await Promise.all([
@@ -298,6 +354,7 @@ export function MembersManager() {
   }
 
   async function handleSelect(member: MemberRecord) {
+    closeMemberMenu();
     setSelectedMember(member);
     setSelectedProductId(activeProducts[0]?.product_id ?? "");
     setShowAdvancedActivity(false);
@@ -367,6 +424,33 @@ export function MembersManager() {
     setQuery("");
     setStatusFilter("all");
   }
+
+  function toggleMemberMenu(member: MemberRecord, trigger: HTMLButtonElement) {
+    if (openMemberMenu?.member.member_id === member.member_id) {
+      closeMemberMenu();
+      return;
+    }
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = 190;
+    const menuHeight = 110;
+    const placement = window.innerHeight - rect.bottom >= menuHeight + 10 ? "down" : "up";
+    setOpenMemberMenu({
+      member,
+      left: Math.min(Math.max(8, rect.right - menuWidth), window.innerWidth - menuWidth - 8),
+      top: placement === "down" ? rect.bottom + 6 : Math.max(8, rect.top - menuHeight - 6),
+      placement
+    });
+  }
+
+  function setMemberMenuTrigger(memberId: string, node: HTMLButtonElement | null) {
+    if (node) {
+      memberMenuTriggerRefs.current.set(memberId, node);
+    } else {
+      memberMenuTriggerRefs.current.delete(memberId);
+    }
+  }
+
+  const floatingMemberMenu = openMemberMenu;
 
   return (
     <main className={styles.page}>
@@ -497,20 +581,18 @@ export function MembersManager() {
                         >
                           View Member
                         </button>
-                        <details className={styles.memberMoreMenu}>
-                          <summary aria-label={`More actions for ${member.member_code}`}>More</summary>
-                          <div>
-                            <button onClick={() => void handleSelect(member)} type="button">
-                              View Activity
-                            </button>
-                            <button
-                              onClick={() => setConfirmingStatusMember(member)}
-                              type="button"
-                            >
-                              {member.status === "active" ? "Disable Member" : "Enable Member"}
-                            </button>
-                          </div>
-                        </details>
+                        <button
+                          aria-expanded={openMemberMenu?.member.member_id === member.member_id}
+                          aria-haspopup="menu"
+                          aria-label={`More actions for ${member.member_code}`}
+                          className={styles.memberMoreButton}
+                          onClick={(event) => toggleMemberMenu(member, event.currentTarget)}
+                          ref={(node) => setMemberMenuTrigger(member.member_id, node)}
+                          type="button"
+                        >
+                          More
+                          <span aria-hidden="true" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -574,6 +656,41 @@ export function MembersManager() {
           </section>
         </div>
       ) : null}
+
+      {floatingMemberMenu && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className={`${styles.memberFloatingMenu} ${
+                floatingMemberMenu.placement === "up" ? styles.memberFloatingMenuUp : ""
+              }`}
+              id="member-floating-menu"
+              role="menu"
+              style={{ left: floatingMemberMenu.left, top: floatingMemberMenu.top }}
+            >
+              <button
+                onClick={() => {
+                  void handleSelect(floatingMemberMenu.member);
+                }}
+                role="menuitem"
+                type="button"
+              >
+                View Activity
+              </button>
+              <button
+                onClick={() => {
+                  const member = floatingMemberMenu.member;
+                  closeMemberMenu();
+                  setConfirmingStatusMember(member);
+                }}
+                role="menuitem"
+                type="button"
+              >
+                {floatingMemberMenu.member.status === "active" ? "Disable Member" : "Enable Member"}
+              </button>
+            </div>,
+            document.body
+          )
+        : null}
 
       {confirmingStatusMember ? (
         <div className={styles.overlay} role="presentation">

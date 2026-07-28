@@ -1,6 +1,7 @@
 import styles from "@/app/page.module.css";
 import { formatMoney } from "@/lib/time";
 import type { DashboardSummary as DashboardSummaryData } from "@/lib/types";
+import { StatusCard } from "./StatusCard";
 
 interface DashboardSummaryProps {
   currentOperator: string;
@@ -9,24 +10,33 @@ interface DashboardSummaryProps {
 }
 
 export function DashboardSummary({ currentOperator, summary, todaySales }: DashboardSummaryProps) {
-  const cards: Array<[string, string, string | null]> = [
-    ["Available", String(summary.available), null],
-    ["In Use", String(summary.inUse), `${summary.total} registered`],
-    ["Today's Sales", todaySales === null ? "--" : formatMoney(todaySales), null],
-    ["Current Operator", currentOperator, null]
+  const cards: Array<{
+    detail: string | null;
+    icon: string;
+    label: string;
+    tone: "neutral" | "success" | "warning" | "danger" | "info";
+    value: string;
+  }> = [
+    { icon: "OK", label: "Available", value: String(summary.available), detail: `${summary.total} stations`, tone: "success" },
+    { icon: "PC", label: "In Use", value: String(summary.inUse), detail: "Active sessions", tone: "info" },
+    { icon: "$", label: "Today's Sales", value: todaySales === null ? "--" : formatMoney(todaySales), detail: "Gross collected", tone: "neutral" },
+    { icon: "OP", label: "Operator", value: currentOperator, detail: "On duty", tone: "neutral" }
   ];
   if (summary.paymentDue > 0) {
-    cards.push(["Settlement Due", formatMoney(summary.settlementDueAmount), `${summary.paymentDue} PCs`]);
+    cards.push({ icon: "!", label: "Settlement", value: formatMoney(summary.settlementDueAmount), detail: `${summary.paymentDue} PCs`, tone: "warning" });
   }
 
   return (
     <section className={styles.summaryGrid} aria-label="Shop summary">
-      {cards.map(([label, value, detail]) => (
-        <div className={styles.summaryCard} key={label}>
-          <div className={styles.summaryLabel}>{label}</div>
-          <div className={styles.summaryValue}>{value}</div>
-          {detail ? <div className={styles.summaryDetail}>{detail}</div> : null}
-        </div>
+      {cards.map((card) => (
+        <StatusCard
+          detail={card.detail}
+          icon={card.icon}
+          key={card.label}
+          title={card.label}
+          tone={card.tone}
+          value={card.value}
+        />
       ))}
     </section>
   );

@@ -1,0 +1,9 @@
+{
+  "server_host": "cashier-server",
+  "server_port": 18001,
+  "pc_name": "CHANGE-ME",
+  "display_name": "Front Row 01",
+  "auto_connect": true,
+  "reconnect_interval_seconds": 5,
+  "request_timeout_seconds": 5
+}

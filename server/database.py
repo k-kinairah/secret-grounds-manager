@@ -16,9 +16,12 @@ DEFAULT_DATABASE_PATH = Path(__file__).resolve().parent / "secret_grounds.sqlite
 def get_database_path() -> Path:
     configured_path = os.getenv("SECRET_GROUNDS_DB_PATH")
     if configured_path:
-        return Path(configured_path)
+        path = Path(configured_path).expanduser()
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent.parent / path
+        return path.resolve()
 
-    return DEFAULT_DATABASE_PATH
+    return DEFAULT_DATABASE_PATH.resolve()
 
 
 @contextmanager
@@ -678,14 +681,28 @@ def seed_family_operators(connection: sqlite3.Connection) -> None:
             (operator.username.casefold(),),
         ).fetchone()
         if existing is not None:
+            access_method = "password" if operator.password_required else "quick"
+            is_protected = 1 if operator.username == "admin" else 0
             if operator.password_required:
                 connection.execute(
                     """
                     UPDATE users
-                    SET display_name = ?, role = 'owner', is_active = 1, updated_at = ?
+                    SET display_name = ?, role = 'owner', is_active = 1,
+                        is_operator = 1, access_method = ?, is_protected = ?,
+                        archived_at = NULL, updated_at = ?
                     WHERE user_id = ?
                     """,
-                    (operator.display_name, now, existing["user_id"]),
+                    (operator.display_name, access_method, is_protected, now, existing["user_id"]),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE users
+                    SET is_operator = 1, access_method = ?, is_protected = ?,
+                        archived_at = NULL, updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (access_method, is_protected, now, existing["user_id"]),
                 )
             continue
 
@@ -701,9 +718,13 @@ def seed_family_operators(connection: sqlite3.Connection) -> None:
                 is_active,
                 created_at,
                 updated_at,
-                last_login_at
+                last_login_at,
+                is_operator,
+                access_method,
+                is_protected,
+                archived_at
             )
-            VALUES (?, ?, ?, ?, ?, 'owner', 1, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, 'owner', 1, ?, ?, NULL, 1, ?, ?, NULL)
             """,
             (
                 operator.operator_id,
@@ -713,6 +734,8 @@ def seed_family_operators(connection: sqlite3.Connection) -> None:
                 admin_password_hash if operator.password_required else disabled_password_hash,
                 now,
                 now,
+                "password" if operator.password_required else "quick",
+                1 if operator.username == "admin" else 0,
             ),
         )
 
@@ -735,6 +758,17 @@ def initialize_database() -> None:
             )
             """
         )
+        existing_user_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "is_operator" not in existing_user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN is_operator INTEGER NOT NULL DEFAULT 0")
+        if "access_method" not in existing_user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN access_method TEXT NOT NULL DEFAULT 'password'")
+        if "is_protected" not in existing_user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN is_protected INTEGER NOT NULL DEFAULT 0")
+        if "archived_at" not in existing_user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN archived_at TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -1073,11 +1107,17 @@ def initialize_database() -> None:
                 operator_display_name TEXT NOT NULL,
                 selected_by_user_id TEXT,
                 created_at TEXT NOT NULL,
+                metadata_json TEXT,
                 FOREIGN KEY (operator_user_id) REFERENCES users(user_id),
                 FOREIGN KEY (selected_by_user_id) REFERENCES users(user_id)
             )
             """
         )
+        existing_audit_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(operator_audit_events)").fetchall()
+        }
+        if "metadata_json" not in existing_audit_columns:
+            connection.execute("ALTER TABLE operator_audit_events ADD COLUMN metadata_json TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS admin_settings (

@@ -7,7 +7,7 @@ export default function HistoryPage() {
       <header className={styles.topBar}>
         <div>
           <h1>Session History</h1>
-          <p>Newest sessions appear first.</p>
+          <p>Review completed, active, and settled computer sessions.</p>
         </div>
       </header>
       <HistoryTable />

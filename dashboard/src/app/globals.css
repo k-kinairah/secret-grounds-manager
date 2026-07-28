@@ -119,12 +119,17 @@ select:focus-visible {
   position: relative;
 }
 
-.appShell__adminMenu summary {
+.appShell__adminMenu > button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 6px;
   color: #dbeafe;
   cursor: pointer;
+  display: inline-flex;
   font-size: 14px;
   font-weight: 800;
+  gap: 8px;
   list-style: none;
   padding: 9px 12px;
   transition:
@@ -133,20 +138,21 @@ select:focus-visible {
     color 160ms ease;
 }
 
-.appShell__adminMenu summary::-webkit-details-marker {
-  display: none;
+.appShell__chevron {
+  border-bottom: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  height: 7px;
+  transform: rotate(45deg);
+  transition: transform 170ms ease;
+  width: 7px;
 }
 
-.appShell__adminMenu summary::after {
-  color: #67e8f9;
-  content: "v";
-  font-size: 11px;
-  margin-left: 7px;
+.appShell__adminMenu > button[aria-expanded="true"] .appShell__chevron {
+  transform: translateY(3px) rotate(225deg);
 }
 
-.appShell__adminMenu[open] summary,
-.appShell__adminMenu summary:hover,
-.appShell__adminMenu summary:focus-visible {
+.appShell__adminMenu > button:hover,
+.appShell__adminMenu > button:focus-visible {
   background: rgb(59 130 246 / 0.14);
   color: #ffffff;
   outline: none;
@@ -172,7 +178,8 @@ select:focus-visible {
 .appShell__dropdownPlaceholder {
   border-radius: 6px;
   display: block;
-  padding: 10px 11px;
+  min-height: 34px;
+  padding: 8px 10px;
 }
 
 .appShell__dropdownPlaceholder {
@@ -378,6 +385,11 @@ select:focus-visible {
   --shadow: 0 20px 60px rgb(0 0 0 / 0.34);
   --shadow-hover: 0 26px 78px rgb(0 0 0 / 0.45), 0 0 32px rgb(14 165 233 / 0.14);
   --focus: #67e8f9;
+  --radius-card: 8px;
+  --radius-control: 7px;
+  --control-height: 38px;
+  --space-page-x: 20px;
+  --space-page-y: 16px;
 }
 
 body {
@@ -386,6 +398,7 @@ body {
     radial-gradient(circle at 86% 8%, rgb(14 165 233 / 0.18), transparent 22rem),
     linear-gradient(180deg, #050811 0%, #07101e 46%, #050811 100%);
   color: var(--text);
+  font-size: 14px;
 }
 
 body::before {
@@ -401,10 +414,13 @@ body::before {
 }
 
 input,
-select {
+select,
+textarea {
   background: #08111f;
   border-color: rgba(56, 189, 248, 0.22);
+  border-radius: var(--radius-control);
   color: var(--text);
+  min-height: var(--control-height);
 }
 
 input::placeholder {
@@ -424,6 +440,10 @@ input:-webkit-autofill:focus {
   background:
     linear-gradient(90deg, #050811 0%, #0b1424 52%, #050811 100%);
   box-shadow: 0 1px 0 rgba(56, 189, 248, 0.18), 0 12px 38px rgb(0 0 0 / 0.32);
+  min-height: 56px;
+  position: sticky;
+  top: 0;
+  z-index: 30;
 }
 
 .appShell__brand {
@@ -437,7 +457,7 @@ input:-webkit-autofill:focus {
   align-items: center;
   background: linear-gradient(135deg, #22d3ee, #2563eb);
   border: 1px solid rgba(125, 211, 252, 0.82);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   box-shadow: 0 0 24px rgb(34 211 238 / 0.32);
   color: #020617;
   display: inline-flex;
@@ -448,10 +468,104 @@ input:-webkit-autofill:focus {
 }
 
 .appShell a.appShell__linkActive,
-.appShell summary.appShell__linkActive {
+.appShell__adminMenu > button.appShell__linkActive {
   background: rgb(14 165 233 / 0.18);
   border: 1px solid rgb(56 189 248 / 0.28);
   color: #ffffff;
+}
+
+.appShell a,
+.appShell button,
+.appShell__adminMenu > button {
+  min-height: 36px;
+}
+
+.appShell__adminDropdown {
+  border-radius: var(--radius-card);
+}
+
+.toastStack {
+  display: grid;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 32px));
+  position: fixed;
+  right: 18px;
+  top: 74px;
+  width: 420px;
+  z-index: 80;
+}
+
+.toast {
+  align-items: center;
+  animation: toastIn 180ms ease-out;
+  background:
+    linear-gradient(180deg, rgba(17, 27, 45, 0.98), rgba(8, 17, 31, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: var(--radius-card);
+  box-shadow: 0 22px 60px rgb(0 0 0 / 0.42);
+  color: var(--text);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 30px minmax(0, 1fr) 30px;
+  min-height: 52px;
+  padding: 10px;
+}
+
+.toast__icon {
+  align-items: center;
+  border-radius: 7px;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 1000;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+
+.toast span:nth-child(2) {
+  font-size: 13px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.toast button {
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 7px;
+  color: #cbd5e1;
+  height: 30px;
+  width: 30px;
+}
+
+.toast--success .toast__icon {
+  background: rgba(34, 197, 94, 0.14);
+  color: #86efac;
+}
+
+.toast--warning .toast__icon {
+  background: rgba(251, 146, 60, 0.15);
+  color: #fed7aa;
+}
+
+.toast--info .toast__icon {
+  background: rgba(14, 165, 233, 0.15);
+  color: #7dd3fc;
+}
+
+.toast--error .toast__icon {
+  background: rgba(244, 63, 94, 0.15);
+  color: #fecdd3;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .shiftNotice,

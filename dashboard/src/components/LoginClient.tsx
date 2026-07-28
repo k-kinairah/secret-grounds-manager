@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { adminOperatorLogin, fetchLoginOperators, quickOperatorLogin } from "@/lib/api";
+import { adminOperatorLogin, fetchLoginOperators, passwordOperatorLogin, quickOperatorLogin } from "@/lib/api";
 import type { OperatorAccess } from "@/lib/types";
 import styles from "@/app/login/login.module.css";
 
@@ -88,7 +88,11 @@ export function LoginClient() {
     setIsSubmitting(true);
     setError(null);
     try {
-      await adminOperatorLogin(adminPassword);
+      if (selectedAdmin?.user?.username === "admin") {
+        await adminOperatorLogin(adminPassword);
+      } else if (selectedAdmin) {
+        await passwordOperatorLogin(selectedAdmin.operator_id, adminPassword);
+      }
       router.replace(nextDestination());
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : "Invalid Admin password.");
@@ -139,8 +143,8 @@ export function LoginClient() {
             onSubmit={submitAdmin}
             role="dialog"
           >
-            <h2>Admin Access</h2>
-            <p>Enter the Admin password to continue.</p>
+            <h2>{selectedAdmin.user?.username === "admin" ? "Admin Access" : `${selectedAdmin.display_name} Access`}</h2>
+            <p>Enter the operator password to continue.</p>
             <label className={styles.field}>
               Password
               <input

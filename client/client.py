@@ -14,6 +14,7 @@ from client.config import (
     ENABLE_CUSTOMER_OVERLAY,
     ENABLE_LOCK_SCREEN,
     AUTOMATIC_SHUTDOWN_ON_EXPIRATION,
+    APP_VERSION,
     CUSTOMER_OVERLAY_POSITION,
     EXPIRATION_GRACE_SECONDS,
     EXPIRATION_SOUND_ENABLED,
@@ -54,6 +55,7 @@ class SecretGroundsClient:
         pc_name: str,
         heartbeat_interval: int,
         request_timeout: int,
+        display_name: str | None = None,
         lock_screen: LockScreenController | None = None,
         recovery_store: SessionRecoveryStore | None = None,
         enable_lock_screen: bool = ENABLE_LOCK_SCREEN,
@@ -63,6 +65,7 @@ class SecretGroundsClient:
     ) -> None:
         self.server_url = server_url.rstrip("/")
         self.pc_name = pc_name
+        self.display_name = display_name or pc_name
         self.heartbeat_interval = heartbeat_interval
         self.request_timeout = request_timeout
         self.session = requests.Session()
@@ -94,6 +97,7 @@ class SecretGroundsClient:
         # Keep payload creation centralized so future client metadata is easy to add.
         payload: dict[str, str | None] = {
             "pc_name": self.pc_name,
+            "display_name": self.display_name,
             "ip_address": get_local_ip(),
         }
         if include_mac:
@@ -1316,13 +1320,14 @@ def main() -> None:
 
     print(
         "Secret Grounds client attempting to connect to "
-        f"{runtime_config.server_url} as {runtime_config.pc_name}."
+        f"{runtime_config.server_url} as {runtime_config.pc_name}. Version {APP_VERSION}."
     )
     client = SecretGroundsClient(
         server_url=runtime_config.server_url,
         pc_name=runtime_config.pc_name,
-        heartbeat_interval=HEARTBEAT_INTERVAL_SECONDS,
-        request_timeout=REQUEST_TIMEOUT_SECONDS,
+        display_name=runtime_config.display_name,
+        heartbeat_interval=runtime_config.reconnect_interval_seconds,
+        request_timeout=runtime_config.request_timeout_seconds,
         enable_lock_screen=ENABLE_LOCK_SCREEN,
         enable_dev_escape=ENABLE_DEV_ESCAPE,
         open_setup_wizard=open_setup_wizard_async,
@@ -1340,13 +1345,14 @@ def register_with_server() -> None:
 
     print(
         "Secret Grounds client attempting to connect to "
-        f"{runtime_config.server_url} as {runtime_config.pc_name}."
+        f"{runtime_config.server_url} as {runtime_config.pc_name}. Version {APP_VERSION}."
     )
     client = SecretGroundsClient(
         server_url=runtime_config.server_url,
         pc_name=runtime_config.pc_name,
-        heartbeat_interval=HEARTBEAT_INTERVAL_SECONDS,
-        request_timeout=REQUEST_TIMEOUT_SECONDS,
+        display_name=runtime_config.display_name,
+        heartbeat_interval=runtime_config.reconnect_interval_seconds,
+        request_timeout=runtime_config.request_timeout_seconds,
         enable_lock_screen=ENABLE_LOCK_SCREEN,
         enable_dev_escape=ENABLE_DEV_ESCAPE,
     )

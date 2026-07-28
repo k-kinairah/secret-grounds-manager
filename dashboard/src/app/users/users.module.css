@@ -1,7 +1,7 @@
 .page {
   display: grid;
-  gap: 18px;
-  padding: 30px 28px 44px;
+  gap: 14px;
+  padding: 20px 24px 32px;
 }
 
 .header {
@@ -180,15 +180,57 @@
   border-radius: 10px;
   box-shadow: var(--shadow);
   display: grid;
-  gap: 18px;
-  padding: 18px;
+  gap: 12px;
+  padding: 14px;
 }
 
 .staffPanelHeader {
   align-items: center;
   display: flex;
+  gap: 12px;
+  justify-content: flex-start;
+}
+
+.staffPageHeader {
+  align-items: end;
+  display: flex;
   gap: 16px;
   justify-content: space-between;
+}
+
+.staffPageHeader h1 {
+  color: var(--text);
+  font-size: 32px;
+  margin: 0;
+}
+
+.staffPageHeader p {
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+
+.staffPageHeader span {
+  color: #94a3b8;
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+  margin-top: 6px;
+}
+
+.staffHeaderActions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.staffSearch input {
+  background: rgba(8, 17, 31, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 7px;
+  color: var(--text);
+  min-height: 36px;
+  min-width: 220px;
+  padding: 8px 10px;
 }
 
 .staffPanelHeader h2,
@@ -200,7 +242,7 @@
 .staffPanelHeader p,
 .staffCard p {
   color: var(--muted);
-  margin: 6px 0 0;
+  margin: 4px 0 0;
 }
 
 .staffCount {
@@ -209,9 +251,9 @@
   border-radius: 999px;
   color: #bfdbfe;
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
-  padding: 7px 10px;
+  padding: 5px 8px;
   text-transform: uppercase;
 }
 
@@ -219,6 +261,504 @@
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.staffDirectoryHeader,
+.staffDirectoryRow {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(260px, 1.6fr) minmax(132px, 0.62fr) minmax(78px, 0.28fr) minmax(190px, 0.72fr) 156px;
+}
+
+.staffDirectoryRow:has(.adminMiniBadge) {
+  background: rgba(14, 165, 233, 0.08);
+}
+
+.staffDirectoryHeader {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  padding: 0 12px;
+  text-transform: uppercase;
+}
+
+.staffDirectory {
+  display: grid;
+  gap: 6px;
+}
+
+.staffDirectoryRow {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  min-height: 52px;
+  padding: 7px 10px;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.staffDirectoryRow:hover {
+  background: rgba(14, 165, 233, 0.07);
+  border-color: rgba(56, 189, 248, 0.28);
+}
+
+.staffIdentity {
+  align-items: center;
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+}
+
+.staffOperatorCell {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.staffIdentity strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.adminMiniBadge {
+  background: rgba(59, 130, 246, 0.16);
+  border: 1px solid rgba(96, 165, 250, 0.34);
+  border-radius: 999px;
+  color: #bfdbfe;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 4px 7px;
+  white-space: nowrap;
+}
+
+.staffDirectoryRow > span:not(.staffAvatar):not(.activeBadge):not(.disabledBadge),
+.staffDirectoryRow time {
+  color: #dbeafe;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.staffDirectoryRow .activeBadge,
+.staffDirectoryRow .disabledBadge {
+  align-self: center;
+  justify-self: start;
+  width: fit-content;
+}
+
+.staffDetailsAction {
+  justify-self: start;
+  position: relative;
+}
+
+.staffDetailsAction summary {
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 7px;
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  list-style: none;
+  min-height: 30px;
+  padding: 6px 9px;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.staffDetailsAction summary::-webkit-details-marker {
+  display: none;
+}
+
+.staffDetailsAction summary:hover,
+.staffDetailsAction summary:focus-visible {
+  background: rgba(14, 165, 233, 0.14);
+  border-color: rgba(56, 189, 248, 0.38);
+  color: #f8fafc;
+  outline: none;
+}
+
+.staffDetailsAction span {
+  background: #050811;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 7px;
+  box-shadow: 0 14px 34px rgb(0 0 0 / 0.34);
+  color: #dbeafe;
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  min-width: 140px;
+  padding: 8px 10px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 5;
+}
+
+.staffRowActions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-self: start;
+  position: relative;
+}
+
+.staffRowActions .secondaryButton {
+  min-height: 30px;
+  padding: 6px 9px;
+}
+
+.staffMoreMenu {
+  position: relative;
+}
+
+.staffMoreMenu summary {
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 7px;
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  list-style: none;
+  min-height: 30px;
+  padding: 6px 9px;
+}
+
+.staffMoreMenu summary::-webkit-details-marker {
+  display: none;
+}
+
+.staffMoreMenu div {
+  background: #050811;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 8px;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 0.38);
+  display: grid;
+  gap: 4px;
+  min-width: 190px;
+  padding: 8px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 10;
+}
+
+.staffMoreMenu a,
+.staffMoreMenu button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #dbeafe;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 9px 10px;
+  text-align: left;
+  text-decoration: none;
+}
+
+.staffMoreMenu hr {
+  border: 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  margin: 4px 0;
+}
+
+.staffDangerAction {
+  color: #fecaca !important;
+}
+
+.staffMoreMenu a:hover,
+.staffMoreMenu button:hover,
+.staffMoreMenu a:focus-visible,
+.staffMoreMenu button:focus-visible,
+.staffMoreMenu summary:focus-visible {
+  background: rgba(14, 165, 233, 0.14);
+  outline: none;
+}
+
+.staffDialog {
+  background: #111827;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 0.34);
+  color: var(--text);
+  display: grid;
+  gap: 12px;
+  max-width: 520px;
+  padding: 18px;
+  width: min(520px, calc(100vw - 28px));
+}
+
+.overlay {
+  align-items: center;
+  background: rgb(2 6 23 / 0.72);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 60;
+}
+
+.passwordDialog {
+  gap: 14px;
+  max-width: 480px;
+  width: min(480px, calc(100vw - 32px));
+}
+
+.passwordDialogHeader {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.passwordDialogHeader h2 {
+  color: var(--text);
+  margin: 0;
+}
+
+.passwordDialogHeader p {
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+
+.staffCloseButton {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 7px;
+  color: #e2e8f0;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 900;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.staffCloseButton:hover,
+.staffCloseButton:focus-visible {
+  background: rgba(30, 41, 59, 0.92);
+  border-color: rgba(34, 211, 238, 0.7);
+  outline: none;
+}
+
+.passwordHelper,
+.passwordSessionNote,
+.passwordRequirements {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.passwordSessionNote {
+  color: #bfdbfe;
+}
+
+.passwordRequirements {
+  background: rgba(15, 23, 42, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+
+.passwordError {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.34);
+  border-radius: 7px;
+  color: #fecaca;
+  padding: 10px;
+}
+
+.passwordField {
+  color: var(--muted);
+  display: grid;
+  font-size: 12px;
+  font-weight: 900;
+  gap: 7px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.passwordField div {
+  align-items: center;
+  background: #08111f;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 7px;
+  display: flex;
+  min-height: 40px;
+  overflow: hidden;
+}
+
+.passwordField input {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  padding: 10px;
+}
+
+.passwordField input:focus {
+  outline: none;
+}
+
+.passwordField div:focus-within {
+  border-color: #22d3ee;
+  box-shadow: 0 0 0 3px rgb(34 211 238 / 0.16);
+}
+
+.passwordField button {
+  align-self: stretch;
+  background: rgba(15, 23, 42, 0.9);
+  border: 0;
+  border-left: 1px solid rgba(148, 163, 184, 0.2);
+  color: #bfdbfe;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0 10px;
+}
+
+.passwordField button:focus-visible,
+.passwordField button:hover {
+  background: rgba(14, 165, 233, 0.14);
+  outline: none;
+}
+
+.passwordField span {
+  color: #fecaca;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.passwordDialogActions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.staffDialogHeader {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.staffDialogHeader h2 {
+  margin: 0;
+}
+
+.staffWarning {
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 7px;
+  color: #fde68a;
+  font-size: 13px;
+  margin: 0;
+  padding: 10px;
+}
+
+.staffDrawerBackdrop {
+  background: rgb(2 6 23 / 0.64);
+  inset: 0;
+  position: fixed;
+  z-index: 50;
+}
+
+.staffActivityDrawer {
+  background: #111827;
+  border-left: 1px solid rgba(148, 163, 184, 0.26);
+  box-shadow: -24px 0 70px rgb(0 0 0 / 0.34);
+  display: grid;
+  gap: 14px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  height: 100%;
+  margin-left: auto;
+  max-width: 520px;
+  overflow: auto;
+  padding: 18px;
+  width: min(520px, 94vw);
+}
+
+.staffActivityMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.staffActivityMeta span {
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  color: #dbeafe;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 9px;
+}
+
+.staffActivityList {
+  display: grid;
+  gap: 8px;
+}
+
+.staffActivityItem,
+.staffActivityEmpty {
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  padding: 11px 12px;
+}
+
+.staffActivityItem {
+  display: grid;
+  gap: 7px;
+}
+
+.staffActivityItem div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.staffActivityItem strong {
+  color: var(--text);
+}
+
+.staffActivityItem time,
+.staffActivityItem p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.staffActivityItem span {
+  color: #bfdbfe;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.staffActivityEmpty {
+  color: var(--muted);
+  text-align: center;
+}
+
+.staffAdminSection {
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.staffAdminSection h3 {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
 }
 
 .staffCard {
@@ -257,11 +797,11 @@
   box-shadow: 0 0 24px rgb(34 211 238 / 0.24);
   color: #020617;
   display: inline-flex;
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 1000;
-  height: 44px;
+  height: 34px;
   justify-content: center;
-  width: 44px;
+  width: 34px;
 }
 
 .staffMeta {
@@ -295,7 +835,9 @@
   border-radius: 999px;
   font-size: 12px;
   font-weight: 900;
-  padding: 4px 8px;
+  line-height: 1;
+  padding: 5px 8px;
+  white-space: nowrap;
 }
 
 .activeBadge {
@@ -326,5 +868,54 @@
   .staffPanelHeader {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .staffPageHeader,
+  .staffHeaderActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .staffSearch input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .staffDirectoryHeader {
+    display: none;
+  }
+
+  .staffDirectoryRow {
+    align-items: start;
+    grid-template-columns: 1fr auto;
+    padding: 10px;
+  }
+
+  .staffOperatorCell {
+    grid-column: 1 / 3;
+  }
+
+  .staffDirectoryRow > span:not(.staffAvatar),
+  .staffDirectoryRow time {
+    grid-column: 1 / 3;
+  }
+
+  .staffDirectoryRow .activeBadge,
+  .staffDirectoryRow .disabledBadge {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .staffDetailsAction {
+    grid-column: 2 / 4;
+  }
+
+  .staffRowActions {
+    grid-column: 1 / 3;
+  }
+
+  .staffDetailsAction span {
+    left: 0;
+    right: auto;
   }
 }

@@ -10,13 +10,22 @@ import {
   fetchCurrentUser,
   fetchDashboardTodaySales,
   fetchLoginOperators,
+  fetchLiveActivity,
   fetchPcLayouts,
   fetchRates,
   fetchSalesReport,
+  fetchSystemBackups,
+  fetchSystemClients,
+  fetchSystemDatabase,
+  fetchSystemHealth,
+  fetchSystemInfo,
+  fetchSystemLogs,
+  fetchSystemStorage,
   fetchUsers,
   forceEndSession,
   getApiBaseUrl,
   getSalesExportUrl,
+  getSystemBackupDownloadUrl,
   login,
   logout,
   quickOperatorLogin,
@@ -24,6 +33,9 @@ import {
   resetMemberPin,
   resetAdminSettings,
   resetUserPassword,
+  createSystemBackup,
+  deleteSystemBackup,
+  restoreSystemBackup,
   sendPcMessage,
   sendPowerCommand,
   startMemberSession,
@@ -36,6 +48,11 @@ import {
   updateUser,
   updateUserStatus
 } from "../lib/api";
+import {
+  activityKey,
+  nextUnreadCount,
+  shouldToastForActivity
+} from "../lib/activity";
 import { calculateCashChange, isPaymentInputValid } from "../lib/paymentSelection";
 import {
   getPcActionAvailability,
@@ -56,7 +73,7 @@ import {
   minutesToSeconds,
   secondsFromStartedAt
 } from "../lib/time";
-import type { PcSummary, RateProfile, RateProfileInput } from "../lib/types";
+import type { OperatorActivityRecord, PcSummary, RateProfile, RateProfileInput } from "../lib/types";
 
 function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
   return {
@@ -107,6 +124,22 @@ function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
     member_balance_before_seconds: null,
     member_balance_after_seconds: null,
     mac_address: null,
+    ...overrides
+  };
+}
+
+function makeActivity(overrides: Partial<OperatorActivityRecord> = {}): OperatorActivityRecord {
+  return {
+    timestamp: "2026-07-28T05:00:00+00:00",
+    operator_id: "operator_admin",
+    operator_name: "Admin",
+    action: "Collected payment",
+    category: "payment",
+    pc_name: "PC-01",
+    customer: null,
+    amount: "20.00",
+    payment_method: "cash",
+    result: "Completed",
     ...overrides
   };
 }
@@ -300,6 +333,46 @@ assert.equal(
   toCashierMessage("Start session command failed: timeout"),
   "The client did not complete the command. Check the PC connection and try again."
 );
+
+const initialActivity = makeActivity();
+const laterActivity = makeActivity({
+  action: "Started session",
+  amount: null,
+  category: "session",
+  timestamp: "2026-07-28T05:01:00+00:00"
+});
+assert.equal(
+  nextUnreadCount({
+    hasLoaded: false,
+    isOpen: false,
+    previousKeys: new Set(),
+    nextActivity: [initialActivity],
+    unreadCount: 0
+  }),
+  0
+);
+assert.equal(
+  nextUnreadCount({
+    hasLoaded: true,
+    isOpen: false,
+    previousKeys: new Set([activityKey(initialActivity)]),
+    nextActivity: [laterActivity, initialActivity],
+    unreadCount: 1
+  }),
+  2
+);
+assert.equal(
+  nextUnreadCount({
+    hasLoaded: true,
+    isOpen: true,
+    previousKeys: new Set([activityKey(initialActivity)]),
+    nextActivity: [laterActivity, initialActivity],
+    unreadCount: 3
+  }),
+  0
+);
+assert.equal(shouldToastForActivity(initialActivity), true);
+assert.equal(shouldToastForActivity(makeActivity({ action: "Operator changed", amount: null, category: "operator" })), false);
 
 const renderedRate = {
   name: "1 Hour",
@@ -498,6 +571,17 @@ async function runAsyncAssertions() {
       amount: "20.00",
       cash_received: "50.00"
     });
+    await fetchSystemHealth();
+    await fetchSystemDatabase();
+    await fetchSystemBackups();
+    await createSystemBackup();
+    await restoreSystemBackup("secretgrounds_2026-07-29_143500.db");
+    await deleteSystemBackup("secretgrounds_2026-07-29_143500.db");
+    await fetchSystemStorage();
+    await fetchSystemInfo();
+    await fetchSystemLogs();
+    await fetchSystemClients();
+    await fetchLiveActivity();
 
     assert.deepEqual(
       fetchCalls.map((call) => ({ method: call.method, url: call.url })),
@@ -532,7 +616,18 @@ async function runAsyncAssertions() {
         { method: "POST", url: "http://127.0.0.1:8000/pcs/PC-01/power/sleep" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/add-time" },
         { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/force-end" },
-        { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/payments" }
+        { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/payments" },
+        { method: "GET", url: "http://127.0.0.1:8000/system/health" },
+        { method: "GET", url: "http://127.0.0.1:8000/system/database" },
+        { method: "GET", url: "http://127.0.0.1:8000/system/backups" },
+        { method: "POST", url: "http://127.0.0.1:8000/system/backup" },
+        { method: "POST", url: "http://127.0.0.1:8000/system/restore" },
+        { method: "DELETE", url: "http://127.0.0.1:8000/system/backups/secretgrounds_2026-07-29_143500.db?confirm=true" },
+        { method: "GET", url: "http://127.0.0.1:8000/system/storage" },
+        { method: "GET", url: "http://127.0.0.1:8000/system/info" },
+        { method: "GET", url: "http://127.0.0.1:8000/system/logs" },
+        { method: "GET", url: "http://127.0.0.1:8000/system/clients" },
+        { method: "GET", url: "http://127.0.0.1:8000/activity?limit=60" }
       ]
     );
     assert.equal(fetchCalls.every((call) => call.credentials === "include"), true);
@@ -593,6 +688,14 @@ async function runAsyncAssertions() {
       amount: "20.00",
       cash_received: "50.00"
     });
+    assert.deepEqual(fetchCalls[35].body, {
+      filename: "secretgrounds_2026-07-29_143500.db",
+      confirm: true
+    });
+    assert.equal(
+      getSystemBackupDownloadUrl("secretgrounds_2026-07-29_143500.db"),
+      "http://127.0.0.1:8000/system/backups/secretgrounds_2026-07-29_143500.db/download"
+    );
     assert.equal(
       getSalesExportUrl({ period: "custom", startDate: "2026-07-01", endDate: "2026-07-31" }),
       "http://127.0.0.1:8000/sales/export.csv?period=custom&start_date=2026-07-01&end_date=2026-07-31"
@@ -664,6 +767,8 @@ async function runAsyncAssertions() {
     const dashboardCss = readFileSync("src/app/page.module.css", "utf8");
     assert.match(dashboardCss, /\.monitorTileSelected/);
     assert.match(dashboardCss, /\.monitorGrid/);
+    assert.match(dashboardCss, /repeat\(auto-fill, minmax\(150px, 176px\)\)/);
+    assert.match(dashboardCss, /justify-content: start/);
     assert.match(dashboardCss, /\.dashboardWorkspace/);
     assert.match(dashboardCss, /\.selectedPcRail/);
     assert.match(dashboardCss, /\.noSelectionPanel/);
@@ -677,7 +782,7 @@ async function runAsyncAssertions() {
     assert.match(dashboardCss, /width: min\(980px, 92vw\)/);
     assert.match(dashboardCss, /max-height: 88vh/);
     assert.match(dashboardCss, /\.pcControlGrid/);
-    assert.match(dashboardCss, /grid-template-columns: minmax\(0, 1\.05fr\) minmax\(320px, 0\.95fr\)/);
+    assert.match(dashboardCss, /grid-template-columns: minmax\(0, 1fr\) minmax\(340px, 400px\)/);
     assert.match(dashboardCss, /backdrop-filter: none/);
 
     const pcDetailsSource = readFileSync("src/components/PcDetailsPanel.tsx", "utf8");
@@ -716,7 +821,10 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(dashboardSource, /Sino ang naka-bantay ngayon/);
     assert.doesNotMatch(dashboardSource, /Current on-duty operator/);
     assert.match(dashboardSource, /fetchDashboardTodaySales/);
-    assert.match(dashboardSource, /Select a PC to view controls/);
+    assert.match(dashboardSource, /displayAreaLabel/);
+    assert.match(dashboardSource, /SECRET GROUNDS SHOP/);
+    assert.match(dashboardSource, /Select a PC/);
+    assert.match(dashboardSource, /Choose a station to view session, billing, messaging, and power controls\./);
     assert.match(dashboardSource, /Register First PC/);
     assert.match(dashboardSource, /variant="dock"/);
 
@@ -733,6 +841,14 @@ async function runAsyncAssertions() {
     assert.match(membersSource, /PIN not set/);
     assert.match(membersSource, /createError/);
     assert.match(membersSource, /confirmingStatusMember/);
+    assert.match(membersSource, /createPortal/);
+    assert.match(membersSource, /memberFloatingMenu/);
+    assert.match(membersSource, /aria-haspopup="menu"/);
+    assert.match(membersSource, /aria-expanded/);
+    assert.match(membersSource, /Escape/);
+    assert.match(membersSource, /memberMenuTriggerRefs\.current\.get\(menuMemberId\)\?\.focus/);
+    assert.match(membersSource, /window\.innerHeight - rect\.bottom/);
+    assert.match(membersSource, /window\.addEventListener\("scroll"/);
     assert.match(membersSource, /This member will no longer be available for new sessions/);
     assert.doesNotMatch(membersSource, /phone_number \?\? "None"/);
 
@@ -741,33 +857,115 @@ async function runAsyncAssertions() {
     assert.match(membersCss, /\.memberModal/);
     assert.match(membersCss, /\.memberDetailModal/);
     assert.match(membersCss, /\.memberDialogMessage/);
-    assert.match(membersCss, /\.memberMoreMenu/);
+    assert.match(membersCss, /\.memberMoreButton/);
+    assert.match(membersCss, /\.memberFloatingMenu/);
+    assert.match(membersCss, /position: fixed/);
+    assert.match(membersCss, /z-index: 80/);
     assert.match(membersCss, /@media \(max-width: 760px\)/);
     assert.match(membersCss, /content: attr\(data-label\)/);
 
     const authShellSource = readFileSync("src/components/AuthShell.tsx", "utf8");
     assert.match(authShellSource, /isAdminOperator/);
     assert.match(authShellSource, /appShell__adminMenu/);
+    assert.match(authShellSource, /ToastProvider/);
     assert.match(authShellSource, /Admin/);
     assert.match(authShellSource, /Operator Activity/);
     assert.match(authShellSource, /Staff/);
     assert.match(authShellSource, /Sales/);
     assert.match(authShellSource, /Settings/);
-    assert.match(authShellSource, /href="\/settings"/);
+    assert.match(authShellSource, /System/);
+    assert.match(authShellSource, /href: "\/settings"/);
+    assert.match(authShellSource, /href: "\/system"/);
     assert.match(authShellSource, /href="\/rates"/);
+    assert.match(authShellSource, /aria-expanded/);
+    assert.match(authShellSource, /aria-haspopup="menu"/);
+    assert.match(authShellSource, /appShell__chevron/);
+    assert.match(authShellSource, /pointerdown/);
+    assert.match(authShellSource, /Escape/);
+    assert.match(authShellSource, /adminButtonRef\.current\?\.focus/);
+    assert.match(authShellSource, /aria-current/);
+    assert.match(authShellSource, /role="menuitem"/);
+    assert.match(authShellSource, /setIsAdminMenuOpen\(false\)/);
     assert.doesNotMatch(authShellSource, /href="\/shifts">Shifts/);
     assert.doesNotMatch(authShellSource, /href="\/users">Users/);
 
     const operatorsSource = readFileSync("src/components/OperatorsManager.tsx", "utf8");
-    assert.match(operatorsSource, /staffGrid/);
-    assert.match(operatorsSource, /staffCard/);
+    assert.match(operatorsSource, /Manage who can operate Secret Grounds/);
+    assert.match(operatorsSource, /Add Operator/);
+    assert.match(operatorsSource, /Search operators/);
+    assert.match(operatorsSource, /Administrator/);
+    assert.match(operatorsSource, /staffDirectoryRow/);
+    assert.match(operatorsSource, /Password Required/);
     assert.match(operatorsSource, /Quick Access/);
+    assert.match(operatorsSource, /Never signed in/);
+    assert.match(operatorsSource, /createAdminOperator/);
+    assert.match(operatorsSource, /updateAdminOperator/);
+    assert.match(operatorsSource, /disableAdminOperator/);
+    assert.match(operatorsSource, /enableAdminOperator/);
+    assert.match(operatorsSource, /archiveAdminOperator/);
+    assert.match(operatorsSource, /resetAdminOperatorPassword/);
+    assert.match(operatorsSource, /signOutAdminOperator/);
+    assert.match(operatorsSource, /active_session_count > 0/);
+    assert.match(operatorsSource, /Sign Out Operator/);
+    assert.doesNotMatch(operatorsSource, /Reset Quick Access Session/);
+    assert.doesNotMatch(operatorsSource, /Reset Password/);
+    assert.match(operatorsSource, /Change Password/);
+    assert.match(operatorsSource, /View Activity/);
+    assert.match(operatorsSource, /staffActivityDrawer/);
+    assert.match(operatorsSource, /fetchOperatorActivity\(\{ dateScope: "all", operatorId: operator\.operator_id \}\)/);
+    assert.doesNotMatch(operatorsSource, /href=\{`\/operator-activity/);
+    assert.match(operatorsSource, /passwordDialog/);
+    assert.match(operatorsSource, /Change Password<\/h2>/);
+    assert.match(operatorsSource, /Set a new password for \{operator\.display_name\}\./);
+    assert.match(operatorsSource, /The current password cannot be viewed\. Saving will replace it with the new password\./);
+    assert.match(operatorsSource, /At least 8 characters\./);
+    assert.match(operatorsSource, /showPassword/);
+    assert.match(operatorsSource, /\{showPassword \? "Hide" : "Show"\}/);
+    assert.match(operatorsSource, /disabled=\{!canSave\}/);
+    assert.match(operatorsSource, /Password is required\./);
+    assert.match(operatorsSource, /Passwords do not match\./);
+    assert.match(operatorsSource, /You will be signed out after changing your password\./);
+    assert.match(operatorsSource, /Customer PC sessions and billing are not affected/);
+    assert.match(operatorsSource, /aria-modal="true"/);
+    assert.match(operatorsSource, /event\.key === "Escape"/);
+    assert.match(operatorsSource, /Archive Operator/);
+    assert.match(operatorsSource, /operator\.is_protected/);
+    assert.doesNotMatch(operatorsSource, /Technical details/);
+
+    const operatorsCss = readFileSync("src/app/users/users.module.css", "utf8");
+    assert.match(operatorsCss, /\.staffDirectoryRow/);
+    assert.match(operatorsCss, /\.staffPageHeader/);
+    assert.match(operatorsCss, /\.staffHeaderActions/);
+    assert.match(operatorsCss, /\.adminMiniBadge/);
+    assert.match(operatorsCss, /\.staffRowActions/);
+    assert.match(operatorsCss, /\.staffMoreMenu/);
+    assert.match(operatorsCss, /\.staffDialog/);
+    assert.match(operatorsCss, /\.staffActivityDrawer/);
+    assert.match(operatorsCss, /\.staffDrawerBackdrop/);
+    assert.match(operatorsCss, /\.staffDangerAction/);
+    assert.match(operatorsCss, /\.overlay/);
+    assert.match(operatorsCss, /align-items: center/);
+    assert.match(operatorsCss, /\.passwordDialog/);
+    assert.match(operatorsCss, /\.staffCloseButton/);
+    assert.match(operatorsCss, /\.passwordField/);
+    assert.match(operatorsCss, /\.passwordDialogActions/);
+    assert.match(operatorsCss, /min-height: 52px/);
+    assert.match(operatorsCss, /width: fit-content/);
+    assert.match(operatorsCss, /grid-template-columns: minmax\(260px, 1\.6fr\) minmax\(132px, 0\.62fr\) minmax\(78px, 0\.28fr\) minmax\(190px, 0\.72fr\) 156px/);
+    assert.match(operatorsCss, /@media \(max-width: 960px\)/);
+    assert.match(operatorsCss, /grid-template-columns: 1fr auto/);
 
     const operatorActivitySource = readFileSync("src/components/OperatorActivity.tsx", "utf8");
-    assert.match(operatorActivitySource, /compactFilters/);
-    assert.match(operatorActivitySource, /No activity yet today/);
-    assert.match(operatorActivitySource, /Session started/);
+    assert.match(operatorActivitySource, /summaryStrip/);
+    assert.match(operatorActivitySource, /Operators Active/);
+    assert.match(operatorActivitySource, /humanizeAction/);
+    assert.match(operatorActivitySource, /activityContext/);
+    assert.match(operatorActivitySource, /activityAmount/);
+    assert.match(operatorActivitySource, /return item\.amount \?[\s\S]*: "-"/);
+    assert.match(operatorActivitySource, /Operator selected/);
     assert.match(operatorActivitySource, /Payment collected/);
+    assert.match(operatorActivitySource, /No operator activity found/);
+    assert.match(operatorActivitySource, /View Details/);
 
     const settingsPageSource = readFileSync("src/app/settings/page.tsx", "utf8");
     assert.match(settingsPageSource, /Admin Settings/);
@@ -789,6 +987,125 @@ async function runAsyncAssertions() {
     assert.match(settingsCss, /\.categoryNav/);
     assert.match(settingsCss, /\.switchField/);
     assert.match(settingsCss, /color: #f8fafc/);
+
+    const systemPageSource = readFileSync("src/app/system/page.tsx", "utf8");
+    assert.match(systemPageSource, /Admin System/);
+    assert.match(systemPageSource, /SystemManager/);
+
+    const systemSource = readFileSync("src/components/SystemManager.tsx", "utf8");
+    assert.match(systemSource, /fetchSystemHealth/);
+    assert.match(systemSource, /createSystemBackup/);
+    assert.match(systemSource, /restoreSystemBackup/);
+    assert.match(systemSource, /deleteSystemBackup/);
+    assert.match(systemSource, /StatusCard/);
+    assert.match(systemSource, /ActivityFeed/);
+    assert.match(systemSource, /ActivityDrawerTrigger/);
+    assert.match(systemSource, /limit=\{10\}/);
+    assert.match(systemSource, /Restoring will replace the current database/);
+    assert.match(systemSource, /Client Health/);
+    assert.match(systemSource, /Recent Logs/);
+    assert.match(systemSource, /Schema Version/);
+    assert.match(systemSource, /Not versioned/);
+    assert.match(systemSource, /No backups yet/);
+    assert.match(systemSource, /Never connected/);
+    assert.match(systemSource, /Not reported/);
+    assert.match(systemSource, /Last known/);
+    assert.match(systemSource, /humanizeEvent/);
+    assert.match(systemSource, /cleanLogMessage/);
+
+    const activityFeedSource = readFileSync("src/components/ActivityFeed.tsx", "utf8");
+    assert.match(activityFeedSource, /fetchLiveActivity/);
+    assert.match(activityFeedSource, /activityRow/);
+    assert.match(activityFeedSource, /pushToast/);
+    assert.match(activityFeedSource, /memo/);
+    assert.match(activityFeedSource, /ActivityDrawerTrigger/);
+    assert.match(activityFeedSource, /aria-expanded/);
+    assert.match(activityFeedSource, /role="dialog"/);
+    assert.match(activityFeedSource, /Escape/);
+    assert.match(activityFeedSource, /triggerRef\.current\?\.focus/);
+    assert.match(activityFeedSource, /nextUnreadCount/);
+    assert.match(activityFeedSource, /toastedKeysRef/);
+    assert.match(activityFeedSource, /shouldToastForActivity/);
+
+    const toastSource = readFileSync("src/components/ToastProvider.tsx", "utf8");
+    assert.match(toastSource, /toastStack/);
+    assert.match(toastSource, /success/);
+    assert.match(toastSource, /warning/);
+    assert.match(toastSource, /error/);
+
+    const statusCardSource = readFileSync("src/components/StatusCard.tsx", "utf8");
+    assert.match(statusCardSource, /statusCardIcon/);
+    assert.match(statusCardSource, /memo/);
+
+    const dashboardClientSource = readFileSync("src/components/DashboardClient.tsx", "utf8");
+    assert.match(dashboardClientSource, /ActivityDrawerTrigger/);
+    assert.doesNotMatch(dashboardClientSource, /<ActivityFeed/);
+    assert.match(dashboardClientSource, /pushToast/);
+    assert.ok(
+      dashboardClientSource.indexOf("<DashboardSummary") < dashboardClientSource.indexOf("dashboardWorkspace")
+    );
+
+    const pageCss = readFileSync("src/app/page.module.css", "utf8");
+    assert.match(pageCss, /\.statusCard/);
+    assert.match(pageCss, /\.activityPanel/);
+    assert.match(pageCss, /\.activityTrigger/);
+    assert.match(pageCss, /\.activityDrawer/);
+    assert.match(pageCss, /\.activityDrawerBackdrop/);
+    assert.match(pageCss, /@media \(max-width: 520px\)/);
+    assert.match(pageCss, /@keyframes activityIn/);
+    assert.match(pageCss, /@keyframes drawerSlideIn/);
+
+    const globalsSource = readFileSync("src/app/globals.css", "utf8");
+    assert.match(globalsSource, /--radius-card/);
+    assert.match(globalsSource, /\.toastStack/);
+    assert.match(globalsSource, /@keyframes toastIn/);
+    assert.match(globalsSource, /\.appShell__adminMenu > button/);
+    assert.match(globalsSource, /\.appShell__chevron/);
+
+    const systemCss = readFileSync("src/app/system/system.module.css", "utf8");
+    assert.match(systemCss, /\.logsPanel/);
+    assert.match(systemCss, /\.emptyBackupState/);
+    assert.match(systemCss, /position: sticky/);
+    assert.match(systemCss, /rgba\(8, 17, 31/);
+
+    const historyPageSource = readFileSync("src/app/history/page.tsx", "utf8");
+    assert.match(historyPageSource, /Review completed, active, and settled computer sessions\./);
+
+    const historySource = readFileSync("src/components/HistoryTable.tsx", "utf8");
+    assert.match(historySource, /pageSize = 25/);
+    assert.match(historySource, /summaryStrip/);
+    assert.match(historySource, /Clear Filters/);
+    assert.match(historySource, /View Details/);
+    assert.match(historySource, /readableDuration/);
+    assert.match(historySource, /historyCards/);
+    assert.match(historySource, /role="dialog"/);
+    assert.doesNotMatch(historySource, /Original|Added Amount|Payment Status/);
+
+    const historyCss = readFileSync("src/app/history/history.module.css", "utf8");
+    assert.match(historyCss, /\.summaryStrip/);
+    assert.match(historyCss, /\.filters/);
+    assert.match(historyCss, /\.historyCards/);
+    assert.match(historyCss, /\.pagination/);
+    assert.match(historyCss, /@media \(max-width: 760px\)/);
+
+    const remoteCommandsSource = readFileSync("src/app/remote-commands/page.tsx", "utf8");
+    assert.match(remoteCommandsSource, /Review power, Wake-on-LAN, message, and announcement commands sent to shop PCs\./);
+    assert.match(remoteCommandsSource, /Wake PC/);
+    assert.match(remoteCommandsSource, /Send Message/);
+    assert.match(remoteCommandsSource, /Shut Down/);
+    assert.match(remoteCommandsSource, /Announcement/);
+    assert.match(remoteCommandsSource, /Wake packet sent/);
+    assert.match(remoteCommandsSource, /Message displayed/);
+    assert.match(remoteCommandsSource, /Command accepted/);
+    assert.match(remoteCommandsSource, /Failure reason/);
+    assert.match(remoteCommandsSource, /Not applicable/);
+    assert.match(remoteCommandsSource, /Forced/);
+    assert.match(remoteCommandsSource, /selectedCommand\.forced \? "Yes" : "No"/);
+    assert.match(remoteCommandsSource, /Operator note/);
+    assert.match(remoteCommandsSource, /View Details/);
+    assert.match(remoteCommandsSource, /pageSize = 25/);
+    assert.match(remoteCommandsSource, /No remote commands found/);
+    assert.doesNotMatch(remoteCommandsSource, /failure_reason \?\? command\.client_response/);
 
     const salesSource = readFileSync("src/components/SalesManager.tsx", "utf8");
     assert.match(salesSource, /Total Sales/);
