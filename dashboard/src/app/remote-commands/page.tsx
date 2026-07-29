@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import styles from "@/app/history/history.module.css";
+import { PageTitleIcon } from "@/components/PageTitleIcon";
 import { fetchRemoteCommands } from "@/lib/api";
 import { formatDateTime } from "@/lib/time";
 import type { RemoteCommandRecord, RemoteCommandStatus, RemoteCommandType } from "@/lib/types";
@@ -186,9 +187,12 @@ export default function RemoteCommandsPage() {
   return (
     <main className={styles.page}>
       <header className={styles.topBar}>
-        <div>
-          <h1>Remote Commands</h1>
-          <p>Review power, Wake-on-LAN, message, and announcement commands sent to shop PCs.</p>
+        <div className="pageTitleLockup">
+          <PageTitleIcon name="terminal" />
+          <div>
+            <h1>Remote Commands</h1>
+            <p>Review power, Wake-on-LAN, message, and announcement commands sent to shop PCs.</p>
+          </div>
         </div>
       </header>
 

@@ -2,8 +2,8 @@
   display: grid;
   gap: 16px;
   margin: 0 auto;
-  max-width: 1680px;
-  padding: 30px 28px 44px;
+  max-width: var(--app-page-max-width);
+  padding: var(--app-page-padding);
 }
 
 .header {
@@ -385,7 +385,7 @@
 
 @media (max-width: 760px) {
   .page {
-    padding: 24px 16px 36px;
+    padding: var(--app-page-padding-mobile);
   }
 
   .header {

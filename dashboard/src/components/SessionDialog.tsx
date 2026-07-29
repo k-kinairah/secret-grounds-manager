@@ -84,9 +84,12 @@ export function SessionDialog({
         if (!isMounted) {
           return;
         }
-        setMembers(nextMembers.filter((member) => member.status === "active"));
-        if (!selectedMemberId && nextMembers[0]) {
-          setSelectedMemberId(nextMembers[0].member_id);
+        const playableMembers = nextMembers.filter(
+          (member) => member.status === "active" && !member.requires_account_setup && member.username
+        );
+        setMembers(playableMembers);
+        if (!selectedMemberId && playableMembers[0]) {
+          setSelectedMemberId(playableMembers[0].member_id);
         }
       })
       .catch(() => {
@@ -118,7 +121,8 @@ export function SessionDialog({
     if (activeTab === "member") {
       if (
         !selectedMember ||
-        (selectedMember.has_pin && (memberPin.length < 4 || memberPin.length > 6)) ||
+        memberPin.length < 4 ||
+        memberPin.length > 6 ||
         (useMemberCap && memberDurationSeconds <= 0) ||
         memberBalanceAfter === null ||
         memberBalanceAfter < 0
@@ -127,9 +131,10 @@ export function SessionDialog({
       }
       onConfirm({
         sessionMode: "member_balance",
+        memberUsername: selectedMember.username ?? "",
         memberId: selectedMember.member_id,
         durationSeconds: useMemberCap ? memberDurationSeconds : undefined,
-        memberPin: selectedMember.has_pin ? memberPin : undefined
+        memberPin
       });
       return;
     }
@@ -223,40 +228,38 @@ export function SessionDialog({
         ) : activeTab === "member" ? (
           <div className={styles.amountPanel} role="tabpanel">
             <label className={styles.field}>
-              Search member
+              Search username
               <input
                 onChange={(event) => setMemberQuery(event.target.value)}
-                placeholder="Code, name, or phone"
+                placeholder="Username, display name, or phone"
                 value={memberQuery}
               />
             </label>
             <label className={styles.field}>
-              Member
+              Member username
               <select
                 onChange={(event) => setSelectedMemberId(event.target.value)}
                 value={selectedMemberId}
               >
                 {members.map((member) => (
                   <option key={member.member_id} value={member.member_id}>
-                    {member.member_code} - {member.full_name} ({formatNaturalDuration(member.time_balance_seconds)})
+                    {member.username} - {member.full_name} ({formatNaturalDuration(member.time_balance_seconds)})
                   </option>
                 ))}
               </select>
             </label>
-            {selectedMember?.has_pin ? (
-              <label className={styles.field}>
-                Member PIN
-                <input
-                  inputMode="numeric"
-                  maxLength={6}
-                  minLength={4}
-                  onChange={(event) => setMemberPin(event.target.value)}
-                  placeholder="4-6 digits"
-                  type="password"
-                  value={memberPin}
-                />
-              </label>
-            ) : null}
+            <label className={styles.field}>
+              Member PIN
+              <input
+                inputMode="numeric"
+                maxLength={6}
+                minLength={4}
+                onChange={(event) => setMemberPin(event.target.value)}
+                placeholder="4-6 digits"
+                type="password"
+                value={memberPin}
+              />
+            </label>
             <div className={styles.amountPreview}>
               <span>Member Open Time</span>
               <strong>Only the time actually used will be deducted.</strong>

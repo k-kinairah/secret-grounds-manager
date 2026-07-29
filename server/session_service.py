@@ -203,10 +203,15 @@ class SessionService:
             if request.payment is not None and self.billing_service is not None:
                 self.billing_service.validate_payment_for_amount(request.payment, amount)
         elif request.session_mode == "member_balance":
-            if self.member_repository is None or request.member_id is None:
+            if self.member_repository is None:
                 raise HTTPException(status_code=400, detail="Member is required")
-            member = self.member_repository.require_usable_member(request.member_id)  # type: ignore[attr-defined]
-            self.member_repository.verify_member_pin_if_required(member.member_id, request.member_pin)  # type: ignore[attr-defined]
+            if request.member_username:
+                member = self.member_repository.require_usable_member_by_username(request.member_username)  # type: ignore[attr-defined]
+            elif request.member_id is not None:
+                member = self.member_repository.require_usable_member(request.member_id)  # type: ignore[attr-defined]
+            else:
+                raise HTTPException(status_code=400, detail="Member username is required")
+            self.member_repository.verify_member_pin(member.member_id, request.member_pin)  # type: ignore[attr-defined]
             member_name_snapshot = member.full_name
             member_open_play = request.duration_seconds is None
             duration_seconds = request.duration_seconds or member.time_balance_seconds
@@ -230,8 +235,8 @@ class SessionService:
             duration_seconds=duration_seconds,
             amount=amount,
             payment_json=payment_to_json(request.payment),
-            member_id=request.member_id,
-            member_pin=request.member_pin,
+            member_id=member.member_id if request.session_mode == "member_balance" else request.member_id,
+            member_pin=None,
             member_name_snapshot=member_name_snapshot,
             member_open_play=member_open_play,
             prepared_by_user_id=actor_user_id,
@@ -1225,10 +1230,11 @@ class SessionService:
     async def start_member_session(
         self,
         pc_name: str,
-        member_id: str,
+        member_username: str | None,
         duration_seconds: int | None,
         member_pin: str | None = None,
         actor_user_id: str | None = None,
+        member_id: str | None = None,
     ) -> SessionCommandResponse:
         if self.member_repository is None:
             raise HTTPException(status_code=500, detail="Member service is unavailable")
@@ -1243,8 +1249,13 @@ class SessionService:
                 detail=f"{cleaned_pc_name} already has an active session",
             )
 
-        member = self.member_repository.require_usable_member(member_id)  # type: ignore[attr-defined]
-        self.member_repository.verify_member_pin_if_required(member.member_id, member_pin)  # type: ignore[attr-defined]
+        if member_username:
+            member = self.member_repository.require_usable_member_by_username(member_username)  # type: ignore[attr-defined]
+        elif member_id is not None:
+            member = self.member_repository.require_usable_member(member_id)  # type: ignore[attr-defined]
+        else:
+            raise HTTPException(status_code=400, detail="Member username is required")
+        self.member_repository.verify_member_pin(member.member_id, member_pin)  # type: ignore[attr-defined]
         session_id = str(uuid4())
         reserved_seconds = duration_seconds or member.time_balance_seconds
         if reserved_seconds <= 0:

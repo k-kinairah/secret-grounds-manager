@@ -1086,6 +1086,7 @@ def initialize_database() -> None:
             )
             """
         )
+        connection.execute("UPDATE prepared_sessions SET member_pin = NULL WHERE member_pin IS NOT NULL")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS operator_state (
@@ -1198,9 +1199,14 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS members (
                 member_id TEXT PRIMARY KEY,
                 member_code TEXT NOT NULL UNIQUE,
+                username TEXT,
+                username_normalized TEXT,
                 full_name TEXT NOT NULL,
                 phone_number TEXT,
                 pin_hash TEXT,
+                requires_account_setup INTEGER NOT NULL DEFAULT 1,
+                pin_failed_attempts INTEGER NOT NULL DEFAULT 0,
+                pin_locked_until TEXT,
                 status TEXT NOT NULL CHECK (status IN ('active', 'inactive')),
                 time_balance_seconds INTEGER NOT NULL CHECK (time_balance_seconds >= 0),
                 joined_at TEXT NOT NULL,
@@ -1213,6 +1219,30 @@ def initialize_database() -> None:
             """
         )
         add_column_if_missing(connection, "members", "pin_hash", "TEXT")
+        add_column_if_missing(connection, "members", "username", "TEXT")
+        add_column_if_missing(connection, "members", "username_normalized", "TEXT")
+        add_column_if_missing(connection, "members", "requires_account_setup", "INTEGER NOT NULL DEFAULT 1")
+        add_column_if_missing(connection, "members", "pin_failed_attempts", "INTEGER NOT NULL DEFAULT 0")
+        add_column_if_missing(connection, "members", "pin_locked_until", "TEXT")
+        connection.execute(
+            """
+            UPDATE members
+            SET username_normalized = LOWER(TRIM(username))
+            WHERE username IS NOT NULL
+              AND TRIM(username) <> ''
+              AND (username_normalized IS NULL OR username_normalized = '')
+            """
+        )
+        connection.execute(
+            """
+            UPDATE members
+            SET requires_account_setup = CASE
+                WHEN username_normalized IS NULL OR username_normalized = '' OR pin_hash IS NULL OR pin_hash = ''
+                THEN 1
+                ELSE 0
+            END
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS member_time_transactions (
@@ -1316,8 +1346,15 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_members_search
-            ON members (member_code, full_name, phone_number)
+            CREATE INDEX IF NOT EXISTS idx_members_identity_search
+            ON members (member_code, username, username_normalized, full_name, phone_number)
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_members_username_normalized
+            ON members (username_normalized)
+            WHERE username_normalized IS NOT NULL AND username_normalized <> ''
             """
         )
         connection.execute(

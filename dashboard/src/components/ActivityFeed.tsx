@@ -7,7 +7,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent
+  type KeyboardEvent,
+  type ReactNode
 } from "react";
 import { fetchLiveActivity } from "@/lib/api";
 import type { OperatorActivityRecord } from "@/lib/types";
@@ -177,7 +178,7 @@ export function ActivityFeed({
   );
 }
 
-export function ActivityDrawerTrigger({ label = "Activity" }: { label?: string }) {
+export function ActivityDrawerTrigger({ icon = <span aria-hidden="true">AC</span>, label = "Activity" }: { icon?: ReactNode; label?: string }) {
   const [isOpen, setIsOpen] = useState(false);
   const [activeFilter, setActiveFilter] = useState<(typeof filterOptions)[number]["label"]>("All");
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -253,7 +254,7 @@ export function ActivityDrawerTrigger({ label = "Activity" }: { label?: string }
         ref={triggerRef}
         type="button"
       >
-        <span aria-hidden="true">AC</span>
+        {icon}
         <span>{label}</span>
         {unreadCount > 0 ? (
           <strong aria-label={`${displayedUnread} unread activity events`}>{displayedUnread}</strong>

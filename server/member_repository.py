@@ -1,5 +1,6 @@
+import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -37,13 +38,38 @@ def normalize_code(value: str) -> str:
     return value.strip().upper()
 
 
+def normalize_username(value: str) -> str:
+    return value.strip().casefold()
+
+
+def clean_display_name(value: str | None) -> str | None:
+    display_name = (value or "").strip()
+    return display_name or None
+
+
+def display_name_for(username: str | None, display_name: str | None, member_code: str) -> str:
+    return display_name or username or member_code
+
+
 def row_to_member(row: Any) -> MemberRecord:
+    keys = set(row.keys())
+    username = row["username"] if "username" in keys else None
+    stored_display_name = row["full_name"].strip() if row["full_name"] else None
+    has_pin = bool(row["pin_hash"]) if "pin_hash" in keys else False
+    requires_setup = (
+        bool(row["requires_account_setup"])
+        if "requires_account_setup" in keys
+        else not bool(username and has_pin)
+    )
     return MemberRecord(
         member_id=row["member_id"],
         member_code=row["member_code"],
-        full_name=row["full_name"],
+        username=username,
+        display_name=stored_display_name,
+        full_name=display_name_for(username, stored_display_name, row["member_code"]),
         phone_number=row["phone_number"],
-        has_pin=bool(row["pin_hash"]) if "pin_hash" in row.keys() else False,
+        has_pin=has_pin,
+        requires_account_setup=requires_setup or not bool(username and has_pin),
         status=row["status"],
         time_balance_seconds=row["time_balance_seconds"],
         joined_at=datetime.fromisoformat(row["joined_at"]),
@@ -104,15 +130,17 @@ class MemberRepository:
                     """
                     SELECT * FROM members
                     WHERE member_code LIKE ?
+                       OR username LIKE ?
+                       OR username_normalized LIKE ?
                        OR full_name LIKE ?
                        OR phone_number LIKE ?
-                    ORDER BY full_name ASC
+                    ORDER BY COALESCE(NULLIF(full_name, ''), username, member_code) ASC
                     """,
-                    (search, search, search),
+                    (search, search, search.casefold(), search, search),
                 ).fetchall()
             else:
                 rows = connection.execute(
-                    "SELECT * FROM members ORDER BY full_name ASC"
+                    "SELECT * FROM members ORDER BY COALESCE(NULLIF(full_name, ''), username, member_code) ASC"
                 ).fetchall()
         return [row_to_member(row) for row in rows]
 
@@ -124,45 +152,128 @@ class MemberRepository:
             ).fetchone()
         return row_to_member(row) if row else None
 
+    def get_member_by_username(self, username: str) -> MemberRecord | None:
+        username_normalized = normalize_username(username)
+        with get_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM members WHERE username_normalized = ?",
+                (username_normalized,),
+            ).fetchone()
+        return row_to_member(row) if row else None
+
     def require_usable_member(self, member_id: str) -> MemberRecord:
         member = self.get_member(member_id)
         if member is None:
             raise HTTPException(status_code=404, detail="Member not found")
+        return self.require_member_ready(member)
+
+    def require_usable_member_by_username(self, username: str) -> MemberRecord:
+        member = self.get_member_by_username(username)
+        if member is None:
+            raise HTTPException(status_code=403, detail="Invalid member username or PIN")
+        return self.require_member_ready(member)
+
+    def require_member_ready(self, member: MemberRecord) -> MemberRecord:
         if member.status != "active":
             raise HTTPException(status_code=409, detail="Member is inactive")
         if member.expires_at is not None and member.expires_at <= current_utc_time():
             raise HTTPException(status_code=409, detail="Member is expired")
+        if member.requires_account_setup or not member.username or not member.has_pin:
+            raise HTTPException(status_code=409, detail="Member account setup is required")
         return member
+
+    def generate_member_code(self, connection: sqlite3.Connection) -> str:
+        while True:
+            member_code = f"SG-{uuid4().hex[:8].upper()}"
+            row = connection.execute(
+                "SELECT 1 FROM members WHERE member_code = ?",
+                (member_code,),
+            ).fetchone()
+            if row is None:
+                return member_code
+
+    def record_member_audit(
+        self,
+        connection: sqlite3.Connection,
+        event_type: str,
+        actor: UserRecord | None,
+        member: MemberRecord,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        if actor is None:
+            return
+        safe_metadata = {
+            "member_id": member.member_id,
+            "member_code": member.member_code,
+            "username": member.username,
+            **(metadata or {}),
+        }
+        connection.execute(
+            """
+            INSERT INTO operator_audit_events (
+                event_id,
+                event_type,
+                operator_user_id,
+                operator_display_name,
+                selected_by_user_id,
+                created_at,
+                metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                event_type,
+                actor.user_id,
+                actor.display_name,
+                None,
+                current_utc_time().isoformat(),
+                json.dumps(safe_metadata, sort_keys=True),
+            ),
+        )
 
     def create_member(
         self,
         request: MemberCreateRequest,
-        actor_user_id: str | None,
+        actor: UserRecord | None,
     ) -> MemberRecord:
         now = current_utc_time()
-        member = MemberRecord(
-            member_id=str(uuid4()),
-            member_code=normalize_code(request.member_code),
-            full_name=request.full_name.strip(),
-            phone_number=(request.phone_number or "").strip() or None,
-            has_pin=False,
-            status="active",
-            time_balance_seconds=0,
-            joined_at=now,
-            expires_at=request.expires_at,
-            created_by_user_id=actor_user_id,
-            created_at=now,
-            updated_at=now,
-        )
+        username = request.username.strip()
+        username_normalized = normalize_username(username)
+        display_name = clean_display_name(request.display_name)
+        pin_hash = hash_password(request.pin)
         with get_connection() as connection:
+            member = MemberRecord(
+                member_id=str(uuid4()),
+                member_code=self.generate_member_code(connection),
+                username=username,
+                display_name=display_name,
+                full_name=display_name_for(username, display_name, ""),
+                phone_number=(request.phone_number or "").strip() or None,
+                has_pin=True,
+                requires_account_setup=False,
+                status="active",
+                time_balance_seconds=0,
+                joined_at=now,
+                expires_at=request.expires_at,
+                created_by_user_id=actor.user_id if actor else None,
+                created_at=now,
+                updated_at=now,
+            )
             try:
                 connection.execute(
                     """
                     INSERT INTO members (
                         member_id,
                         member_code,
+                        username,
+                        username_normalized,
                         full_name,
                         phone_number,
+                        pin_hash,
+                        requires_account_setup,
+                        pin_failed_attempts,
+                        pin_locked_until,
                         status,
                         time_balance_seconds,
                         joined_at,
@@ -171,13 +282,19 @@ class MemberRepository:
                         created_at,
                         updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         member.member_id,
                         member.member_code,
-                        member.full_name,
+                        member.username,
+                        username_normalized,
+                        member.display_name or "",
                         member.phone_number,
+                        pin_hash,
+                        0,
+                        0,
+                        None,
                         member.status,
                         member.time_balance_seconds,
                         member.joined_at.isoformat(),
@@ -187,20 +304,32 @@ class MemberRepository:
                         member.updated_at.isoformat(),
                     ),
                 )
+                self.record_member_audit(connection, "member_created", actor, member)
             except sqlite3.IntegrityError as error:
-                raise HTTPException(status_code=409, detail="Member code already exists") from error
+                raise HTTPException(status_code=409, detail="Username already exists") from error
         return member
 
-    def update_member(self, member_id: str, request: MemberUpdateRequest) -> MemberRecord | None:
+    def update_member(
+        self,
+        member_id: str,
+        request: MemberUpdateRequest,
+        actor: UserRecord | None = None,
+    ) -> MemberRecord | None:
         existing = self.get_member(member_id)
         if existing is None:
             return None
+        username = request.username.strip()
+        username_normalized = normalize_username(username)
+        display_name = clean_display_name(request.display_name)
+        requires_setup = not bool(username and existing.has_pin)
         updated = existing.model_copy(
             update={
-                "member_code": normalize_code(request.member_code),
-                "full_name": request.full_name.strip(),
+                "username": username,
+                "display_name": display_name,
+                "full_name": display_name_for(username, display_name, existing.member_code),
                 "phone_number": (request.phone_number or "").strip() or None,
                 "expires_at": request.expires_at,
+                "requires_account_setup": requires_setup,
                 "updated_at": current_utc_time(),
             }
         )
@@ -209,20 +338,36 @@ class MemberRepository:
                 connection.execute(
                     """
                     UPDATE members
-                    SET member_code = ?, full_name = ?, phone_number = ?, expires_at = ?, updated_at = ?
+                    SET username = ?,
+                        username_normalized = ?,
+                        full_name = ?,
+                        phone_number = ?,
+                        expires_at = ?,
+                        requires_account_setup = ?,
+                        updated_at = ?
                     WHERE member_id = ?
                     """,
                     (
-                        updated.member_code,
-                        updated.full_name,
+                        updated.username,
+                        username_normalized,
+                        updated.display_name or "",
                         updated.phone_number,
                         updated.expires_at.isoformat() if updated.expires_at else None,
+                        1 if requires_setup else 0,
                         updated.updated_at.isoformat(),
                         member_id,
                     ),
                 )
+                if normalize_username(existing.username or "") != username_normalized:
+                    self.record_member_audit(
+                        connection,
+                        "member_username_changed",
+                        actor,
+                        updated,
+                        {"previous_username": existing.username},
+                    )
             except sqlite3.IntegrityError as error:
-                raise HTTPException(status_code=409, detail="Member code already exists") from error
+                raise HTTPException(status_code=409, detail="Username already exists") from error
         return updated
 
     def set_member_status(self, member_id: str, request: MemberStatusUpdate) -> MemberRecord | None:
@@ -237,34 +382,106 @@ class MemberRepository:
             )
         return existing.model_copy(update={"status": request.status, "updated_at": updated_at})
 
-    def set_member_pin(self, member_id: str, pin: str | None) -> MemberRecord | None:
+    def set_member_pin(
+        self,
+        member_id: str,
+        pin: str,
+        actor: UserRecord | None = None,
+    ) -> MemberRecord | None:
         existing = self.get_member(member_id)
         if existing is None:
             return None
 
         updated_at = current_utc_time()
-        pin_hash = hash_password(pin) if pin else None
+        pin_hash = hash_password(pin)
+        requires_setup = not bool(existing.username)
         with get_connection() as connection:
             connection.execute(
-                "UPDATE members SET pin_hash = ?, updated_at = ? WHERE member_id = ?",
-                (pin_hash, updated_at.isoformat(), member_id),
+                """
+                UPDATE members
+                SET pin_hash = ?,
+                    requires_account_setup = ?,
+                    pin_failed_attempts = 0,
+                    pin_locked_until = NULL,
+                    updated_at = ?
+                WHERE member_id = ?
+                """,
+                (pin_hash, 1 if requires_setup else 0, updated_at.isoformat(), member_id),
             )
-        return existing.model_copy(update={"has_pin": pin_hash is not None, "updated_at": updated_at})
+            updated = existing.model_copy(
+                update={
+                    "has_pin": True,
+                    "requires_account_setup": requires_setup,
+                    "updated_at": updated_at,
+                }
+            )
+            self.record_member_audit(connection, "member_pin_reset", actor, updated)
+        return updated
 
-    def verify_member_pin_if_required(self, member_id: str, provided_pin: str | None) -> None:
+    def verify_member_pin(self, member_id: str, provided_pin: str | None) -> None:
         with get_connection() as connection:
             row = connection.execute(
-                "SELECT pin_hash FROM members WHERE member_id = ?",
+                """
+                SELECT pin_hash, requires_account_setup, pin_failed_attempts, pin_locked_until
+                FROM members
+                WHERE member_id = ?
+                """,
                 (member_id,),
             ).fetchone()
 
-        pin_hash = row["pin_hash"] if row else None
-        if not pin_hash:
-            return
-        if not provided_pin:
-            raise HTTPException(status_code=403, detail="Member PIN is required")
-        if not verify_password(provided_pin, pin_hash):
-            raise HTTPException(status_code=403, detail="Member PIN is incorrect")
+            pin_hash = row["pin_hash"] if row else None
+            if row is None or not pin_hash or bool(row["requires_account_setup"]):
+                raise HTTPException(status_code=403, detail="Invalid member username or PIN")
+            now = current_utc_time()
+            locked_until = datetime.fromisoformat(row["pin_locked_until"]) if row["pin_locked_until"] else None
+            if locked_until is not None and locked_until > now:
+                raise HTTPException(status_code=429, detail="Too many PIN attempts. Try again shortly.")
+            if not provided_pin:
+                self.record_failed_pin_attempt(connection, member_id, int(row["pin_failed_attempts"]))
+                connection.commit()
+                raise HTTPException(status_code=403, detail="Invalid member username or PIN")
+            if not verify_password(provided_pin, pin_hash):
+                self.record_failed_pin_attempt(connection, member_id, int(row["pin_failed_attempts"]))
+                connection.commit()
+                raise HTTPException(status_code=403, detail="Invalid member username or PIN")
+            connection.execute(
+                """
+                UPDATE members
+                SET pin_failed_attempts = 0,
+                    pin_locked_until = NULL,
+                    updated_at = ?
+                WHERE member_id = ?
+                """,
+                (now.isoformat(), member_id),
+            )
+
+    def verify_member_pin_if_required(self, member_id: str, provided_pin: str | None) -> None:
+        self.verify_member_pin(member_id, provided_pin)
+
+    def record_failed_pin_attempt(
+        self,
+        connection: sqlite3.Connection,
+        member_id: str,
+        failed_attempts: int,
+    ) -> None:
+        now = current_utc_time()
+        next_attempts = failed_attempts + 1
+        locked_until = now + timedelta(minutes=5) if next_attempts >= 5 else None
+        connection.execute(
+            """
+            UPDATE members
+            SET pin_failed_attempts = ?,
+                pin_locked_until = ?,
+                updated_at = ?
+            WHERE member_id = ?
+            """,
+            (
+                next_attempts,
+                locked_until.isoformat() if locked_until else None,
+                now.isoformat(),
+                member_id,
+            ),
+        )
 
     def list_products(self, include_inactive: bool = False) -> list[MembershipProductRecord]:
         with get_connection() as connection:

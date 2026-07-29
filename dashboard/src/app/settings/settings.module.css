@@ -2,8 +2,8 @@
   display: grid;
   gap: 22px;
   margin: 0 auto;
-  max-width: 1440px;
-  padding: 36px 28px 48px;
+  max-width: var(--app-page-max-width);
+  padding: var(--app-page-padding);
 }
 
 .header {
@@ -308,5 +308,11 @@
   .toolbar {
     align-items: stretch;
     display: grid;
+  }
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: var(--app-page-padding-mobile);
   }
 }

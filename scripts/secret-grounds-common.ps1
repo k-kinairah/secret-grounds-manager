@@ -77,6 +77,70 @@ function Get-SgEnv {
     return $value
 }
 
+function Normalize-SgPathEnvironment {
+    $processVars = [Environment]::GetEnvironmentVariables("Process")
+    $processPath = ""
+    $upperPath = ""
+    foreach ($key in $processVars.Keys) {
+        if ($key -ceq "Path") {
+            $processPath = [string]$processVars[$key]
+        } elseif ($key -ceq "PATH") {
+            $upperPath = [string]$processVars[$key]
+        }
+    }
+
+    $pathValue = @($processPath, $upperPath) | Where-Object { ![string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($pathValue)) {
+        $pathParts = @(
+            [Environment]::GetEnvironmentVariable("Path", "Machine"),
+            [Environment]::GetEnvironmentVariable("Path", "User")
+        ) | Where-Object { ![string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim(";") } | Where-Object { $_ }
+        $pathValue = [string]::Join(";", $pathParts)
+    }
+
+    if (![string]::IsNullOrWhiteSpace($pathValue)) {
+        [Environment]::SetEnvironmentVariable("Path", $pathValue, "Process")
+    }
+}
+
+function Get-SgCommandSource {
+    param([string]$Name)
+    $command = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($null -eq $command) {
+        return ""
+    }
+    return [string]$command.Source
+}
+
+function Resolve-SgNodePath {
+    Normalize-SgPathEnvironment
+
+    $nodePath = Get-SgCommandSource "node"
+    if ([string]::IsNullOrWhiteSpace($nodePath)) {
+        $nodePath = Get-SgCommandSource "node.exe"
+    }
+
+    $npmPath = Get-SgCommandSource "npm.cmd"
+    if ([string]::IsNullOrWhiteSpace($nodePath) -and ![string]::IsNullOrWhiteSpace($npmPath)) {
+        $candidate = Join-Path (Split-Path $npmPath) "node.exe"
+        if (Test-Path $candidate) {
+            $nodePath = $candidate
+        }
+    }
+
+    if (![string]::IsNullOrWhiteSpace($nodePath) -and (Test-Path $nodePath)) {
+        return $nodePath
+    }
+
+    $pathValue = [Environment]::GetEnvironmentVariable("Path", "Process")
+    if ([string]::IsNullOrWhiteSpace($pathValue)) {
+        $pathValue = [Environment]::GetEnvironmentVariable("PATH", "Process")
+    }
+    $resolvedNode = if ([string]::IsNullOrWhiteSpace($nodePath)) { "<not found>" } else { $nodePath }
+    $resolvedNpm = if ([string]::IsNullOrWhiteSpace($npmPath)) { "<not found>" } else { $npmPath }
+    throw "Node.js could not be resolved for dashboard startup.`nPATH: $pathValue`nresolved Node location: $resolvedNode`nresolved npm location: $resolvedNpm"
+}
+
 function Get-SgBool {
     param([string]$Name, [bool]$Default = $false)
     $value = Get-SgEnv $Name ""
@@ -337,11 +401,7 @@ function Start-SgLoggedProcess {
         throw "Output and error logs must be separate files for $Role."
     }
 
-    $upperPath = [Environment]::GetEnvironmentVariable("PATH", "Process")
-    if (![string]::IsNullOrWhiteSpace($upperPath)) {
-        [Environment]::SetEnvironmentVariable("Path", $upperPath, "Process")
-        [Environment]::SetEnvironmentVariable("PATH", $null, "Process")
-    }
+    Normalize-SgPathEnvironment
 
     $Script:LastSgLaunchIdentity = $FilePath
     $process = Start-Process `

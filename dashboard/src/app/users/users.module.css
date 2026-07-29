@@ -1,7 +1,9 @@
 .page {
   display: grid;
   gap: 14px;
-  padding: 20px 24px 32px;
+  margin: 0 auto;
+  max-width: var(--app-page-max-width);
+  padding: var(--app-page-padding);
 }
 
 .header {
@@ -917,5 +919,11 @@
   .staffDetailsAction span {
     left: 0;
     right: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: var(--app-page-padding-mobile);
   }
 }

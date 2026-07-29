@@ -109,6 +109,7 @@ from server.schemas import (
     UserAdminRecord,
     UserCreateRequest,
     UserPublic,
+    UserRecord,
     UserStatusUpdate,
     UserUpdateRequest,
 )
@@ -664,16 +665,23 @@ def create_member(
     request: MemberCreateRequest,
     current_user=Depends(require_role("cashier")),
 ) -> MemberRecord:
-    return member_repository.create_member(request, get_actor_user_id(current_user))
+    return member_repository.create_member(
+        request,
+        current_user if isinstance(current_user, UserRecord) else None,
+    )
 
 
 @app.put("/members/{member_id}", response_model=MemberRecord)
 def update_member(
     member_id: str,
     request: MemberUpdateRequest,
-    _: object = Depends(require_role("admin")),
+    current_user=Depends(require_role("admin")),
 ) -> MemberRecord:
-    member = member_repository.update_member(member_id, request)
+    member = member_repository.update_member(
+        member_id,
+        request,
+        current_user if isinstance(current_user, UserRecord) else None,
+    )
     if member is None:
         raise HTTPException(status_code=404, detail="Member not found")
     return member
@@ -695,9 +703,13 @@ def update_member_status(
 def reset_member_pin(
     member_id: str,
     request: MemberPinResetRequest,
-    _: object = Depends(require_role("owner")),
+    current_user=Depends(require_role("admin")),
 ) -> MemberRecord:
-    member = member_repository.set_member_pin(member_id, request.pin)
+    member = member_repository.set_member_pin(
+        member_id,
+        request.pin,
+        current_user if isinstance(current_user, UserRecord) else None,
+    )
     if member is None:
         raise HTTPException(status_code=404, detail="Member not found")
     return member
@@ -995,7 +1007,13 @@ def build_operator_activity(
         ).fetchall()
         audit_rows = connection.execute(
             """
-            SELECT event_type, operator_display_name, selected_by_user_id, created_at
+            SELECT
+                event_type,
+                operator_user_id,
+                operator_display_name,
+                selected_by_user_id,
+                created_at,
+                metadata_json
             FROM operator_audit_events
             ORDER BY created_at DESC
             LIMIT 1000
@@ -1127,16 +1145,30 @@ def build_operator_activity(
             action = "Backup deleted"
             event_category = "system"
             result = "Deleted"
+        elif event_type == "member_created":
+            action = "Member created"
+            event_category = "operator"
+            result = "Created"
+        elif event_type == "member_username_changed":
+            action = "Member username changed"
+            event_category = "operator"
+            result = "Updated"
+        elif event_type == "member_pin_reset":
+            action = "Member PIN reset"
+            event_category = "operator"
+            result = "Updated"
         else:
             continue
         timestamp = row["created_at"]
-        actor_id = row["selected_by_user_id"]
+        actor_id = row["selected_by_user_id"] or row["operator_user_id"]
         if since is not None and timestamp < since:
             continue
         if operator_id is not None and actor_id != operator_id:
             continue
         if category is not None and category != event_category:
             continue
+        metadata = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+        customer = metadata.get("username") or metadata.get("member_code") or row["operator_display_name"]
         activity.append(
             OperatorActivityRecord(
                 timestamp=timestamp,
@@ -1144,7 +1176,7 @@ def build_operator_activity(
                 operator_name=operator_name_for_user(actor_id, users_by_id),
                 action=action,
                 category=event_category,
-                customer=row["operator_display_name"],
+                customer=str(customer),
                 result=result,
             )
         )
@@ -2499,10 +2531,11 @@ async def start_member_session(
     mark_stale_pcs_offline()
     response = await session_service.start_member_session(
         request.pc_name,
-        request.member_id,
+        request.member_username,
         request.duration_seconds,
         request.member_pin,
         get_on_duty_actor_user_id(current_user),
+        request.member_id,
     )
     recovery_flags.pop(response.session.pc_name, None)
     return response

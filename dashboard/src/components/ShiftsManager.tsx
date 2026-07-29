@@ -5,6 +5,7 @@ import styles from "@/app/page.module.css";
 import { fetchShift, fetchShifts } from "@/lib/api";
 import { formatDateTime, formatMoney } from "@/lib/time";
 import type { CashierShiftDetail, CashierShiftRecord } from "@/lib/types";
+import { PageTitleIcon } from "./PageTitleIcon";
 
 function formatDuration(openedAt: string, closedAt: string | null): string {
   const endMs = closedAt ? new Date(closedAt).getTime() : Date.now();
@@ -52,9 +53,12 @@ export function ShiftsManager() {
   return (
     <main className={styles.page}>
       <div className={styles.topBar}>
-        <div className={styles.brandBlock}>
-          <h1>Shifts</h1>
-          <p>Cash drawer ownership, payment totals, and closing snapshots.</p>
+        <div className={`${styles.brandBlock} pageTitleLockup`}>
+          <PageTitleIcon name="receipt" />
+          <div>
+            <h1>Shifts</h1>
+            <p>Cash drawer ownership, payment totals, and closing snapshots.</p>
+          </div>
         </div>
       </div>
 

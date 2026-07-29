@@ -611,12 +611,29 @@ export async function fetchMembers(query = ""): Promise<MemberRecord[]> {
 }
 
 export async function createMember(input: {
-  member_code: string;
-  full_name: string;
+  username: string;
+  display_name?: string;
+  pin: string;
+  confirm_pin: string;
   phone_number?: string;
 }): Promise<MemberRecord> {
   return requestJson<MemberRecord>(`${getApiBaseUrl()}/members`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updateMember(
+  memberId: string,
+  input: {
+    username: string;
+    display_name?: string;
+    phone_number?: string;
+  }
+): Promise<MemberRecord> {
+  return requestJson<MemberRecord>(`${getApiBaseUrl()}/members/${memberId}`, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
   });
@@ -635,12 +652,13 @@ export async function updateMemberStatus(
 
 export async function resetMemberPin(
   memberId: string,
-  pin: string | null
+  pin: string,
+  confirmPin: string
 ): Promise<MemberRecord> {
   return requestJson<MemberRecord>(`${getApiBaseUrl()}/members/${memberId}/pin`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pin })
+    body: JSON.stringify({ pin, confirm_pin: confirmPin })
   });
 }
 
@@ -777,7 +795,7 @@ export async function prepareStartupSession(
         body: JSON.stringify({
           pc_name: pcName,
           session_mode: "member_balance",
-          member_id: payload.memberId,
+          member_username: payload.memberUsername,
           duration_seconds: payload.durationSeconds,
           member_pin: payload.memberPin
         })
@@ -849,7 +867,7 @@ export async function startMemberSession(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       pc_name: pcName,
-      member_id: payload.memberId,
+      member_username: payload.memberUsername,
       duration_seconds: payload.durationSeconds,
       member_pin: payload.memberPin
     })

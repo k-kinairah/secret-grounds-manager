@@ -20,6 +20,7 @@ import {
   fetchMembershipProducts,
   purchaseMemberTime,
   resetMemberPin,
+  updateMember,
   updateMemberStatus
 } from "@/lib/api";
 import { formatDateTime, formatMoney, formatNaturalDuration } from "@/lib/time";
@@ -30,6 +31,7 @@ import type {
   MemberTimeTransaction,
   PaymentMethod
 } from "@/lib/types";
+import { PageTitleIcon } from "./PageTitleIcon";
 
 function formatMemberBalance(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
@@ -46,6 +48,84 @@ function formatMemberBalance(totalSeconds: number): string {
   }
 
   return `${minutes} min`;
+}
+
+type MemberAccountState = "ready" | "setup" | "disabled" | "locked";
+type MemberDetailTab = "overview" | "balance" | "security" | "activity";
+type MemberStatusFilter = "all" | "active" | "setup" | "inactive";
+
+function MoreVerticalIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className={styles.memberMoreIcon}
+      fill="none"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="12" cy="5" fill="currentColor" r="1.8" />
+      <circle cx="12" cy="12" fill="currentColor" r="1.8" />
+      <circle cx="12" cy="19" fill="currentColor" r="1.8" />
+    </svg>
+  );
+}
+
+function getMemberAccountState(member: MemberRecord): MemberAccountState {
+  if (member.status !== "active") {
+    return "disabled";
+  }
+
+  if (member.requires_account_setup) {
+    return "setup";
+  }
+
+  return "ready";
+}
+
+function getMemberAccountLabel(state: MemberAccountState): string {
+  switch (state) {
+    case "disabled":
+      return "Disabled";
+    case "locked":
+      return "Locked";
+    case "setup":
+      return "Setup Required";
+    case "ready":
+    default:
+      return "Ready";
+  }
+}
+
+function getMemberAvatarInitial(member: MemberRecord): string {
+  const source = member.display_name || member.full_name || member.username || member.member_code;
+  const initial = source.trim().charAt(0);
+  return initial ? initial.toUpperCase() : "?";
+}
+
+function formatMemberDateParts(value: string): { date: string; time: string } {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return { date: "Unknown", time: "" };
+  }
+
+  return {
+    date: new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    }).format(date),
+    time: new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit"
+    }).format(date)
+  };
+}
+
+function getMemberLastActivityLabel(member: MemberRecord): string {
+  if (member.updated_at && member.updated_at !== member.created_at) {
+    return formatDateTime(member.updated_at);
+  }
+
+  return "No activity yet";
 }
 
 function describeActivity(transaction: MemberTimeTransaction): {
@@ -193,9 +273,14 @@ export function MembersManager() {
   const [selectedProductId, setSelectedProductId] = useState("");
   const [showAdvancedActivity, setShowAdvancedActivity] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [statusFilter, setStatusFilter] = useState<MemberStatusFilter>("all");
   const [confirmingStatusMember, setConfirmingStatusMember] = useState<MemberRecord | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [pinDraft, setPinDraft] = useState("");
+  const [confirmPinDraft, setConfirmPinDraft] = useState("");
+  const [showPin, setShowPin] = useState(false);
+  const [showConfirmPin, setShowConfirmPin] = useState(false);
+  const [activeMemberTab, setActiveMemberTab] = useState<MemberDetailTab>("overview");
   const createModalRef = useRef<HTMLElement | null>(null);
   const detailModalRef = useRef<HTMLElement | null>(null);
   const confirmModalRef = useRef<HTMLElement | null>(null);
@@ -220,13 +305,33 @@ export function MembersManager() {
     [ledger, showAdvancedActivity]
   );
   const filteredMembers = useMemo(
-    () =>
-      statusFilter === "all"
-        ? members
-        : members.filter((member) => member.status === statusFilter),
+    () => {
+      if (statusFilter === "all") {
+        return members;
+      }
+
+      if (statusFilter === "setup") {
+        return members.filter((member) => member.requires_account_setup);
+      }
+
+      if (statusFilter === "active") {
+        return members.filter(
+          (member) => member.status === "active" && !member.requires_account_setup
+        );
+      }
+
+      return members.filter((member) => member.status === "inactive");
+    },
     [members, statusFilter]
   );
-  const canManagePins = currentUser?.role === "owner";
+  const canManagePins = currentUser?.role === "admin" || currentUser?.role === "owner";
+  const isPinResetValid =
+    /^[0-9]{4,6}$/.test(pinDraft) && pinDraft === confirmPinDraft;
+  const showPinMismatch =
+    pinDraft.length > 0 &&
+    confirmPinDraft.length > 0 &&
+    /^[0-9]{4,6}$/.test(pinDraft) &&
+    pinDraft !== confirmPinDraft;
   const hasSearch = query.trim().length > 0 || statusFilter !== "all";
   const closeCreateDialog = useCallback(() => setIsCreateOpen(false), []);
   const closeDetailDialog = useCallback(() => setSelectedMember(null), []);
@@ -236,6 +341,14 @@ export function MembersManager() {
   useModalFocus(isCreateOpen, createModalRef, closeCreateDialog);
   useModalFocus(selectedMember !== null, detailModalRef, closeDetailDialog);
   useModalFocus(confirmingStatusMember !== null, confirmModalRef, closeConfirmDialog);
+
+  useEffect(() => {
+    setPinDraft("");
+    setConfirmPinDraft("");
+    setShowPin(false);
+    setShowConfirmPin(false);
+    setActiveMemberTab("overview");
+  }, [selectedMember?.member_id]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(closeMemberMenu, 0);
@@ -336,8 +449,10 @@ export function MembersManager() {
     setCreateError(null);
     try {
       await createMember({
-        member_code: String(formData.get("memberCode") ?? ""),
-        full_name: String(formData.get("fullName") ?? ""),
+        username: String(formData.get("username") ?? ""),
+        display_name: String(formData.get("displayName") ?? "") || undefined,
+        pin: String(formData.get("memberPin") ?? ""),
+        confirm_pin: String(formData.get("confirmMemberPin") ?? ""),
         phone_number: String(formData.get("phoneNumber") ?? "") || undefined
       });
       setMessage("Member created.");
@@ -348,6 +463,28 @@ export function MembersManager() {
       const errorText = error instanceof Error ? error.message : "Could not create member.";
       setCreateError(errorText);
       setMessage(errorText);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleProfileUpdate(formData: FormData) {
+    if (!selectedMember) {
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const updated = await updateMember(selectedMember.member_id, {
+        username: String(formData.get("username") ?? ""),
+        display_name: String(formData.get("displayName") ?? "") || undefined,
+        phone_number: String(formData.get("phoneNumber") ?? "") || undefined
+      });
+      setSelectedMember(updated);
+      await refresh();
+      setMessage("Member profile updated.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not update member profile.");
     } finally {
       setIsSaving(false);
     }
@@ -393,12 +530,13 @@ export function MembersManager() {
     }
 
     const pin = String(formData.get("memberPin") ?? "").trim();
+    const confirmPin = String(formData.get("confirmMemberPin") ?? "").trim();
     setIsSaving(true);
     try {
-      const updated = await resetMemberPin(selectedMember.member_id, pin || null);
+      const updated = await resetMemberPin(selectedMember.member_id, pin, confirmPin);
       setSelectedMember(updated);
       await refresh();
-      setMessage(pin ? "Member PIN updated." : "Member PIN removed.");
+      setMessage("Member PIN updated.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not update member PIN.");
     } finally {
@@ -432,7 +570,7 @@ export function MembersManager() {
     }
     const rect = trigger.getBoundingClientRect();
     const menuWidth = 190;
-    const menuHeight = 110;
+    const menuHeight = canManagePins ? 146 : 108;
     const placement = window.innerHeight - rect.bottom >= menuHeight + 10 ? "down" : "up";
     setOpenMemberMenu({
       member,
@@ -451,20 +589,31 @@ export function MembersManager() {
   }
 
   const floatingMemberMenu = openMemberMenu;
+  const selectedAccountState = selectedMember ? getMemberAccountState(selectedMember) : null;
+  const selectedLastActivity = visibleLedger.length > 0 ? visibleLedger[visibleLedger.length - 1] : null;
+  const memberDetailTabs: Array<{ id: MemberDetailTab; label: string }> = [
+    { id: "overview", label: "Overview" },
+    { id: "balance", label: "Balance" },
+    ...(canManagePins ? [{ id: "security" as MemberDetailTab, label: "Security" }] : []),
+    { id: "activity", label: "Activity" }
+  ];
 
   return (
     <main className={styles.page}>
       <div className={styles.memberHeader}>
-        <div className={styles.brandBlock}>
-          <h1>Members</h1>
-          <p>Member balances, purchases, and activity.</p>
+        <div className={`${styles.brandBlock} pageTitleLockup`}>
+          <PageTitleIcon name="members" />
+          <div>
+            <h1>Members</h1>
+            <p>Member balances, purchases, and activity.</p>
+          </div>
         </div>
         <div className={styles.memberHeaderActions}>
           <label className={styles.memberSearch}>
             <span className="srOnly">Search members</span>
             <input
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search by code, name, or phone"
+              placeholder="Search by display name, username, or phone"
               value={query}
             />
             {query ? (
@@ -488,14 +637,20 @@ export function MembersManager() {
 
       <div className={styles.memberToolbar}>
         <div className={styles.memberFilterGroup} aria-label="Member status filter">
-          {(["all", "active", "inactive"] as const).map((filter) => (
+          {(["all", "active", "setup", "inactive"] as const).map((filter) => (
             <button
               className={statusFilter === filter ? styles.memberFilterActive : ""}
               key={filter}
               onClick={() => setStatusFilter(filter)}
               type="button"
             >
-              {filter === "all" ? "All Members" : filter === "active" ? "Active" : "Disabled"}
+              {filter === "all"
+                ? "All Members"
+                : filter === "active"
+                  ? "Active"
+                  : filter === "setup"
+                    ? "Setup Required"
+                    : "Disabled"}
             </button>
           ))}
         </div>
@@ -513,12 +668,12 @@ export function MembersManager() {
             <h2>{hasSearch ? "No members found" : "No members yet"}</h2>
             <p>
               {hasSearch
-                ? "Try another code, name, or phone number."
+                ? "No members match the current filters."
                 : "Create the first member to begin storing reusable play balances."}
             </p>
             {hasSearch ? (
               <button className={styles.secondaryButton} onClick={clearSearch} type="button">
-                Clear Search
+                Clear Filters
               </button>
             ) : (
               <button
@@ -534,71 +689,101 @@ export function MembersManager() {
             )}
           </div>
         ) : (
-          <div className={styles.memberTableWrap}>
-            <table className={styles.memberTable}>
-              <thead>
-                <tr>
-                  <th>Member</th>
-                  <th>Code</th>
-                  <th>Balance</th>
-                  <th>Phone</th>
-                  <th>PIN</th>
-                  <th>Joined</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredMembers.map((member) => (
-                  <tr key={member.member_id}>
-                    <td data-label="Member">
+          <div className={styles.memberCardList}>
+            {filteredMembers.map((member) => {
+              const accountState = getMemberAccountState(member);
+              const joined = formatMemberDateParts(member.joined_at);
+              const isSelected = selectedMember?.member_id === member.member_id;
+
+              return (
+                <article
+                  className={`${styles.memberListCard} ${
+                    isSelected ? styles.memberListCardSelected : ""
+                  }`}
+                  key={member.member_id}
+                  onClick={() => void handleSelect(member)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      void handleSelect(member);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <div className={styles.memberCardIdentity}>
+                    <div
+                      aria-hidden="true"
+                      className={`${styles.memberAvatar} ${
+                        accountState === "setup" ? styles.memberAvatarSetup : ""
+                      }`}
+                    >
+                      {getMemberAvatarInitial(member)}
+                    </div>
+                    <div className={styles.memberIdentityText}>
                       <strong>{member.full_name}</strong>
-                    </td>
-                    <td data-label="Code">{member.member_code}</td>
-                    <td data-label="Balance">
-                      <span className={styles.memberBalance}>
-                        {formatMemberBalance(member.time_balance_seconds)}
-                      </span>
-                    </td>
-                    <td data-label="Phone">{member.phone_number || "No phone"}</td>
-                    <td data-label="PIN">{member.has_pin ? "PIN enabled" : "PIN not set"}</td>
-                    <td data-label="Joined">{formatDateTime(member.joined_at)}</td>
-                    <td data-label="Status">
                       <span
-                        className={`${styles.statusPill} ${
-                          member.status === "active" ? styles.badgeOnline : styles.badgeOffline
+                        className={
+                          member.username ? styles.memberUsername : styles.memberUsernameMissing
+                        }
+                      >
+                        {member.username ? `@${member.username}` : "Not configured"}
+                      </span>
+                      <small>{member.phone_number || "No phone"}</small>
+                    </div>
+                  </div>
+
+                  <div className={styles.memberCardStat}>
+                    <span>Balance</span>
+                    <strong className={styles.memberBalance}>
+                      {formatMemberBalance(member.time_balance_seconds)}
+                    </strong>
+                  </div>
+
+                  <div className={styles.memberCardStat}>
+                    <span>Status</span>
+                    <strong>
+                      <span
+                        className={`${styles.memberStatusBadge} ${
+                          styles[`memberStatus-${accountState}`]
                         }`}
                       >
-                        {member.status === "active" ? "Active" : "Disabled"}
+                        {getMemberAccountLabel(accountState)}
                       </span>
-                    </td>
-                    <td data-label="Actions">
-                      <div className={styles.memberActions}>
-                        <button
-                          className={styles.secondaryButton}
-                          onClick={() => void handleSelect(member)}
-                          type="button"
-                        >
-                          View Member
-                        </button>
-                        <button
-                          aria-expanded={openMemberMenu?.member.member_id === member.member_id}
-                          aria-haspopup="menu"
-                          aria-label={`More actions for ${member.member_code}`}
-                          className={styles.memberMoreButton}
-                          onClick={(event) => toggleMemberMenu(member, event.currentTarget)}
-                          ref={(node) => setMemberMenuTrigger(member.member_id, node)}
-                          type="button"
-                        >
-                          More
-                          <span aria-hidden="true" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </strong>
+                  </div>
+
+                  <div className={styles.memberCardStat}>
+                    <span>Joined</span>
+                    <strong>{joined.date}</strong>
+                    <small>{joined.time}</small>
+                  </div>
+
+                  <div className={styles.memberCardStat}>
+                    <span>Last activity</span>
+                    <strong>{getMemberLastActivityLabel(member)}</strong>
+                  </div>
+
+                  <div className={styles.memberCardActions}>
+                    <button
+                      aria-expanded={openMemberMenu?.member.member_id === member.member_id}
+                      aria-haspopup="menu"
+                      aria-label={`More actions for ${member.username ?? member.member_code}`}
+                      className={styles.memberMoreButton}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleMemberMenu(member, event.currentTarget);
+                      }}
+                      ref={(node) => setMemberMenuTrigger(member.member_id, node)}
+                      type="button"
+                    >
+                      <MoreVerticalIcon />
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+            <div className={styles.memberListEnd}>You've reached the end of the list.</div>
           </div>
         )}
       </section>
@@ -629,12 +814,46 @@ export function MembersManager() {
             {createError ? <div className={styles.memberDialogMessage}>{createError}</div> : null}
             <form className={styles.memberFormGrid} onSubmit={handleCreate}>
               <label className={styles.field}>
-                Member code
-                <input name="memberCode" placeholder="SG-001" required />
+                Username
+                <input
+                  autoComplete="username"
+                  maxLength={30}
+                  minLength={3}
+                  name="username"
+                  pattern="[A-Za-z0-9._-]{3,30}"
+                  placeholder="ada.player"
+                  required
+                />
               </label>
               <label className={styles.field}>
-                Full name
-                <input name="fullName" placeholder="Customer name" required />
+                Display name, optional
+                <input name="displayName" placeholder="Customer name" />
+              </label>
+              <label className={styles.field}>
+                PIN
+                <input
+                  inputMode="numeric"
+                  maxLength={6}
+                  minLength={4}
+                  name="memberPin"
+                  pattern="[0-9]{4,6}"
+                  placeholder="4-6 digits"
+                  required
+                  type="password"
+                />
+              </label>
+              <label className={styles.field}>
+                Confirm PIN
+                <input
+                  inputMode="numeric"
+                  maxLength={6}
+                  minLength={4}
+                  name="confirmMemberPin"
+                  pattern="[0-9]{4,6}"
+                  placeholder="Repeat PIN"
+                  required
+                  type="password"
+                />
               </label>
               <label className={styles.field}>
                 Phone, optional
@@ -674,8 +893,19 @@ export function MembersManager() {
                 role="menuitem"
                 type="button"
               >
-                View Activity
+                Edit
               </button>
+              {canManagePins ? (
+                <button
+                  onClick={() => {
+                    void handleSelect(floatingMemberMenu.member);
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  Reset PIN
+                </button>
+              ) : null}
               <button
                 onClick={() => {
                   const member = floatingMemberMenu.member;
@@ -703,7 +933,8 @@ export function MembersManager() {
           >
             <h2>
               {confirmingStatusMember.status === "active" ? "Disable" : "Enable"}{" "}
-              {confirmingStatusMember.member_code} - {confirmingStatusMember.full_name}?
+              {confirmingStatusMember.username ?? confirmingStatusMember.member_code} -{" "}
+              {confirmingStatusMember.full_name}?
             </h2>
             <p>
               {confirmingStatusMember.status === "active"
@@ -736,21 +967,25 @@ export function MembersManager() {
       ) : null}
 
       {selectedMember ? (
-        <div className={styles.overlay} role="presentation">
+        <div className={styles.memberModalLayer} role="presentation">
+          <button
+            aria-label="Close member detail backdrop"
+            className={styles.memberModalBackdrop}
+            onClick={() => setSelectedMember(null)}
+            type="button"
+          />
           <section
             aria-label="Member detail"
             aria-modal="true"
-            className={styles.memberDetailModal}
+            className={styles.memberDetailPopout}
             ref={detailModalRef}
             role="dialog"
           >
-            <div className={styles.memberModalHeader}>
+            <div className={styles.memberModalChrome}>
+            <div className={styles.memberPopoutHeader}>
               <div>
                 <h2>{selectedMember.full_name}</h2>
-                <p>
-                  {selectedMember.member_code} /{" "}
-                  {selectedMember.status === "active" ? "Active" : "Disabled"}
-                </p>
+                <p>@{selectedMember.username ?? "not-configured"}</p>
               </div>
               <button
                 aria-label="Close member detail"
@@ -762,21 +997,110 @@ export function MembersManager() {
               </button>
             </div>
 
-            <div className={styles.memberDetailGrid}>
-              <section className={styles.controlSection}>
-                <h3>Member Profile</h3>
+            <div
+              aria-label="Member detail sections"
+              className={styles.memberDetailTabs}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+                  return;
+                }
+                event.preventDefault();
+                const currentIndex = memberDetailTabs.findIndex((tab) => tab.id === activeMemberTab);
+                const delta = event.key === "ArrowRight" ? 1 : -1;
+                const nextIndex =
+                  (currentIndex + delta + memberDetailTabs.length) % memberDetailTabs.length;
+                setActiveMemberTab(memberDetailTabs[nextIndex].id);
+              }}
+              role="tablist"
+            >
+              {memberDetailTabs.map((tab) => (
+                <button
+                  aria-selected={activeMemberTab === tab.id}
+                  className={`${styles.memberDetailTab} ${
+                    activeMemberTab === tab.id ? styles.memberDetailTabActive : ""
+                  }`}
+                  key={tab.id}
+                  onClick={() => setActiveMemberTab(tab.id)}
+                  role="tab"
+                  type="button"
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            </div>
+
+            <div className={styles.memberModalContent}>
+              {activeMemberTab === "overview" ? (
+              <div className={styles.memberOverviewGrid} role="tabpanel">
+              <section className={styles.memberDetailCard}>
+                <div className={styles.memberCardHeader}>
+                  <h3>Profile</h3>
+                </div>
+                <form
+                  className={styles.memberFormGrid}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleProfileUpdate(new FormData(event.currentTarget));
+                  }}
+                >
+                  <label className={styles.field}>
+                    Username
+                    <input
+                      defaultValue={selectedMember.username ?? ""}
+                      maxLength={30}
+                      minLength={3}
+                      name="username"
+                      pattern="[A-Za-z0-9._-]{3,30}"
+                      required
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    Display name
+                    <input defaultValue={selectedMember.display_name ?? ""} name="displayName" />
+                  </label>
+                  <label className={styles.field}>
+                    Phone
+                    <input defaultValue={selectedMember.phone_number ?? ""} name="phoneNumber" />
+                  </label>
+                  <button className={styles.secondaryButton} disabled={isSaving} type="submit">
+                    Save Profile
+                  </button>
+                </form>
+              </section>
+
+              <section className={styles.memberDetailCard}>
+                <div className={styles.memberCardHeader}>
+                  <h3>Account Summary</h3>
+                </div>
                 <dl className={styles.compactDetailList}>
+                  <div className={styles.detailRow}>
+                    <span>Status</span>
+                    <strong>
+                      {selectedAccountState ? (
+                        <span
+                          className={`${styles.memberSummaryStatus} ${
+                            selectedAccountState
+                              ? styles[`memberSummaryStatus-${selectedAccountState}`]
+                              : ""
+                          }`}
+                        >
+                          {getMemberAccountLabel(selectedAccountState)}
+                        </span>
+                      ) : null}
+                    </strong>
+                  </div>
                   <div className={styles.detailRow}>
                     <span>Current balance</span>
                     <strong>{formatMemberBalance(selectedMember.time_balance_seconds)}</strong>
                   </div>
                   <div className={styles.detailRow}>
-                    <span>Phone</span>
-                    <strong>{selectedMember.phone_number || "No phone"}</strong>
-                  </div>
-                  <div className={styles.detailRow}>
-                    <span>PIN</span>
-                    <strong>{selectedMember.has_pin ? "PIN enabled" : "PIN not set"}</strong>
+                    <span>Last activity</span>
+                    <strong>
+                      {selectedLastActivity
+                        ? formatDateTime(selectedLastActivity.transaction.created_at)
+                        : "No activity yet"}
+                    </strong>
                   </div>
                   <div className={styles.detailRow}>
                     <span>Joined</span>
@@ -784,15 +1108,25 @@ export function MembersManager() {
                   </div>
                 </dl>
               </section>
+              </div>
+              ) : null}
 
-              <section className={styles.controlSection}>
-                <h3>Add Balance / Purchase Time</h3>
+              {activeMemberTab === "balance" ? (
+              <section className={`${styles.memberDetailCard} ${styles.memberBalanceCard}`} role="tabpanel">
+                <div className={styles.memberCardHeader}>
+                  <h3>Balance Management</h3>
+                </div>
                 <form
+                  className={styles.memberBalanceForm}
                   onSubmit={(event) => {
                     event.preventDefault();
                     void handlePurchase(new FormData(event.currentTarget));
                   }}
                 >
+                  <div className={styles.memberBalanceHero}>
+                    <span>Balance</span>
+                    <strong>{formatMemberBalance(selectedMember.time_balance_seconds)}</strong>
+                  </div>
                   <div className={styles.memberProductGrid}>
                     {activeProducts.map((product) => (
                       <button
@@ -814,7 +1148,7 @@ export function MembersManager() {
                     ))}
                   </div>
                   {selectedProduct ? (
-                    <div className={styles.amountPreview}>
+                    <div className={styles.memberBalancePreview}>
                       <span>Balance preview</span>
                       <strong>
                         {formatMemberBalance(selectedMember.time_balance_seconds)} +{" "}
@@ -825,6 +1159,7 @@ export function MembersManager() {
                       </strong>
                     </div>
                   ) : null}
+                  <div className={styles.memberPaymentGrid}>
                   <label className={styles.field}>
                     Payment method
                     <select name="paymentMethod">
@@ -838,43 +1173,107 @@ export function MembersManager() {
                     Cash received / reference
                     <input name="cashReceived" placeholder="100.00 or reference number" />
                   </label>
+                  </div>
+                  <div className={styles.memberTabActions}>
                   <button className={styles.primaryButton} disabled={isSaving} type="submit">
                     {isSaving ? "Processing..." : "Add Member Time"}
                   </button>
+                  </div>
                 </form>
               </section>
-            </div>
+              ) : null}
 
-            {canManagePins ? (
-              <section className={styles.controlSection}>
-                <h3>PIN Management</h3>
+              {canManagePins && activeMemberTab === "security" ? (
+                <section className={styles.memberDetailCard} role="tabpanel">
+                  <div className={styles.memberCardHeader}>
+                    <h3>Reset Member PIN</h3>
+                    <p>Assign a new 4-6 digit login PIN.</p>
+                  </div>
                 <form
                   className={styles.memberPinForm}
                   onSubmit={(event) => {
                     event.preventDefault();
                     void handlePinReset(new FormData(event.currentTarget));
                     event.currentTarget.reset();
+                    setPinDraft("");
+                    setConfirmPinDraft("");
                   }}
                 >
-                  <label className={styles.field}>
-                    New PIN
-                    <input
-                      inputMode="numeric"
-                      maxLength={6}
-                      minLength={4}
-                      name="memberPin"
-                      placeholder="4-6 digits, blank removes"
-                      type="password"
-                    />
-                  </label>
-                  <button className={styles.secondaryButton} disabled={isSaving} type="submit">
-                    {selectedMember.has_pin ? "Reset PIN" : "Set PIN"}
-                  </button>
+                  <div className={styles.memberPinGrid}>
+                    <label className={styles.field}>
+                      New PIN
+                      <span className={styles.memberPasswordField}>
+                        <input
+                          inputMode="numeric"
+                          maxLength={6}
+                          minLength={4}
+                          name="memberPin"
+                          onChange={(event) => setPinDraft(event.target.value)}
+                          pattern="[0-9]{4,6}"
+                          required
+                          type={showPin ? "text" : "password"}
+                          value={pinDraft}
+                        />
+                        <button
+                          aria-label={showPin ? "Hide new PIN" : "Show new PIN"}
+                          className={styles.memberPasswordToggle}
+                          onClick={() => setShowPin((value) => !value)}
+                          type="button"
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`${styles.memberEyeIcon} ${showPin ? styles.memberEyeIconOpen : ""}`}
+                          />
+                        </button>
+                      </span>
+                    </label>
+                    <label className={styles.field}>
+                      Confirm PIN
+                      <span className={styles.memberPasswordField}>
+                        <input
+                          inputMode="numeric"
+                          maxLength={6}
+                          minLength={4}
+                          name="confirmMemberPin"
+                          onChange={(event) => setConfirmPinDraft(event.target.value)}
+                          pattern="[0-9]{4,6}"
+                          required
+                          type={showConfirmPin ? "text" : "password"}
+                          value={confirmPinDraft}
+                        />
+                        <button
+                          aria-label={showConfirmPin ? "Hide confirmed PIN" : "Show confirmed PIN"}
+                          className={styles.memberPasswordToggle}
+                          onClick={() => setShowConfirmPin((value) => !value)}
+                          type="button"
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`${styles.memberEyeIcon} ${showConfirmPin ? styles.memberEyeIconOpen : ""}`}
+                          />
+                        </button>
+                      </span>
+                    </label>
+                  </div>
+                  <p className={styles.memberSecurityHint}>PIN must contain 4-6 digits.</p>
+                  {showPinMismatch ? (
+                    <p className={styles.memberSecurityError}>PIN entries do not match.</p>
+                  ) : null}
+                  <div className={styles.memberSecurityActions}>
+                    <button
+                      className={styles.secondaryButton}
+                      disabled={isSaving || !isPinResetValid}
+                      type="submit"
+                    >
+                      Reset PIN
+                    </button>
+                  </div>
                 </form>
-              </section>
-            ) : null}
+                </section>
+              ) : null}
 
-            <section className={styles.controlSection}>
+            {activeMemberTab === "activity" ? (
+            <section className={`${styles.memberDetailCard} ${styles.memberActivityCard}`} role="tabpanel">
               <div className={styles.memberSectionHeader}>
                 <div>
                   <h3>Recent Activity</h3>
@@ -892,7 +1291,9 @@ export function MembersManager() {
               </div>
               <div className={styles.memberActivityList}>
                 {visibleLedger.length === 0 ? (
-                  <div className={styles.memberMiniEmpty}>No member activity yet.</div>
+                  <div className={styles.memberMiniEmpty}>
+                    No activity has been recorded for this member.
+                  </div>
                 ) : null}
                 {visibleLedger.map(({ transaction, activity }) => (
                   <div className={styles.memberActivityRow} key={transaction.transaction_id}>
@@ -908,6 +1309,8 @@ export function MembersManager() {
                 ))}
               </div>
             </section>
+            ) : null}
+            </div>
           </section>
         </div>
       ) : null}

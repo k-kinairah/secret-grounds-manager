@@ -531,7 +531,7 @@ async function runAsyncAssertions() {
     await updateUserStatus("user-1", false);
     await resetUserPassword("user-1", "new-password");
     await logout();
-    await resetMemberPin("member-1", "1234");
+    await resetMemberPin("member-1", "1234", "1234");
     await fetchRates(true);
     await calculateTime("20.00");
     await createRate({
@@ -560,7 +560,7 @@ async function runAsyncAssertions() {
     });
     await startMemberSession("PC-01", {
       sessionMode: "member_balance",
-      memberId: "member-1",
+      memberUsername: "ada.player",
       durationSeconds: 3600,
       memberPin: "1234"
     });
@@ -653,7 +653,8 @@ async function runAsyncAssertions() {
       password: "new-password"
     });
     assert.deepEqual(fetchCalls[17].body, {
-      pin: "1234"
+      pin: "1234",
+      confirm_pin: "1234"
     });
     assert.equal((fetchCalls[9].body as { general: { shop_display_name: string } }).general.shop_display_name, "Secret Grounds");
     assert.deepEqual(fetchCalls[10].body, {
@@ -672,7 +673,7 @@ async function runAsyncAssertions() {
     });
     assert.deepEqual(fetchCalls[24].body, {
       pc_name: "PC-01",
-      member_id: "member-1",
+      member_username: "ada.player",
       duration_seconds: 3600,
       member_pin: "1234"
     });
@@ -837,16 +838,49 @@ async function runAsyncAssertions() {
     assert.match(dashboardSource, /variant="dock"/);
 
     const membersSource = readFileSync("src/components/MembersManager.tsx", "utf8");
-    assert.match(membersSource, /Search by code, name, or phone/);
+    assert.match(membersSource, /Search by display name, username, or phone/);
     assert.match(membersSource, /setIsCreateOpen\(true\)/);
     assert.match(membersSource, /role="dialog"/);
     assert.match(membersSource, /Create Member/);
-    assert.match(membersSource, /View Member/);
+    assert.match(membersSource, /Username/);
+    assert.match(membersSource, /Display name, optional/);
+    assert.match(membersSource, /Confirm PIN/);
+    assert.match(membersSource, /Account Summary/);
+    assert.match(membersSource, /Balance Management/);
+    assert.match(membersSource, /Security/);
+    assert.match(membersSource, /role="tablist"/);
+    assert.match(membersSource, /Overview/);
+    assert.match(membersSource, /Activity/);
+    assert.match(membersSource, /Reset Member PIN/);
+    assert.match(membersSource, /activeMemberTab === "overview"/);
+    assert.match(membersSource, /activeMemberTab === "balance"/);
+    assert.match(membersSource, /activeMemberTab === "security"/);
+    assert.match(membersSource, /activeMemberTab === "activity"/);
+    assert.match(membersSource, /setActiveMemberTab\("overview"\)/);
+    assert.match(membersSource, /PIN entries do not match/);
+    assert.match(membersSource, /Not configured/);
+    assert.doesNotMatch(membersSource, /Technical Information/);
+    assert.doesNotMatch(membersSource, /memberTable/);
+    assert.match(membersSource, /No activity has been recorded for this member/);
+    assert.match(membersSource, /role="button"/);
+    assert.match(membersSource, /onKeyDown/);
+    assert.match(membersSource, /event\.key === "Enter" \|\| event\.key === " "/);
+    assert.match(membersSource, /event\.stopPropagation/);
+    assert.doesNotMatch(membersSource, /View Member/);
     assert.match(membersSource, /No members yet/);
     assert.match(membersSource, /No members found/);
+    assert.match(membersSource, /Clear Filters/);
     assert.match(membersSource, /No phone/);
-    assert.match(membersSource, /PIN enabled/);
-    assert.match(membersSource, /PIN not set/);
+    assert.match(membersSource, /Setup Required/);
+    assert.match(membersSource, /Ready/);
+    assert.match(membersSource, /getMemberAvatarInitial/);
+    assert.match(membersSource, /getMemberLastActivityLabel/);
+    assert.match(membersSource, /memberCardList/);
+    assert.match(membersSource, /memberListCard/);
+    assert.match(membersSource, /memberListCardSelected/);
+    assert.match(membersSource, /memberAvatar/);
+    assert.match(membersSource, /memberUsernameMissing/);
+    assert.match(membersSource, /\["all", "active", "setup", "inactive"\] as const/);
     assert.match(membersSource, /createError/);
     assert.match(membersSource, /confirmingStatusMember/);
     assert.match(membersSource, /createPortal/);
@@ -861,30 +895,74 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(membersSource, /phone_number \?\? "None"/);
 
     const membersCss = readFileSync("src/app/page.module.css", "utf8");
-    assert.match(membersCss, /\.memberTable/);
+    assert.doesNotMatch(membersCss, /\.memberTable/);
     assert.match(membersCss, /\.memberModal/);
-    assert.match(membersCss, /\.memberDetailModal/);
+    assert.match(membersCss, /\.memberDetailPopout/);
+    assert.match(membersCss, /\.memberModalLayer/);
+    assert.match(membersCss, /--member-modal-top: 104px/);
+    assert.match(membersCss, /\.memberDetailTabs/);
+    assert.match(membersCss, /\.memberDetailTabActive/);
+    assert.match(membersCss, /\.memberCardList/);
+    assert.match(membersCss, /\.memberListCard/);
+    assert.match(membersCss, /\.memberListCardSelected/);
+    assert.match(membersCss, /\.memberAvatar/);
+    assert.match(membersCss, /\.memberAvatarSetup/);
+    assert.match(membersCss, /\.memberCardStat/);
+    assert.match(membersCss, /\.memberCardActions/);
+    assert.match(membersCss, /\.memberListEnd/);
+    assert.match(membersCss, /\.memberSecurityError/);
+    assert.match(membersCss, /\.memberStatus-ready/);
+    assert.match(membersCss, /\.memberStatus-setup/);
+    assert.match(membersCss, /\.memberStatus-disabled/);
+    assert.match(membersCss, /\.memberStatus-locked/);
+    assert.match(membersCss, /\.memberSummaryStatus-ready/);
+    assert.match(membersCss, /\.memberSummaryStatus-setup/);
+    assert.match(membersCss, /\.memberPasswordToggle/);
     assert.match(membersCss, /\.memberDialogMessage/);
     assert.match(membersCss, /\.memberMoreButton/);
     assert.match(membersCss, /\.memberFloatingMenu/);
     assert.match(membersCss, /position: fixed/);
     assert.match(membersCss, /z-index: 80/);
     assert.match(membersCss, /@media \(max-width: 760px\)/);
-    assert.match(membersCss, /content: attr\(data-label\)/);
+    assert.match(membersCss, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\) auto/);
+    assert.match(membersCss, /grid-column: 1 \/ 3/);
 
     const authShellSource = readFileSync("src/components/AuthShell.tsx", "utf8");
     assert.match(authShellSource, /isAdminOperator/);
     assert.match(authShellSource, /appShell__adminMenu/);
     assert.match(authShellSource, /ToastProvider/);
     assert.match(authShellSource, /Admin/);
+    assert.match(authShellSource, /SalesNavIcon/);
+    assert.match(authShellSource, /HistoryNavIcon/);
     assert.match(authShellSource, /Operator Activity/);
     assert.match(authShellSource, /Staff/);
     assert.match(authShellSource, /Sales/);
+    assert.match(authShellSource, /History/);
+    assert.match(authShellSource, /Remote Commands/);
     assert.match(authShellSource, /Settings/);
     assert.match(authShellSource, /System/);
+    assert.ok(
+      authShellSource.indexOf('href="/members"') < authShellSource.indexOf('href="/sales"'),
+      "Members should precede Sales in the main nav"
+    );
+    assert.ok(
+      authShellSource.indexOf('href="/sales"') < authShellSource.indexOf('href="/rates"'),
+      "Sales should precede Rates in the main nav"
+    );
+    assert.ok(
+      authShellSource.indexOf('{ href: "/history"') < authShellSource.indexOf('{ href: "/operators"'),
+      "History should be the first Admin dropdown item"
+    );
+    assert.match(authShellSource, /className=\{pathname === "\/sales" \? "appShell__linkActive" : ""\}/);
+    assert.match(authShellSource, /const isAdminNavPath = ADMIN_NAV_ITEMS\.some/);
+    assert.match(authShellSource, /className=\{isAdminNavPath \? "appShell__linkActive" : ""\}/);
+    assert.doesNotMatch(authShellSource, /const isAdminPath/);
     assert.match(authShellSource, /href: "\/settings"/);
     assert.match(authShellSource, /href: "\/system"/);
+    assert.match(authShellSource, /href: "\/history"/);
     assert.match(authShellSource, /href="\/rates"/);
+    assert.match(authShellSource, /href="\/sales"/);
+    assert.doesNotMatch(authShellSource, /href="\/history"/);
     assert.match(authShellSource, /aria-expanded/);
     assert.match(authShellSource, /aria-haspopup="menu"/);
     assert.match(authShellSource, /appShell__chevron/);
@@ -1043,9 +1121,29 @@ async function runAsyncAssertions() {
 
     const statusCardSource = readFileSync("src/components/StatusCard.tsx", "utf8");
     assert.match(statusCardSource, /statusCardIcon/);
+    assert.match(statusCardSource, /variant === "dashboard"/);
     assert.match(statusCardSource, /memo/);
 
+    const dashboardSummarySource = readFileSync("src/components/DashboardSummary.tsx", "utf8");
+    assert.match(dashboardSummarySource, /SummaryIconName/);
+    assert.match(dashboardSummarySource, /icon: "available"/);
+    assert.match(dashboardSummarySource, /icon: "inUse"/);
+    assert.match(dashboardSummarySource, /icon: "sales"/);
+    assert.match(dashboardSummarySource, /icon: "operator"/);
+    assert.match(dashboardSummarySource, /variant="dashboard"/);
+    assert.doesNotMatch(dashboardSummarySource, /icon: "OK"/);
+
+    const pageTitleIconSource = readFileSync("src/components/PageTitleIcon.tsx", "utf8");
+    assert.match(pageTitleIconSource, /PageTitleIcon/);
+    assert.match(pageTitleIconSource, /dashboard/);
+    assert.match(pageTitleIconSource, /members/);
+    assert.match(pageTitleIconSource, /receipt/);
+    assert.match(pageTitleIconSource, /history/);
+    assert.match(pageTitleIconSource, /monitor-cog/);
+
     const dashboardClientSource = readFileSync("src/components/DashboardClient.tsx", "utf8");
+    assert.match(dashboardClientSource, /PageTitleIcon name="dashboard"/);
+    assert.match(dashboardClientSource, /pageTitleLockup/);
     assert.match(dashboardClientSource, /ActivityDrawerTrigger/);
     assert.doesNotMatch(dashboardClientSource, /<ActivityFeed/);
     assert.match(dashboardClientSource, /pushToast/);
@@ -1055,6 +1153,10 @@ async function runAsyncAssertions() {
 
     const pageCss = readFileSync("src/app/page.module.css", "utf8");
     assert.match(pageCss, /\.statusCard/);
+    assert.match(pageCss, /\.statusCardDashboard/);
+    assert.match(pageCss, /\.statusCardGlyph/);
+    assert.match(pageCss, /grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/);
+    assert.match(pageCss, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
     assert.match(pageCss, /\.activityPanel/);
     assert.match(pageCss, /\.activityTrigger/);
     assert.match(pageCss, /\.activityDrawer/);
@@ -1065,6 +1167,9 @@ async function runAsyncAssertions() {
 
     const globalsSource = readFileSync("src/app/globals.css", "utf8");
     assert.match(globalsSource, /--radius-card/);
+    assert.match(globalsSource, /\.pageTitleLockup/);
+    assert.match(globalsSource, /\.pageTitleIcon/);
+    assert.match(globalsSource, /\.pageTitleIcon__svg/);
     assert.match(globalsSource, /\.toastStack/);
     assert.match(globalsSource, /@keyframes toastIn/);
     assert.match(globalsSource, /\.appShell__adminMenu > button/);
@@ -1116,6 +1221,7 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(remoteCommandsSource, /failure_reason \?\? command\.client_response/);
 
     const salesSource = readFileSync("src/components/SalesManager.tsx", "utf8");
+    assert.match(salesSource, /PageTitleIcon name="receipt"/);
     assert.match(salesSource, /Total Sales/);
     assert.match(salesSource, /Outstanding Settlements/);
     assert.match(salesSource, /Export CSV/);
@@ -1127,6 +1233,24 @@ async function runAsyncAssertions() {
     assert.match(salesCss, /\.summaryGrid/);
     assert.match(salesCss, /\.chartRow/);
     assert.match(salesCss, /@media \(max-width: 760px\)/);
+
+    const pageTitleSources: Array<[string, RegExp]> = [
+      ["src/app/history/page.tsx", /PageTitleIcon name="history"/],
+      ["src/app/operator-activity/page.tsx", /PageTitleIcon name="activity"/],
+      ["src/app/rates/page.tsx", /PageTitleIcon name="rates"/],
+      ["src/app/remote-commands/page.tsx", /PageTitleIcon name="terminal"/],
+      ["src/app/settings/page.tsx", /PageTitleIcon name="settings"/],
+      ["src/app/system/page.tsx", /PageTitleIcon name="monitor-cog"/],
+      ["src/app/users/page.tsx", /PageTitleIcon name="users"/],
+      ["src/components/MembersManager.tsx", /PageTitleIcon name="members"/],
+      ["src/components/OperatorsManager.tsx", /PageTitleIcon name="shield"/],
+      ["src/components/ShiftsManager.tsx", /PageTitleIcon name="receipt"/]
+    ];
+    for (const [sourcePath, expectedIcon] of pageTitleSources) {
+      const source = readFileSync(sourcePath, "utf8");
+      assert.match(source, /pageTitleLockup/);
+      assert.match(source, expectedIcon);
+    }
 
     const operatorConfigSource = readFileSync("../server/operator_config.py", "utf8");
     for (const name of ["Mama", "Neil", "Tyrone", "Rogene", "Rojan", "Bel", "Karen", "Admin"]) {

@@ -281,7 +281,8 @@ export interface PreparedSessionSelection extends PrepaidSessionSelection {
 
 export interface MemberSessionSelection {
   sessionMode: "member_balance";
-  memberId: string;
+  memberUsername: string;
+  memberId?: string;
   durationSeconds?: number;
   memberPin?: string;
 }
@@ -638,9 +639,12 @@ export interface CashierShiftDetail {
 export interface MemberRecord {
   member_id: string;
   member_code: string;
+  username: string | null;
+  display_name: string | null;
   full_name: string;
   phone_number: string | null;
   has_pin: boolean;
+  requires_account_setup: boolean;
   status: "active" | "inactive";
   time_balance_seconds: number;
   joined_at: string;

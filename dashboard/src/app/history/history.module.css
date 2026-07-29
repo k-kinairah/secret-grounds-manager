@@ -2,8 +2,8 @@
   display: grid;
   gap: 14px;
   margin: 0 auto;
-  max-width: 1560px;
-  padding: 16px 18px 28px;
+  max-width: var(--app-page-max-width);
+  padding: var(--app-page-padding);
 }
 
 .topBar {
@@ -376,7 +376,7 @@
 
 @media (max-width: 760px) {
   .page {
-    padding: 14px 12px 24px;
+    padding: var(--app-page-padding-mobile);
   }
 
   .topBar {

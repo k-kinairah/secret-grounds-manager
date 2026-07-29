@@ -123,7 +123,12 @@ def main() -> None:
         )
 
         member = create_member(
-            MemberCreateRequest(member_code="SG-SALES", full_name="Sales Member"),
+            MemberCreateRequest(
+                username="sales.member",
+                display_name="Sales Member",
+                pin="1234",
+                confirm_pin="1234",
+            ),
             cashier,
         )
         products = list_membership_products()

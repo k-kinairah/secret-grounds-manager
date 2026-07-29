@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def normalize_money(value: Decimal) -> Decimal:
@@ -18,6 +18,30 @@ def normalize_positive_money(value: Decimal) -> Decimal:
         raise ValueError("Amount must be greater than zero")
 
     return normalized_value
+
+
+def validate_member_username_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    username = value.strip()
+    if not username:
+        return None
+    if len(username) < 3 or len(username) > 30:
+        raise ValueError("Member username must be 3 to 30 characters")
+    if any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for character in username):
+        raise ValueError("Member username may only use letters, numbers, dots, underscores, or hyphens")
+    return username
+
+
+def validate_member_pin_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    pin = value.strip()
+    if not pin:
+        return None
+    if not pin.isdigit() or len(pin) < 4 or len(pin) > 6:
+        raise ValueError("Member PIN must be 4 to 6 numeric digits")
+    return pin
 
 
 def normalize_mac_address(value: str | None) -> str | None:
@@ -477,6 +501,7 @@ class PreparedSessionStartRequest(BaseModel):
     amount: Decimal | None = None
     payment: "PaymentCreateRequest | None" = None
     member_id: str | None = None
+    member_username: str | None = None
     member_pin: str | None = None
     operator_id: str | None = None
 
@@ -484,6 +509,16 @@ class PreparedSessionStartRequest(BaseModel):
     @classmethod
     def validate_amount(cls, value: Decimal | None) -> Decimal | None:
         return normalize_positive_money(value) if value is not None else None
+
+    @field_validator("member_username")
+    @classmethod
+    def validate_member_username(cls, value: str | None) -> str | None:
+        return validate_member_username_value(value)
+
+    @field_validator("member_pin")
+    @classmethod
+    def validate_member_pin(cls, value: str | None) -> str | None:
+        return validate_member_pin_value(value)
 
 
 class PreparedSessionResponse(BaseModel):
@@ -667,18 +702,26 @@ class PrepaidAddTimeRequest(AddTimeRequest):
 
 class MemberSessionStartRequest(BaseModel):
     pc_name: str = Field(..., min_length=1)
-    member_id: str = Field(..., min_length=1)
+    member_username: str | None = None
+    member_id: str | None = None
     duration_seconds: int | None = Field(default=None, gt=0)
     member_pin: str | None = None
+
+    @field_validator("member_username")
+    @classmethod
+    def validate_member_username(cls, value: str | None) -> str | None:
+        return validate_member_username_value(value)
 
     @field_validator("member_pin")
     @classmethod
     def validate_member_pin(cls, value: str | None) -> str | None:
-        if value is None or value == "":
-            return None
-        if not value.isdigit() or len(value) < 4 or len(value) > 6:
-            raise ValueError("Member PIN must be 4 to 6 numeric digits")
-        return value
+        return validate_member_pin_value(value)
+
+    @model_validator(mode="after")
+    def require_member_identity(self) -> "MemberSessionStartRequest":
+        if not self.member_username and not self.member_id:
+            raise ValueError("Member username is required")
+        return self
 
 
 class MemberAddTimeRequest(BaseModel):
@@ -929,9 +972,12 @@ class CashierShiftDetail(BaseModel):
 class MemberRecord(BaseModel):
     member_id: str
     member_code: str
+    username: str | None = None
+    display_name: str | None = None
     full_name: str
     phone_number: str | None = None
     has_pin: bool = False
+    requires_account_setup: bool = False
     status: MemberStatus
     time_balance_seconds: int
     joined_at: datetime
@@ -942,17 +988,49 @@ class MemberRecord(BaseModel):
 
 
 class MemberCreateRequest(BaseModel):
-    member_code: str = Field(..., min_length=1)
-    full_name: str = Field(..., min_length=1)
+    username: str
+    display_name: str | None = None
+    pin: str
+    confirm_pin: str
     phone_number: str | None = None
     expires_at: datetime | None = None
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        username = validate_member_username_value(value)
+        if username is None:
+            raise ValueError("Member username is required")
+        return username
+
+    @field_validator("pin", "confirm_pin")
+    @classmethod
+    def validate_pin(cls, value: str) -> str:
+        pin = validate_member_pin_value(value)
+        if pin is None:
+            raise ValueError("Member PIN is required")
+        return pin
+
+    @model_validator(mode="after")
+    def validate_pin_confirmation(self) -> "MemberCreateRequest":
+        if self.pin != self.confirm_pin:
+            raise ValueError("Member PIN confirmation does not match")
+        return self
 
 
 class MemberUpdateRequest(BaseModel):
-    member_code: str = Field(..., min_length=1)
-    full_name: str = Field(..., min_length=1)
+    username: str
+    display_name: str | None = None
     phone_number: str | None = None
     expires_at: datetime | None = None
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        username = validate_member_username_value(value)
+        if username is None:
+            raise ValueError("Member username is required")
+        return username
 
 
 class MemberStatusUpdate(BaseModel):
@@ -960,16 +1038,22 @@ class MemberStatusUpdate(BaseModel):
 
 
 class MemberPinResetRequest(BaseModel):
-    pin: str | None = None
+    pin: str
+    confirm_pin: str
 
-    @field_validator("pin")
+    @field_validator("pin", "confirm_pin")
     @classmethod
-    def validate_pin(cls, value: str | None) -> str | None:
-        if value is None or value == "":
-            return None
-        if not value.isdigit() or len(value) < 4 or len(value) > 6:
-            raise ValueError("Member PIN must be 4 to 6 numeric digits")
-        return value
+    def validate_pin(cls, value: str) -> str:
+        pin = validate_member_pin_value(value)
+        if pin is None:
+            raise ValueError("Member PIN is required")
+        return pin
+
+    @model_validator(mode="after")
+    def validate_pin_confirmation(self) -> "MemberPinResetRequest":
+        if self.pin != self.confirm_pin:
+            raise ValueError("Member PIN confirmation does not match")
+        return self
 
 
 class MembershipProductRecord(BaseModel):

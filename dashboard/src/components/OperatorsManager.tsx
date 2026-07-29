@@ -15,6 +15,7 @@ import {
 import { formatDateTime } from "@/lib/time";
 import type { OperatorActivityRecord, OperatorCreateInput, OperatorManagementRecord, OperatorUpdateInput } from "@/lib/types";
 import styles from "@/app/users/users.module.css";
+import { PageTitleIcon } from "./PageTitleIcon";
 import { useToast } from "./ToastProvider";
 
 type ModalState =
@@ -292,10 +293,13 @@ export function OperatorsManager() {
     <>
       <section className={styles.staffPanel}>
         <div className={styles.staffPageHeader}>
-          <div>
-            <h1>Staff</h1>
-            <p>Manage who can operate Secret Grounds.</p>
-            <span>{operators.length} operators / {activeCount} active</span>
+          <div className="pageTitleLockup">
+            <PageTitleIcon name="shield" />
+            <div>
+              <h1>Staff</h1>
+              <p>Manage who can operate Secret Grounds.</p>
+              <span>{operators.length} operators / {activeCount} active</span>
+            </div>
           </div>
           <div className={styles.staffHeaderActions}>
             <label className={styles.staffSearch}>

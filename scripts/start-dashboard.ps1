@@ -26,7 +26,7 @@ if (!(Wait-SgHttpReady -Url "http://127.0.0.1:$backendPort/healthz" -TimeoutSeco
 New-Item -ItemType Directory -Force -Path (Split-Path (Resolve-SgPath $dashboardLog)) | Out-Null
 Write-SgLine "Starting Secret Grounds dashboard $(Get-SgVersion) on $dashboardHost`:$dashboardPort with backend $backendUrl." "INFO" $dashboardLog
 
-$node = (Get-Command "node.exe" -ErrorAction Stop).Source
+$node = Resolve-SgNodePath
 $nextCli = Join-Path $Script:SecretGroundsRoot "dashboard\node_modules\next\dist\bin\next"
 if (!(Test-Path $nextCli)) {
     throw "Next.js production CLI is missing: $nextCli. Run scripts\install-dependencies.ps1 first."

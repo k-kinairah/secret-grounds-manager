@@ -24,12 +24,12 @@ const ADMIN_ONLY_PATHS = [
   "/remote-commands"
 ];
 const ADMIN_NAV_ITEMS = [
-  { href: "/operator-activity", label: "Operator Activity" },
-  { href: "/operators", label: "Staff" },
-  { href: "/remote-commands", label: "Commands" },
-  { href: "/sales", label: "Sales" },
-  { href: "/settings", label: "Settings" },
-  { href: "/system", label: "System" }
+  { href: "/history", icon: HistoryNavIcon, label: "History" },
+  { href: "/operators", icon: UsersNavIcon, label: "Staff" },
+  { href: "/operator-activity", icon: HistoryNavIcon, label: "Operator Activity" },
+  { href: "/remote-commands", icon: CommandsNavIcon, label: "Remote Commands" },
+  { href: "/settings", icon: SettingsNavIcon, label: "Settings" },
+  { href: "/system", icon: SystemNavIcon, label: "System" }
 ];
 
 function canAccess(user: CurrentUser | null, minimumRole: UserRole): boolean {
@@ -50,7 +50,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
   const adminButtonRef = useRef<HTMLButtonElement | null>(null);
   const isLoginPage = pathname === "/login";
   const isAdminOperator = user?.username === "admin";
-  const isAdminPath = ADMIN_ONLY_PATHS.includes(pathname);
+  const isAdminNavPath = ADMIN_NAV_ITEMS.some((item) => item.href === pathname);
 
   useEffect(() => {
     let isMounted = true;
@@ -225,7 +225,8 @@ export function AuthShell({ children }: { children: ReactNode }) {
 
   return (
     <ToastProvider>
-      <nav className="appShell" aria-label="Main navigation">
+      <div className="appShellFrame">
+        <nav className="appShell" aria-label="Main navigation">
         <Link className="appShell__brand" href="/">
           <img
             alt=""
@@ -235,13 +236,27 @@ export function AuthShell({ children }: { children: ReactNode }) {
             src="/secret-grounds-logo.png"
             width={38}
           />
-          <span>Secret Grounds</span>
+          <span>SECRET GROUNDS</span>
         </Link>
         <div className="appShell__links">
-          <Link className={pathname === "/" ? "appShell__linkActive" : ""} href="/">Dashboard</Link>
-          <Link className={pathname === "/members" ? "appShell__linkActive" : ""} href="/members">Members</Link>
-          <Link className={pathname === "/history" ? "appShell__linkActive" : ""} href="/history">History</Link>
-          <Link className={pathname === "/rates" ? "appShell__linkActive" : ""} href="/rates">Rates</Link>
+          <Link className={pathname === "/" ? "appShell__linkActive" : ""} href="/">
+            <DashboardNavIcon />
+            Dashboard
+          </Link>
+          <Link className={pathname === "/members" ? "appShell__linkActive" : ""} href="/members">
+            <UsersNavIcon />
+            Members
+          </Link>
+          {isAdminOperator ? (
+            <Link className={pathname === "/sales" ? "appShell__linkActive" : ""} href="/sales">
+              <SalesNavIcon />
+              Sales
+            </Link>
+          ) : null}
+          <Link className={pathname === "/rates" ? "appShell__linkActive" : ""} href="/rates">
+            <RatesNavIcon />
+            Rates
+          </Link>
           {isAdminOperator ? (
             <div
               className="appShell__adminMenu"
@@ -255,28 +270,33 @@ export function AuthShell({ children }: { children: ReactNode }) {
               <button
                 aria-expanded={isAdminMenuOpen}
                 aria-haspopup="menu"
-                className={isAdminPath ? "appShell__linkActive" : ""}
+                className={isAdminNavPath ? "appShell__linkActive" : ""}
                 onClick={() => setIsAdminMenuOpen((open) => !open)}
                 ref={adminButtonRef}
                 type="button"
               >
+                <AdminNavIcon />
                 Admin
                 <span className="appShell__chevron" aria-hidden="true" />
               </button>
               {isAdminMenuOpen ? (
                 <div className="appShell__adminDropdown" role="menu">
-                  {ADMIN_NAV_ITEMS.map((item) => (
-                    <Link
-                      aria-current={pathname === item.href ? "page" : undefined}
-                      className={pathname === item.href ? "appShell__linkActive" : ""}
-                      href={item.href}
-                      key={item.href}
-                      onClick={() => setIsAdminMenuOpen(false)}
-                      role="menuitem"
-                    >
-                      {item.label}
-                    </Link>
-                  ))}
+                  {ADMIN_NAV_ITEMS.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <Link
+                        aria-current={pathname === item.href ? "page" : undefined}
+                        className={pathname === item.href ? "appShell__linkActive" : ""}
+                        href={item.href}
+                        key={item.href}
+                        onClick={() => setIsAdminMenuOpen(false)}
+                        role="menuitem"
+                      >
+                        <Icon />
+                        {item.label}
+                      </Link>
+                    );
+                  })}
                 </div>
               ) : null}
             </div>
@@ -295,9 +315,11 @@ export function AuthShell({ children }: { children: ReactNode }) {
                 </span>
               ) : null}
               <button disabled={isLoggingOut} onClick={handleLogout} type="button">
+                <LogOutActionIcon />
                 {isLoggingOut ? "Signing out..." : "Sign out"}
               </button>
               <button disabled={isLoggingOut} onClick={handleChangeOperator} type="button">
+                <UsersActionIcon />
                 Change Operator
               </button>
             </>
@@ -305,7 +327,8 @@ export function AuthShell({ children }: { children: ReactNode }) {
             <span>Checking access...</span>
           )}
         </div>
-      </nav>
+        </nav>
+      </div>
       {isChecking ? (
         <main className="authLoading" aria-live="polite">
           <img
@@ -354,6 +377,121 @@ export function AuthShell({ children }: { children: ReactNode }) {
         </>
       )}
     </ToastProvider>
+  );
+}
+
+function DashboardNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M4 4h7v7H4z" />
+      <path d="M13 4h7v7h-7z" />
+      <path d="M4 13h7v7H4z" />
+      <path d="M13 13h7v7h-7z" />
+    </svg>
+  );
+}
+
+function UsersNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M16 11a3 3 0 1 0-2.8-4" />
+      <path d="M8.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" />
+      <path d="M3 20c.7-3 2.6-5 5.5-5s4.8 2 5.5 5" />
+      <path d="M14.5 15.3c2.8.2 4.6 1.9 5.5 4.7" />
+    </svg>
+  );
+}
+
+function HistoryNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M4 12a8 8 0 1 0 2.3-5.7" />
+      <path d="M4 5v5h5" />
+      <path d="M12 8v5l3 2" />
+    </svg>
+  );
+}
+
+function SalesNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M6 3h12v18l-2-1.2-2 1.2-2-1.2-2 1.2-2-1.2L6 21V3z" />
+      <path d="M9 7h6" />
+      <path d="M9 11h6" />
+      <path d="M9 15h3" />
+    </svg>
+  );
+}
+
+function RatesNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M4 7.5V4h3.5L19 15.5 15.5 19 4 7.5z" />
+      <path d="M8 8h.01" />
+      <path d="M14 10.5c-1-.7-2.5-.2-2.5 1s1.3 1.5 2.5 2 2.5.8 2.5 2-1.5 1.7-2.5 1" />
+    </svg>
+  );
+}
+
+function CommandsNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M4 5h16v10H4z" />
+      <path d="M8 19h8" />
+      <path d="M12 15v4" />
+      <path d="m8 10 2-2-2-2" />
+      <path d="M12 12h4" />
+    </svg>
+  );
+}
+
+function SettingsNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3.4-.2-.1a1.7 1.7 0 0 0-1.9.1 7.8 7.8 0 0 1-1.6.9 1.7 1.7 0 0 0-1.1 1.6v.1H9v-.1a1.7 1.7 0 0 0-1.1-1.6 7.8 7.8 0 0 1-1.6-.9 1.7 1.7 0 0 0-1.9-.1l-.2.1-2-3.4.1-.1A1.7 1.7 0 0 0 2.6 15a7.7 7.7 0 0 1 0-1.9 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2-3.4.2.1a1.7 1.7 0 0 0 1.9-.1 7.8 7.8 0 0 1 1.6-.9A1.7 1.7 0 0 0 9 5.2V5h4v.2a1.7 1.7 0 0 0 1.1 1.6 7.8 7.8 0 0 1 1.6.9 1.7 1.7 0 0 0 1.9.1l.2-.1 2 3.4-.1.1a1.7 1.7 0 0 0-.3 1.9 7.7 7.7 0 0 1 0 1.9z" />
+    </svg>
+  );
+}
+
+function SystemNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M4 5h16v14H4z" />
+      <path d="M8 9h8" />
+      <path d="M8 13h5" />
+      <path d="M17 13h.01" />
+    </svg>
+  );
+}
+
+function AdminNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M12 3 19 6v5c0 4.4-2.8 7.5-7 10-4.2-2.5-7-5.6-7-10V6l7-3z" />
+      <path d="m9.5 12 1.8 1.8 3.7-4" />
+    </svg>
+  );
+}
+
+function LogOutActionIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="M16 17l5-5-5-5" />
+      <path d="M21 12H9" />
+    </svg>
+  );
+}
+
+function UsersActionIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M16 11a3 3 0 1 0-2.8-4" />
+      <path d="M8.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" />
+      <path d="M3 20c.7-3 2.6-5 5.5-5s4.8 2 5.5 5" />
+      <path d="M14.5 15.3c2.8.2 4.6 1.9 5.5 4.7" />
+    </svg>
   );
 }
 

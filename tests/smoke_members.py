@@ -29,7 +29,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
         os.environ["SECRET_GROUNDS_DB_PATH"] = str(Path(temp_directory) / "members.sqlite3")
 
-        from server.database import initialize_database
+        from server.database import get_connection, initialize_database
         from server.main import (
             create_member,
             end_session,
@@ -74,21 +74,61 @@ def main() -> None:
 
         member = create_member(
             MemberCreateRequest(
-                member_code="sg-001",
-                full_name="Ada Player",
+                username="Ada.Player",
+                display_name="Ada Player",
+                pin="1234",
+                confirm_pin="1234",
                 phone_number="09170000000",
             ),
             cashier_user,
         )
+        assert member.username == "Ada.Player"
+        assert member.display_name == "Ada Player"
+        assert member.member_code.startswith("SG-")
+        assert member.has_pin is True
+        assert member.requires_account_setup is False
         try:
             create_member(
-                MemberCreateRequest(member_code="SG-001", full_name="Duplicate"),
+                MemberCreateRequest(
+                    username="ada.player",
+                    display_name="Duplicate",
+                    pin="1234",
+                    confirm_pin="1234",
+                ),
                 cashier_user,
             )
         except HTTPException as error:
             assert error.status_code == 409
         else:
-            raise AssertionError("Duplicate member code should be rejected")
+            raise AssertionError("Duplicate member username should be rejected")
+        try:
+            create_member(
+                MemberCreateRequest(
+                    username="bad user",
+                    display_name="Bad Username",
+                    pin="1234",
+                    confirm_pin="1234",
+                ),
+                cashier_user,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Invalid member username should be rejected")
+        try:
+            create_member(
+                MemberCreateRequest(
+                    username="pinfail",
+                    display_name="Bad PIN",
+                    pin="123",
+                    confirm_pin="123",
+                ),
+                cashier_user,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Invalid member PIN should be rejected")
 
         products = list_membership_products()
         membership_fee = next(product for product in products if product.product_id == "membership-fee")
@@ -107,10 +147,53 @@ def main() -> None:
         assert purchase.payment.change_given == Decimal("400.00")
         secured_member = reset_member_pin(
             member.member_id,
-            MemberPinResetRequest(pin="1234"),
+            MemberPinResetRequest(pin="1234", confirm_pin="1234"),
             cashier_user,
         )
         assert secured_member.has_pin is True
+        serialized_member = secured_member.model_dump_json().lower()
+        assert "pin_hash" not in serialized_member
+        assert "pbkdf2" not in serialized_member
+        assert "1234" not in serialized_member
+
+        with get_connection() as connection:
+            legacy_now = member.created_at.isoformat()
+            connection.execute(
+                """
+                INSERT INTO members (
+                    member_id,
+                    member_code,
+                    full_name,
+                    phone_number,
+                    status,
+                    time_balance_seconds,
+                    joined_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "legacy-member",
+                    "LEGACY-1",
+                    "Legacy Player",
+                    None,
+                    "active",
+                    3600,
+                    legacy_now,
+                    legacy_now,
+                    legacy_now,
+                ),
+            )
+        legacy_member = member_repository.get_member("legacy-member")
+        assert legacy_member is not None
+        assert legacy_member.requires_account_setup is True
+        try:
+            member_repository.require_usable_member("legacy-member")
+        except HTTPException as error:
+            assert error.status_code == 409
+        else:
+            raise AssertionError("Legacy member without username and PIN should require setup")
 
         pc_registry.clear()
         register_pc(PCRegistration(pc_name="PC-MEMBER", ip_address="127.0.0.1"))
@@ -128,7 +211,7 @@ def main() -> None:
                 start_member_session(
                     MemberSessionStartRequest(
                         pc_name="PC-MEMBER",
-                        member_id=member.member_id,
+                        member_username=member.username,
                         duration_seconds=60 * 60,
                     ),
                     cashier_user,
@@ -143,7 +226,7 @@ def main() -> None:
                 start_member_session(
                     MemberSessionStartRequest(
                         pc_name="PC-MEMBER",
-                        member_id=member.member_id,
+                        member_username=member.username,
                         duration_seconds=60 * 60,
                         member_pin="9999",
                     ),
@@ -154,11 +237,29 @@ def main() -> None:
             assert error.status_code == 403
         else:
             raise AssertionError("Incorrect member PIN should be rejected")
+        for _ in range(3):
+            try:
+                member_repository.verify_member_pin(member.member_id, "9999")
+            except HTTPException as error:
+                assert error.status_code == 403
+            else:
+                raise AssertionError("Incorrect member PIN should be rejected")
+        try:
+            member_repository.verify_member_pin(member.member_id, "9999")
+        except HTTPException as error:
+            assert error.status_code == 429
+        else:
+            raise AssertionError("Repeated incorrect member PIN attempts should be throttled")
+        reset_member_pin(
+            member.member_id,
+            MemberPinResetRequest(pin="1234", confirm_pin="1234"),
+            cashier_user,
+        )
         capped = asyncio.run(
             start_member_session(
                 MemberSessionStartRequest(
                     pc_name="PC-MEMBER",
-                    member_id=member.member_id,
+                    member_username=member.username,
                     duration_seconds=60 * 60,
                     member_pin="1234",
                 ),
@@ -172,7 +273,7 @@ def main() -> None:
                 start_member_session(
                     MemberSessionStartRequest(
                         pc_name="PC-MEMBER-2",
-                        member_id=member.member_id,
+                        member_username=member.username,
                         duration_seconds=30 * 60,
                         member_pin="1234",
                     ),
@@ -197,7 +298,7 @@ def main() -> None:
             start_member_session(
                 MemberSessionStartRequest(
                     pc_name="PC-MEMBER",
-                    member_id=member.member_id,
+                    member_username=member.username,
                     duration_seconds=None,
                     member_pin="1234",
                 ),
@@ -239,7 +340,7 @@ def main() -> None:
                 start_member_session(
                     MemberSessionStartRequest(
                         pc_name="PC-FAIL-MEMBER",
-                        member_id=member.member_id,
+                        member_username=member.username,
                         duration_seconds=60 * 60,
                         member_pin="1234",
                     ),
@@ -262,7 +363,7 @@ def main() -> None:
                 start_member_session(
                     MemberSessionStartRequest(
                         pc_name="PC-FAIL-MEMBER",
-                        member_id=member.member_id,
+                        member_username=member.username,
                         duration_seconds=60,
                         member_pin="1234",
                     ),

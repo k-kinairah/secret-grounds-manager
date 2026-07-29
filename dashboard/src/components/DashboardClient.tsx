@@ -28,6 +28,7 @@ import { calculateOpenTimeEstimate, secondsFromScheduledEnd } from "@/lib/time";
 import type { CurrentUser, MessageSeverity, PcLayoutSlot, PcSummary, RateProfile } from "@/lib/types";
 import { DashboardSummary } from "./DashboardSummary";
 import { EndSessionDialog } from "./EndSessionDialog";
+import { PageTitleIcon } from "./PageTitleIcon";
 import { PcDetailsPanel } from "./PcDetailsPanel";
 import { PcMonitorTile } from "./PcMonitorTile";
 import { PaymentDialog } from "./PaymentDialog";
@@ -373,22 +374,15 @@ export function DashboardClient() {
   return (
     <main className={styles.page}>
       <header className={styles.topBar}>
-        <div className={styles.brandBlock}>
-          <div className={styles.dashboardLogoLockup}>
-            <img
-              alt=""
-              aria-hidden="true"
-              className={styles.dashboardLogo}
-              height={52}
-              src="/secret-grounds-logo.png"
-              width={58}
-            />
-            <h1>Secret Grounds</h1>
+        <div className={`${styles.brandBlock} pageTitleLockup`}>
+          <PageTitleIcon name="dashboard" />
+          <div>
+            <h1>Dashboard</h1>
+            <p>Cashier session dashboard</p>
           </div>
-          <p>Cashier session dashboard</p>
         </div>
         <div className={styles.serverState}>
-          <div>{currentTime}</div>
+          <div className={styles.timestamp}>{currentTime}</div>
           <div
             className={`${styles.indicator} ${
               isConnected ? styles.connected : styles.disconnected
@@ -396,13 +390,14 @@ export function DashboardClient() {
           >
             Server {isConnected ? "Connected" : "Disconnected"}
           </div>
-          <button className={styles.secondaryButton} onClick={() => setDialog({ type: "announcement" })} type="button">
+          <button className={styles.utilityButton} onClick={() => setDialog({ type: "announcement" })} type="button">
+            <MegaphoneIcon />
             Announcement
           </button>
-          <ActivityDrawerTrigger />
+          <ActivityDrawerTrigger icon={<ActivityPulseIcon />} />
           {currentUser?.role === "owner" ? (
             <button
-              className={styles.secondaryButton}
+              className={styles.utilityButton}
               disabled={isMutating}
               onClick={() => {
                 if (showSetupLayout) {
@@ -414,6 +409,7 @@ export function DashboardClient() {
               }}
               type="button"
             >
+              <LayoutGridIcon />
               {showSetupLayout ? "Operational View" : "Setup/Layout"}
             </button>
           ) : null}
@@ -695,6 +691,35 @@ export function DashboardClient() {
         />
       ) : null}
     </main>
+  );
+}
+
+function MegaphoneIcon() {
+  return (
+    <svg aria-hidden="true" className={styles.utilityIcon} fill="none" viewBox="0 0 24 24">
+      <path d="M4 13.5h3.5l8-4.5v10l-8-4.5H4v-1z" />
+      <path d="M7.5 14.5 9 20h2.5l-1.2-4.7" />
+      <path d="M18 10.5c1.2.8 2 2.1 2 3.5s-.8 2.7-2 3.5" />
+    </svg>
+  );
+}
+
+function ActivityPulseIcon() {
+  return (
+    <svg aria-hidden="true" className={styles.utilityIcon} fill="none" viewBox="0 0 24 24">
+      <path d="M3 12h4l2.2-5 4 10 2.2-5H21" />
+    </svg>
+  );
+}
+
+function LayoutGridIcon() {
+  return (
+    <svg aria-hidden="true" className={styles.utilityIcon} fill="none" viewBox="0 0 24 24">
+      <path d="M4 4h6v6H4z" />
+      <path d="M14 4h6v6h-6z" />
+      <path d="M4 14h6v6H4z" />
+      <path d="M14 14h6v6h-6z" />
+    </svg>
   );
 }
 

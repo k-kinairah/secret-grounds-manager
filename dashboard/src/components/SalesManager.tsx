@@ -5,6 +5,7 @@ import { fetchSalesReport, getSalesExportUrl, type SalesReportFilters } from "@/
 import { formatDateTime, formatMoney, formatNaturalDuration } from "@/lib/time";
 import type { SalesPeriod, SalesReport, SalesType } from "@/lib/types";
 import styles from "@/app/sales/sales.module.css";
+import { PageTitleIcon } from "./PageTitleIcon";
 
 const PERIODS: Array<{ label: string; value: SalesPeriod }> = [
   { label: "Today", value: "today" },
@@ -95,9 +96,12 @@ export function SalesManager() {
   return (
     <>
       <header className={styles.header}>
-        <div>
-          <h1>Sales</h1>
-          <p>Collected payments, settlements, member purchases, and operator totals.</p>
+        <div className="pageTitleLockup">
+          <PageTitleIcon name="receipt" />
+          <div>
+            <h1>Sales</h1>
+            <p>Collected payments, settlements, member purchases, and operator totals.</p>
+          </div>
         </div>
         <div className={styles.headerActions}>
           <div className={styles.periodGroup} aria-label="Sales date period">
