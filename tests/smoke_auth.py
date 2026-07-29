@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+from http.cookies import SimpleCookie
 from decimal import Decimal
 from pathlib import Path
 
@@ -13,6 +14,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 def main() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
         os.environ["SECRET_GROUNDS_DB_PATH"] = str(Path(temp_directory) / "auth.sqlite3")
+        os.environ["SECRET_GROUNDS_APP_MODE"] = "production"
+        os.environ["SECRET_GROUNDS_CORS_ORIGINS"] = "http://127.0.0.1:3001"
+        os.environ["SECRET_GROUNDS_AUTH_SECURE_COOKIE"] = "false"
+        os.environ["SECRET_GROUNDS_AUTH_SAMESITE"] = "lax"
 
         from server.auth import (
             authenticate_admin_operator,
@@ -29,8 +34,16 @@ def main() -> None:
         from server.main import (
             quick_operator_login,
             create_rate,
+            get_allowed_cors_origins,
+            get_me,
+            get_me_alias,
+            get_rates,
+            get_registered_pcs,
             list_admin_operators,
+            list_members,
             list_operator_activity,
+            list_operators,
+            logout,
             open_shift,
             record_payment,
             require_admin_operator,
@@ -122,6 +135,48 @@ def main() -> None:
                 """
             ).fetchone()
         assert operator_audit_row["operator_display_name"] == "Rogene"
+
+        assert get_allowed_cors_origins() == ["http://127.0.0.1:3001"]
+
+        login_response = Response()
+        public_operator = quick_operator_login(
+            QuickOperatorLoginRequest(operator_id="operator_mama"),
+            login_response,
+        )
+        assert public_operator.username == "operator_mama"
+        set_cookie = next(
+            value.decode("latin-1")
+            for name, value in login_response.raw_headers
+            if name == b"set-cookie"
+        )
+        assert "sg_session=" in set_cookie
+        assert "HttpOnly" in set_cookie
+        assert "Path=/" in set_cookie
+        assert "SameSite=lax" in set_cookie
+        assert "Secure" not in set_cookie
+        assert "Domain=" not in set_cookie
+        parsed_cookie = SimpleCookie(set_cookie)
+        session_token = parsed_cookie["sg_session"].value
+
+        current_operator = get_current_user(sg_session=session_token)
+        assert get_me(current_operator).username == "operator_mama"
+        assert get_me_alias(current_operator).username == "operator_mama"
+        assert isinstance(list_members(None, current_operator), list)
+        assert isinstance(get_rates(False, current_operator), list)
+        assert isinstance(list_operators(current_operator), list)
+        assert isinstance(get_registered_pcs(current_operator), list)
+
+        refreshed_operator = get_current_user(sg_session=session_token)
+        assert refreshed_operator.username == "operator_mama"
+
+        logout_response = Response()
+        assert logout(logout_response, session_token) == {"message": "Logged out"}
+        try:
+            get_current_user(sg_session=session_token)
+        except HTTPException as error:
+            assert error.status_code == 401
+        else:
+            raise AssertionError("Logged-out session should be rejected")
 
         owner = user_repository.create_user(
             UserCreateRequest(
@@ -226,6 +281,10 @@ def main() -> None:
             owner.user_id,
             UserStatusUpdate(is_active=True),
             stored_owner,
+        )
+        quick_operator_login(
+            QuickOperatorLoginRequest(operator_id="operator_rogene"),
+            Response(),
         )
 
         now = current_utc_time()

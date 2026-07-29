@@ -374,7 +374,17 @@ export function DashboardClient() {
     <main className={styles.page}>
       <header className={styles.topBar}>
         <div className={styles.brandBlock}>
-          <h1>Secret Grounds</h1>
+          <div className={styles.dashboardLogoLockup}>
+            <img
+              alt=""
+              aria-hidden="true"
+              className={styles.dashboardLogo}
+              height={52}
+              src="/secret-grounds-logo.png"
+              width={58}
+            />
+            <h1>Secret Grounds</h1>
+          </div>
           <p>Cashier session dashboard</p>
         </div>
         <div className={styles.serverState}>

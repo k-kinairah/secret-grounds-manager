@@ -204,9 +204,20 @@ select:focus-visible {
 }
 
 .authLoading {
+  align-items: center;
   color: var(--muted);
+  display: flex;
+  gap: 14px;
   font-weight: 700;
   padding: 40px 28px;
+}
+
+.authLoading__logo {
+  display: block;
+  filter: drop-shadow(0 0 18px rgb(34 211 238 / 0.30));
+  height: 64px;
+  object-fit: contain;
+  width: 72px;
 }
 
 .shiftNotice {
@@ -454,16 +465,10 @@ input:-webkit-autofill:focus {
 }
 
 .appShell__mark {
-  align-items: center;
-  background: linear-gradient(135deg, #22d3ee, #2563eb);
-  border: 1px solid rgba(125, 211, 252, 0.82);
-  border-radius: var(--radius-card);
-  box-shadow: 0 0 24px rgb(34 211 238 / 0.32);
-  color: #020617;
-  display: inline-flex;
-  font-weight: 1000;
+  display: block;
+  filter: drop-shadow(0 0 14px rgb(34 211 238 / 0.34));
   height: 34px;
-  justify-content: center;
+  object-fit: contain;
   width: 38px;
 }
 

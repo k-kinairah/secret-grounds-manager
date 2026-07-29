@@ -42,10 +42,15 @@ import type {
   SessionRecord
 } from "./types";
 
-const DEFAULT_BASE_URL = "http://127.0.0.1:8000";
+const DEVELOPMENT_BASE_URL = "http://localhost:8000";
+const PRODUCTION_BASE_URL = "http://127.0.0.1:18001";
 
 export function getApiBaseUrl(): string {
-  return (process.env.NEXT_PUBLIC_FASTAPI_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/$/, "");
+  const configuredUrl = process.env.NEXT_PUBLIC_FASTAPI_BASE_URL;
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/$/, "");
+  }
+  return (process.env.NODE_ENV === "production" ? PRODUCTION_BASE_URL : DEVELOPMENT_BASE_URL).replace(/\/$/, "");
 }
 
 export function getPollingIntervalMs(): number {

@@ -32,7 +32,7 @@ try {
 
     $openBrowser = (Get-SgBool "SECRET_GROUNDS_OPEN_BROWSER" $true) -and !$NoBrowser
     if ($openBrowser) {
-        Start-Process "http://127.0.0.1:$dashboardPort"
+        Start-Process "http://127.0.0.1:3001"
     }
     Write-SgLine "Secret Grounds cashier stack is running. Backend PID $((Get-SgProcessRecord "backend").Pid), dashboard PID $((Get-SgProcessRecord "dashboard").Pid)." "INFO" $serverLog
 } catch {

@@ -184,7 +184,8 @@ session_service = SessionService(
 OFFLINE_AFTER_SECONDS = 15
 MONITOR_INTERVAL_SECONDS = 5
 COMMAND_ACK_TIMEOUT_SECONDS = 5
-DEFAULT_CORS_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
+DEVELOPMENT_DASHBOARD_ORIGIN = "http://localhost:3000"
+PRODUCTION_DASHBOARD_ORIGIN = "http://127.0.0.1:3001"
 
 
 def configure_file_logging() -> None:
@@ -210,11 +211,16 @@ def configure_file_logging() -> None:
 
 
 def get_allowed_cors_origins() -> list[str]:
-    raw_origins = os.getenv("SECRET_GROUNDS_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
+    default_origin = (
+        PRODUCTION_DASHBOARD_ORIGIN
+        if os.getenv("SECRET_GROUNDS_APP_MODE", "development").strip().lower() == "production"
+        else DEVELOPMENT_DASHBOARD_ORIGIN
+    )
+    raw_origins = os.getenv("SECRET_GROUNDS_CORS_ORIGINS", default_origin)
     return [
         origin.strip()
         for origin in raw_origins.split(",")
-        if origin.strip()
+        if origin.strip() and origin.strip() != "*"
     ]
 
 
@@ -454,6 +460,11 @@ def logout(
 
 @app.get("/auth/me", response_model=UserPublic)
 def get_me(current_user=Depends(get_current_user)) -> UserPublic:
+    return to_public_user(current_user)
+
+
+@app.get("/me", response_model=UserPublic)
+def get_me_alias(current_user=Depends(get_current_user)) -> UserPublic:
     return to_public_user(current_user)
 
 

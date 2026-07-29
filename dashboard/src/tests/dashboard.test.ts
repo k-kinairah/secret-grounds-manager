@@ -437,10 +437,18 @@ assert.equal(isPaymentInputValid("gcash", "25.00", "20.00", ""), false);
 assert.equal(isPaymentInputValid("gcash", "5.00", "20.00", ""), true);
 
 const originalBaseUrl = process.env.NEXT_PUBLIC_FASTAPI_BASE_URL;
+const originalNodeEnv = process.env.NODE_ENV;
 const originalFetch = globalThis.fetch;
 const originalConsoleError = console.error;
-process.env.NEXT_PUBLIC_FASTAPI_BASE_URL = "http://127.0.0.1:8000/";
-assert.equal(getApiBaseUrl(), "http://127.0.0.1:8000");
+process.env.NEXT_PUBLIC_FASTAPI_BASE_URL = "http://localhost:8000/";
+assert.equal(getApiBaseUrl(), "http://localhost:8000");
+delete process.env.NEXT_PUBLIC_FASTAPI_BASE_URL;
+Object.defineProperty(process.env, "NODE_ENV", { configurable: true, enumerable: true, writable: true, value: "development" });
+assert.equal(getApiBaseUrl(), "http://localhost:8000");
+Object.defineProperty(process.env, "NODE_ENV", { configurable: true, enumerable: true, writable: true, value: "production" });
+assert.equal(getApiBaseUrl(), "http://127.0.0.1:18001");
+process.env.NEXT_PUBLIC_FASTAPI_BASE_URL = "http://localhost:8000/";
+Object.defineProperty(process.env, "NODE_ENV", { configurable: true, enumerable: true, writable: true, value: originalNodeEnv });
 
 async function runAsyncAssertions() {
   try {
@@ -586,48 +594,48 @@ async function runAsyncAssertions() {
     assert.deepEqual(
       fetchCalls.map((call) => ({ method: call.method, url: call.url })),
       [
-        { method: "POST", url: "http://127.0.0.1:8000/auth/login" },
-        { method: "GET", url: "http://127.0.0.1:8000/auth/operators" },
-        { method: "POST", url: "http://127.0.0.1:8000/auth/operator/quick" },
-        { method: "POST", url: "http://127.0.0.1:8000/auth/operator/admin" },
-        { method: "GET", url: "http://127.0.0.1:8000/auth/me" },
-        { method: "GET", url: "http://127.0.0.1:8000/users" },
-        { method: "GET", url: "http://127.0.0.1:8000/sales/report?period=today" },
-        { method: "GET", url: "http://127.0.0.1:8000/dashboard/today-sales" },
-        { method: "GET", url: "http://127.0.0.1:8000/settings" },
-        { method: "PUT", url: "http://127.0.0.1:8000/settings" },
-        { method: "POST", url: "http://127.0.0.1:8000/settings/reset" },
-        { method: "GET", url: "http://127.0.0.1:8000/pcs/layout?include_disabled=true" },
-        { method: "POST", url: "http://127.0.0.1:8000/users" },
-        { method: "PUT", url: "http://127.0.0.1:8000/users/user-1" },
-        { method: "PATCH", url: "http://127.0.0.1:8000/users/user-1/status" },
-        { method: "POST", url: "http://127.0.0.1:8000/users/user-1/reset-password" },
-        { method: "POST", url: "http://127.0.0.1:8000/auth/logout" },
-        { method: "POST", url: "http://127.0.0.1:8000/members/member-1/pin" },
-        { method: "GET", url: "http://127.0.0.1:8000/rates?include_inactive=true" },
-        { method: "POST", url: "http://127.0.0.1:8000/rates/calculate-time" },
-        { method: "POST", url: "http://127.0.0.1:8000/rates" },
-        { method: "PUT", url: "http://127.0.0.1:8000/rates/rate-30" },
-        { method: "PATCH", url: "http://127.0.0.1:8000/rates/rate-30/status" },
-        { method: "PUT", url: "http://127.0.0.1:8000/pcs/PC-03/layout" },
-        { method: "POST", url: "http://127.0.0.1:8000/sessions/start-member" },
-        { method: "POST", url: "http://127.0.0.1:8000/sessions/start" },
-        { method: "POST", url: "http://127.0.0.1:8000/pcs/PC-01/message" },
-        { method: "POST", url: "http://127.0.0.1:8000/pcs/PC-01/power/sleep" },
-        { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/add-time" },
-        { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/force-end" },
-        { method: "POST", url: "http://127.0.0.1:8000/sessions/session-1/payments" },
-        { method: "GET", url: "http://127.0.0.1:8000/system/health" },
-        { method: "GET", url: "http://127.0.0.1:8000/system/database" },
-        { method: "GET", url: "http://127.0.0.1:8000/system/backups" },
-        { method: "POST", url: "http://127.0.0.1:8000/system/backup" },
-        { method: "POST", url: "http://127.0.0.1:8000/system/restore" },
-        { method: "DELETE", url: "http://127.0.0.1:8000/system/backups/secretgrounds_2026-07-29_143500.db?confirm=true" },
-        { method: "GET", url: "http://127.0.0.1:8000/system/storage" },
-        { method: "GET", url: "http://127.0.0.1:8000/system/info" },
-        { method: "GET", url: "http://127.0.0.1:8000/system/logs" },
-        { method: "GET", url: "http://127.0.0.1:8000/system/clients" },
-        { method: "GET", url: "http://127.0.0.1:8000/activity?limit=60" }
+        { method: "POST", url: "http://localhost:8000/auth/login" },
+        { method: "GET", url: "http://localhost:8000/auth/operators" },
+        { method: "POST", url: "http://localhost:8000/auth/operator/quick" },
+        { method: "POST", url: "http://localhost:8000/auth/operator/admin" },
+        { method: "GET", url: "http://localhost:8000/auth/me" },
+        { method: "GET", url: "http://localhost:8000/users" },
+        { method: "GET", url: "http://localhost:8000/sales/report?period=today" },
+        { method: "GET", url: "http://localhost:8000/dashboard/today-sales" },
+        { method: "GET", url: "http://localhost:8000/settings" },
+        { method: "PUT", url: "http://localhost:8000/settings" },
+        { method: "POST", url: "http://localhost:8000/settings/reset" },
+        { method: "GET", url: "http://localhost:8000/pcs/layout?include_disabled=true" },
+        { method: "POST", url: "http://localhost:8000/users" },
+        { method: "PUT", url: "http://localhost:8000/users/user-1" },
+        { method: "PATCH", url: "http://localhost:8000/users/user-1/status" },
+        { method: "POST", url: "http://localhost:8000/users/user-1/reset-password" },
+        { method: "POST", url: "http://localhost:8000/auth/logout" },
+        { method: "POST", url: "http://localhost:8000/members/member-1/pin" },
+        { method: "GET", url: "http://localhost:8000/rates?include_inactive=true" },
+        { method: "POST", url: "http://localhost:8000/rates/calculate-time" },
+        { method: "POST", url: "http://localhost:8000/rates" },
+        { method: "PUT", url: "http://localhost:8000/rates/rate-30" },
+        { method: "PATCH", url: "http://localhost:8000/rates/rate-30/status" },
+        { method: "PUT", url: "http://localhost:8000/pcs/PC-03/layout" },
+        { method: "POST", url: "http://localhost:8000/sessions/start-member" },
+        { method: "POST", url: "http://localhost:8000/sessions/start" },
+        { method: "POST", url: "http://localhost:8000/pcs/PC-01/message" },
+        { method: "POST", url: "http://localhost:8000/pcs/PC-01/power/sleep" },
+        { method: "POST", url: "http://localhost:8000/sessions/session-1/add-time" },
+        { method: "POST", url: "http://localhost:8000/sessions/session-1/force-end" },
+        { method: "POST", url: "http://localhost:8000/sessions/session-1/payments" },
+        { method: "GET", url: "http://localhost:8000/system/health" },
+        { method: "GET", url: "http://localhost:8000/system/database" },
+        { method: "GET", url: "http://localhost:8000/system/backups" },
+        { method: "POST", url: "http://localhost:8000/system/backup" },
+        { method: "POST", url: "http://localhost:8000/system/restore" },
+        { method: "DELETE", url: "http://localhost:8000/system/backups/secretgrounds_2026-07-29_143500.db?confirm=true" },
+        { method: "GET", url: "http://localhost:8000/system/storage" },
+        { method: "GET", url: "http://localhost:8000/system/info" },
+        { method: "GET", url: "http://localhost:8000/system/logs" },
+        { method: "GET", url: "http://localhost:8000/system/clients" },
+        { method: "GET", url: "http://localhost:8000/activity?limit=60" }
       ]
     );
     assert.equal(fetchCalls.every((call) => call.credentials === "include"), true);
@@ -694,11 +702,11 @@ async function runAsyncAssertions() {
     });
     assert.equal(
       getSystemBackupDownloadUrl("secretgrounds_2026-07-29_143500.db"),
-      "http://127.0.0.1:8000/system/backups/secretgrounds_2026-07-29_143500.db/download"
+      "http://localhost:8000/system/backups/secretgrounds_2026-07-29_143500.db/download"
     );
     assert.equal(
       getSalesExportUrl({ period: "custom", startDate: "2026-07-01", endDate: "2026-07-31" }),
-      "http://127.0.0.1:8000/sales/export.csv?period=custom&start_date=2026-07-01&end_date=2026-07-31"
+      "http://localhost:8000/sales/export.csv?period=custom&start_date=2026-07-01&end_date=2026-07-31"
     );
 
     const saveEvents: string[] = [];
@@ -1145,6 +1153,7 @@ async function runAsyncAssertions() {
     } else {
       process.env.NEXT_PUBLIC_FASTAPI_BASE_URL = originalBaseUrl;
     }
+    Object.defineProperty(process.env, "NODE_ENV", { configurable: true, enumerable: true, writable: true, value: originalNodeEnv });
   }
 }
 

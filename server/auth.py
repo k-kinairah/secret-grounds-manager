@@ -30,6 +30,20 @@ ROLE_RANK: dict[UserRole, int] = {
 }
 
 
+def auth_cookie_secure() -> bool:
+    return os.getenv("SECRET_GROUNDS_AUTH_SECURE_COOKIE", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def auth_cookie_samesite() -> str:
+    configured = os.getenv("SECRET_GROUNDS_AUTH_SAMESITE", "lax").strip().lower()
+    return configured if configured in {"lax", "strict", "none"} else "lax"
+
+
 def to_public_user(user: UserRecord) -> UserPublic:
     return UserPublic(
         user_id=user.user_id,
@@ -45,14 +59,20 @@ def set_auth_cookie(response: Response, token: str) -> None:
         token,
         max_age=SESSION_LIFETIME_SECONDS,
         httponly=True,
-        secure=os.getenv("SECRET_GROUNDS_AUTH_SECURE_COOKIE", "false").lower() == "true",
-        samesite=os.getenv("SECRET_GROUNDS_AUTH_SAMESITE", "lax"),
+        secure=auth_cookie_secure(),
+        samesite=auth_cookie_samesite(),
         path="/",
     )
 
 
 def clear_auth_cookie(response: Response) -> None:
-    response.delete_cookie(AUTH_COOKIE_NAME, path="/")
+    response.delete_cookie(
+        AUTH_COOKIE_NAME,
+        path="/",
+        secure=auth_cookie_secure(),
+        samesite=auth_cookie_samesite(),
+        httponly=True,
+    )
 
 
 def authenticate_login(request: LoginRequest) -> UserRecord:

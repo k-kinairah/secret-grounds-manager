@@ -34,7 +34,7 @@ if ([string]::IsNullOrWhiteSpace($DashboardApiUrl)) {
     $DashboardApiUrl = "http://127.0.0.1:$BackendPort"
 }
 if ([string]::IsNullOrWhiteSpace($CorsOrigins)) {
-    $CorsOrigins = "http://localhost:$DashboardPort,http://127.0.0.1:$DashboardPort"
+    $CorsOrigins = "http://127.0.0.1:$DashboardPort"
 }
 
 $secretBytes = [byte[]]::new(32)

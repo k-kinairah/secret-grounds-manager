@@ -7,4 +7,4 @@ param(
 Import-SgEnv -RequireConfig
 
 & "$PSScriptRoot\stop-secret-grounds.ps1"
-& "$PSScriptRoot\start-secret-grounds.ps1" -NoBrowser:$NoBrowser -AllowTestMode:$AllowTestMode
+& "$PSScriptRoot\start-secret-grounds.ps1" -NoBrowser -AllowTestMode:$AllowTestMode

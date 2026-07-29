@@ -62,11 +62,17 @@ export function AuthShell({ children }: { children: ReactNode }) {
           return;
         }
         setUser(currentUser);
-        const currentShift = await fetchCurrentShift();
-        if (!isMounted) {
-          return;
-        }
-        setShift(currentShift);
+        fetchCurrentShift()
+          .then((currentShift) => {
+            if (isMounted) {
+              setShift(currentShift);
+            }
+          })
+          .catch(() => {
+            if (isMounted) {
+              setShift(null);
+            }
+          });
         if (isLoginPage) {
           router.replace("/");
         } else if (ADMIN_ONLY_PATHS.includes(pathname) && currentUser.username !== "admin") {
@@ -221,9 +227,14 @@ export function AuthShell({ children }: { children: ReactNode }) {
     <ToastProvider>
       <nav className="appShell" aria-label="Main navigation">
         <Link className="appShell__brand" href="/">
-          <span className="appShell__mark" aria-hidden="true">
-            SG
-          </span>
+          <img
+            alt=""
+            aria-hidden="true"
+            className="appShell__mark"
+            height={34}
+            src="/secret-grounds-logo.png"
+            width={38}
+          />
           <span>Secret Grounds</span>
         </Link>
         <div className="appShell__links">
@@ -297,7 +308,15 @@ export function AuthShell({ children }: { children: ReactNode }) {
       </nav>
       {isChecking ? (
         <main className="authLoading" aria-live="polite">
-          Loading Secret Grounds Manager...
+          <img
+            alt=""
+            aria-hidden="true"
+            className="authLoading__logo"
+            height={64}
+            src="/secret-grounds-logo.png"
+            width={72}
+          />
+          <span>Loading Secret Grounds Manager...</span>
         </main>
       ) : user?.role === "cashier" && shift === null ? (
         <StartShiftGate message={shiftMessage} onOpened={handleShiftOpened} />

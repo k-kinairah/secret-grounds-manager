@@ -104,7 +104,14 @@ export function LoginClient() {
   return (
     <section className={styles.operatorPanel} aria-labelledby="operator-title">
       <div className={styles.logoLockup} aria-label="Secret Grounds">
-        <span className={styles.logoMark}>SG</span>
+        <img
+          alt=""
+          aria-hidden="true"
+          className={styles.logoMark}
+          height={54}
+          src="/secret-grounds-logo.png"
+          width={61}
+        />
         <span className={styles.logoText}>Secret Grounds</span>
       </div>
       <div>

@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $Script:SecretGroundsRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Script:ConfigPath = Join-Path $Script:SecretGroundsRoot "config\.env"
 $Script:PidPath = Join-Path $Script:SecretGroundsRoot "logs\secret-grounds-pids.json"
-$Script:DefaultBackendPort = 8000
+$Script:DefaultBackendPort = 18001
 $Script:DefaultDashboardPort = 3001
 
 function Get-SgVersion {
@@ -128,7 +128,21 @@ function Assert-SgDeploymentConfig {
         if (!$uri.IsAbsoluteUri -or $uri.Scheme -notin @("http", "https")) {
             throw "bad"
         }
+        if ((Get-SgEnv "SECRET_GROUNDS_APP_MODE" "production").ToLowerInvariant() -eq "production") {
+            $expectedBaseUrl = "http://127.0.0.1:$backendPort"
+            if ($baseUrl.TrimEnd("/") -ne $expectedBaseUrl) {
+                throw "Production NEXT_PUBLIC_FASTAPI_BASE_URL must be $expectedBaseUrl. Do not mix localhost and 127.0.0.1."
+            }
+            $expectedOrigin = "http://127.0.0.1:$dashboardPort"
+            $origins = @((Get-SgEnv "SECRET_GROUNDS_CORS_ORIGINS" "") -split "," | ForEach-Object { $_.Trim().TrimEnd("/") } | Where-Object { $_ })
+            if ($origins.Count -ne 1 -or $origins[0] -ne $expectedOrigin) {
+                throw "Production SECRET_GROUNDS_CORS_ORIGINS must be exactly $expectedOrigin. Do not mix localhost and 127.0.0.1."
+            }
+        }
     } catch {
+        if ($_.Exception.Message -like "Production *") {
+            throw
+        }
         throw "NEXT_PUBLIC_FASTAPI_BASE_URL must be an absolute http or https URL."
     }
 }
@@ -323,14 +337,18 @@ function Start-SgLoggedProcess {
         throw "Output and error logs must be separate files for $Role."
     }
 
+    $upperPath = [Environment]::GetEnvironmentVariable("PATH", "Process")
+    if (![string]::IsNullOrWhiteSpace($upperPath)) {
+        [Environment]::SetEnvironmentVariable("Path", $upperPath, "Process")
+        [Environment]::SetEnvironmentVariable("PATH", $null, "Process")
+    }
+
     $Script:LastSgLaunchIdentity = $FilePath
     $process = Start-Process `
         -FilePath $FilePath `
         -ArgumentList $Arguments `
         -WorkingDirectory $WorkingDirectory `
         -WindowStyle Hidden `
-        -RedirectStandardOutput $resolvedLog `
-        -RedirectStandardError $resolvedErrorLog `
         -PassThru
     return $process
 }

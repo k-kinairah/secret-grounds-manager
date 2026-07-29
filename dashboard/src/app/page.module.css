@@ -19,6 +19,20 @@
   margin: 0;
 }
 
+.dashboardLogoLockup {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+}
+
+.dashboardLogo {
+  display: block;
+  filter: drop-shadow(0 0 16px rgb(34 211 238 / 0.30));
+  height: 52px;
+  object-fit: contain;
+  width: 58px;
+}
+
 .brandBlock p {
   color: var(--muted);
   font-size: 15px;

@@ -46,7 +46,7 @@ Runtime files belong in `data/`, `backups/`, `logs/`, and private `config/.env`.
 9. Check status: `powershell -ExecutionPolicy Bypass -File scripts\status-secret-grounds.ps1`.
 10. Stop or restart with `scripts\stop-secret-grounds.ps1` and `scripts\restart-secret-grounds.ps1`.
 
-The dashboard can be opened on the cashier PC at `http://127.0.0.1:<dashboard port>`. For LAN access, set `NEXT_PUBLIC_FASTAPI_BASE_URL` and `SECRET_GROUNDS_CORS_ORIGINS` to the cashier PC LAN address, rebuild the dashboard, and open `http://<cashier-lan-ip>:<dashboard port>`.
+The production dashboard can be opened on the cashier PC at `http://127.0.0.1:3001`. For LAN access, set `NEXT_PUBLIC_FASTAPI_BASE_URL` and `SECRET_GROUNDS_CORS_ORIGINS` to the cashier PC LAN address, rebuild the dashboard, and open the configured LAN dashboard URL.
 
 ## Cashier Auto-Start
 
@@ -104,8 +104,8 @@ Server logging rotates according to `SECRET_GROUNDS_LOG_MAX_BYTES` and `SECRET_G
 1. Stop development servers.
 2. Run `scripts\check-deployment.ps1`.
 3. Start with `scripts\start-secret-grounds.ps1 -NoBrowser`.
-4. Confirm `http://127.0.0.1:<backend port>/healthz`.
-5. Confirm the production dashboard loads.
+4. Confirm `http://127.0.0.1:18001/healthz`.
+5. Confirm the production dashboard loads at `http://127.0.0.1:3001`.
 6. Confirm logs are created.
 7. Run `scripts\status-secret-grounds.ps1`.
 8. Run startup again and confirm duplicate startup is blocked.

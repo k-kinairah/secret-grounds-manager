@@ -93,10 +93,33 @@ def test_config_examples_are_secret_safe() -> None:
     assert "SECRET_GROUNDS_DEPLOYMENT_SECRET=replace-with-a-long-random-secret" in env_example
     assert not re.search(r"(password|token)\s*=\s*(?!replace|example|false|true)[^#\r\n]+", env_example, re.IGNORECASE)
     assert "SECRET_GROUNDS_AUTH_SECURE_COOKIE=false" in env_example
+    assert "SECRET_GROUNDS_PORT=18001" in env_example
+    assert "SECRET_GROUNDS_DASHBOARD_PORT=3001" in env_example
+    assert "NEXT_PUBLIC_FASTAPI_BASE_URL=http://127.0.0.1:18001" in env_example
+    assert "SECRET_GROUNDS_CORS_ORIGINS=http://127.0.0.1:3001" in env_example
+    assert "localhost" not in env_example
     assert client_example["server_host"] == "cashier-server"
     assert client_example["server_port"] == 18001
     assert client_example["pc_name"] == "CHANGE-ME"
     assert client_example["pc_name"] == "CHANGE-ME"
+
+
+def test_development_and_production_urls_are_separate() -> None:
+    dashboard_env = read("dashboard/.env.example")
+    cashier_config = read("config/.env.example")
+    common = read("scripts/secret-grounds-common.ps1")
+    initializer = read("scripts/initialize-cashier-config.ps1")
+    ports_doc = read("docs/PORTS.md")
+
+    assert "NEXT_PUBLIC_FASTAPI_BASE_URL=http://localhost:8000" in dashboard_env
+    assert "127.0.0.1:18001" not in dashboard_env
+    assert "localhost:8000" not in cashier_config
+    assert "$Script:DefaultBackendPort = 18001" in common
+    assert '"http://127.0.0.1:$DashboardPort"' in initializer
+    assert "http://localhost:3000" in ports_doc
+    assert "http://localhost:8000" in ports_doc
+    assert "http://127.0.0.1:3001" in ports_doc
+    assert "http://127.0.0.1:18001" in ports_doc
 
 
 def test_deployment_paths_are_outside_source_defaults(monkeypatch) -> None:
@@ -142,6 +165,7 @@ def main() -> None:
         test_cashier_scripts_use_production_startup_and_pid_identity,
         test_autostart_task_names_are_stable,
         test_config_examples_are_secret_safe,
+        test_development_and_production_urls_are_separate,
         lambda: test_deployment_paths_are_outside_source_defaults(
             type(
                 "MonkeyPatch",
