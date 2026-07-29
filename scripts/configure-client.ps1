@@ -10,7 +10,8 @@ param(
     [int]$RequestTimeoutSeconds = 5,
     [Alias("ConfigPath")]
     [string]$ClientConfigPath = "",
-    [string]$ExpectedVersion = ""
+    [string]$ExpectedVersion = "",
+    [switch]$AllowOffline
 )
 
 . "$PSScriptRoot\secret-grounds-common.ps1"
@@ -35,35 +36,39 @@ Assert-ClientValue ($ReconnectIntervalSeconds -ge 2 -and $ReconnectIntervalSecon
 Assert-ClientValue ($RequestTimeoutSeconds -ge 2 -and $RequestTimeoutSeconds -le 60) "Request timeout must be between 2 and 60 seconds."
 
 $baseUrl = "http://${ServerHost}:$ServerPort"
-$healthUrl = "$baseUrl/healthz"
-try {
-    $health = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec $RequestTimeoutSeconds
-    $payload = $health.Content | ConvertFrom-Json
-} catch {
-    throw "Secret Grounds server is not reachable at $healthUrl. Check the cashier LAN address, port, and Private-network firewall rule. $($_.Exception.Message)"
-}
+if (!$AllowOffline) {
+    $healthUrl = "$baseUrl/healthz"
+    try {
+        $health = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec $RequestTimeoutSeconds
+        $payload = $health.Content | ConvertFrom-Json
+    } catch {
+        throw "Secret Grounds server is not reachable at $healthUrl. Check the cashier LAN address, port, and Private-network firewall rule. $($_.Exception.Message)"
+    }
 
-Assert-ClientValue ($health.StatusCode -eq 200) "Secret Grounds server returned HTTP $($health.StatusCode) from /healthz."
-Assert-ClientValue ($payload.status -eq "ok") "Secret Grounds /healthz did not return status=ok."
+    Assert-ClientValue ($health.StatusCode -eq 200) "Secret Grounds server returned HTTP $($health.StatusCode) from /healthz."
+    Assert-ClientValue ($payload.status -eq "ok") "Secret Grounds /healthz did not return status=ok."
 
-$expected = if ($ExpectedVersion) { $ExpectedVersion } else { Get-SgVersion }
-Assert-ClientValue ($payload.version -eq $expected) "Secret Grounds version mismatch. Server is $($payload.version); client package expects $expected."
+    $expected = if ($ExpectedVersion) { $ExpectedVersion } else { Get-SgVersion }
+    Assert-ClientValue ($payload.version -eq $expected) "Secret Grounds version mismatch. Server is $($payload.version); client package expects $expected."
 
-$macAddress = ""
-try {
-    $macAddress = (& "$Script:SecretGroundsRoot\.venv\Scripts\python.exe" -c "from client.utils import get_local_mac_address; print(get_local_mac_address() or '')").Trim()
-} catch {}
+    $macAddress = ""
+    try {
+        $macAddress = (& "$Script:SecretGroundsRoot\.venv\Scripts\python.exe" -c "from client.utils import get_local_mac_address; print(get_local_mac_address() or '')").Trim()
+    } catch {}
 
-$checkUrl = "$baseUrl/client-registration/check?pc_name=$([uri]::EscapeDataString($StationId))"
-if ($macAddress) {
-    $checkUrl += "&mac_address=$([uri]::EscapeDataString($macAddress))"
-}
-try {
-    $availability = Invoke-WebRequest -Uri $checkUrl -UseBasicParsing -TimeoutSec $RequestTimeoutSeconds
-    $availabilityPayload = $availability.Content | ConvertFrom-Json
-    Assert-ClientValue ([bool]$availabilityPayload.available) ([string]$availabilityPayload.detail)
-} catch {
-    throw "Station ID validation failed for '$StationId'. $($_.Exception.Message)"
+    $checkUrl = "$baseUrl/client-registration/check?pc_name=$([uri]::EscapeDataString($StationId))"
+    if ($macAddress) {
+        $checkUrl += "&mac_address=$([uri]::EscapeDataString($macAddress))"
+    }
+    try {
+        $availability = Invoke-WebRequest -Uri $checkUrl -UseBasicParsing -TimeoutSec $RequestTimeoutSeconds
+        $availabilityPayload = $availability.Content | ConvertFrom-Json
+        Assert-ClientValue ([bool]$availabilityPayload.available) ([string]$availabilityPayload.detail)
+    } catch {
+        throw "Station ID validation failed for '$StationId'. $($_.Exception.Message)"
+    }
+} else {
+    Write-SgLine "Offline client configuration was allowed. This station will not connect until the cashier server is reachable." "WARN" (Get-SgEnv "SECRET_GROUNDS_CLIENT_LOG" ".\logs\client.log")
 }
 
 $resolvedConfigPath = if ($ClientConfigPath) {

@@ -11,9 +11,10 @@ $clientConsoleLog = Get-SgEnv "SECRET_GROUNDS_CLIENT_CONSOLE_LOG" ".\logs\client
 $clientErrorLog = Get-SgEnv "SECRET_GROUNDS_CLIENT_ERROR_LOG" ".\logs\client-error.log"
 $clientConfig = Join-Path $Script:SecretGroundsRoot "client\config.json"
 $pythonExe = Join-Path $Script:SecretGroundsRoot ".venv\Scripts\python.exe"
+$packagedClientExe = Join-Path $Script:SecretGroundsRoot "client\SecretGroundsClient.exe"
 
-if (!(Test-Path $pythonExe)) {
-    throw "Python virtual environment is missing: $pythonExe"
+if (!(Test-Path $packagedClientExe) -and !(Test-Path $pythonExe)) {
+    throw "Secret Grounds client runtime is missing. Expected packaged client at $packagedClientExe or development Python at $pythonExe."
 }
 if (!(Test-Path $clientConfig)) {
     throw "Client config is missing: $clientConfig. Copy client\config.example.json to client\config.json and set a unique PC name."
@@ -55,7 +56,11 @@ Write-SgLine "Starting Secret Grounds client $(Get-SgVersion) for $($payload.pc_
 $env:SECRET_GROUNDS_CLIENT_LOG = Resolve-SgPath $clientLog
 $env:SECRET_GROUNDS_SERVER_URL = $serverUrl
 $env:PYTHONUNBUFFERED = "1"
-$process = Start-SgLoggedProcess -Role "client" -FilePath $pythonExe -Arguments @("-u", "-m", "client.client") -WorkingDirectory $Script:SecretGroundsRoot -LogPath $clientConsoleLog -ErrorLogPath $clientErrorLog
+if (Test-Path $packagedClientExe) {
+    $process = Start-SgLoggedProcess -Role "client" -FilePath $packagedClientExe -Arguments @() -WorkingDirectory (Join-Path $Script:SecretGroundsRoot "client") -LogPath $clientConsoleLog -ErrorLogPath $clientErrorLog
+} else {
+    $process = Start-SgLoggedProcess -Role "client" -FilePath $pythonExe -Arguments @("-u", "-m", "client.client") -WorkingDirectory $Script:SecretGroundsRoot -LogPath $clientConsoleLog -ErrorLogPath $clientErrorLog
+}
 
 Set-SgProcessRecord "client" ([pscustomobject]@{
     Pid = $process.Id
