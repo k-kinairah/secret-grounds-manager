@@ -1,4 +1,3 @@
-import os
 from datetime import datetime
 from decimal import Decimal, ROUND_CEILING
 from uuid import uuid4
@@ -83,16 +82,7 @@ class BillingService:
         if open_shift is not None:
             return open_shift.shift_id
 
-        admin_override_enabled = (
-            os.getenv("SECRET_GROUNDS_ALLOW_ADMIN_PAYMENTS_WITHOUT_SHIFT", "true")
-            .strip()
-            .lower()
-            in {"1", "true", "yes", "on"}
-        )
-        if actor.role in {"owner", "admin"} and admin_override_enabled:
-            return None
-
-        return self.shift_repository.require_payment_shift(actor)
+        return None
 
     def summarize_session(self, session: SessionRecord) -> BillingSummary:
         payments = self.payment_repository.list_payments(session.session_id)
@@ -192,6 +182,18 @@ class BillingService:
         max_amount: Decimal | None = None,
         actor_user_id: str | None = None,
     ) -> BillingSummary:
+        if request.idempotency_key:
+            existing_payment = self.payment_repository.get_payment_by_idempotency_key(
+                request.idempotency_key
+            )
+            if existing_payment is not None:
+                if existing_payment.session_id != session_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Duplicate transaction key belongs to another payment",
+                    )
+                return self.get_billing(session_id)
+
         billing = self.get_billing(session_id)
         amount = money(request.amount)
         limit = money(max_amount) if max_amount is not None else billing.balance_due
@@ -208,18 +210,21 @@ class BillingService:
 
         if request.payment_method == "cash":
             if cash_received is None:
-                cash_received = amount
+                raise HTTPException(status_code=400, detail="Cash received is required")
             if cash_received < amount:
                 raise HTTPException(
                     status_code=400,
                     detail="Cash received cannot be lower than payment amount",
                 )
             change_given = money(cash_received - amount)
-        elif cash_received is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="Cash received is only valid for cash payments",
-            )
+        else:
+            if cash_received is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cash received is only valid for cash payments",
+                )
+            if not (request.reference_number or "").strip():
+                raise HTTPException(status_code=400, detail="Payment reference is required")
 
         payment = PaymentRecord(
             payment_id=str(uuid4()),
@@ -235,6 +240,7 @@ class BillingService:
             review_required=False,
             shift_id=shift_id,
             recorded_by_user_id=actor_user_id,
+            idempotency_key=request.idempotency_key,
             status="completed",
             created_at=current_utc_time(),
         )
@@ -297,17 +303,22 @@ class BillingService:
                 detail="Payment amount cannot exceed the amount due",
             )
         if request.payment_method == "cash":
-            cash_received = money(request.cash_received or amount)
+            if request.cash_received is None:
+                raise HTTPException(status_code=400, detail="Cash received is required")
+            cash_received = money(request.cash_received)
             if cash_received < amount:
                 raise HTTPException(
                     status_code=400,
                     detail="Cash received cannot be lower than payment amount",
                 )
-        elif request.cash_received is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="Cash received is only valid for cash payments",
-            )
+        else:
+            if request.cash_received is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cash received is only valid for cash payments",
+                )
+            if not (request.reference_number or "").strip():
+                raise HTTPException(status_code=400, detail="Payment reference is required")
 
     def mark_payment_review_required(
         self,

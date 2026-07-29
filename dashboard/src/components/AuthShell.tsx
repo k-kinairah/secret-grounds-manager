@@ -341,8 +341,6 @@ export function AuthShell({ children }: { children: ReactNode }) {
           />
           <span>Loading Secret Grounds Manager...</span>
         </main>
-      ) : user?.role === "cashier" && shift === null ? (
-        <StartShiftGate message={shiftMessage} onOpened={handleShiftOpened} />
       ) : (
         <>
           {shiftMessage ? <div className="shiftNotice">{shiftMessage}</div> : null}
@@ -528,9 +526,7 @@ function StartShiftGate({
       <section className="shiftGate__panel" aria-labelledby="start-shift-title">
         <p className="shiftGate__eyebrow">Cash Drawer</p>
         <h1 id="start-shift-title">Start Shift</h1>
-        <p>
-          Enter the opening drawer cash before recording payments or managing sessions.
-        </p>
+        <p>Enter the opening drawer cash to track optional shift totals.</p>
         {message ? <div className="shiftGate__message">{message}</div> : null}
         {error ? <div className="shiftGate__error">{error}</div> : null}
         <form onSubmit={handleSubmit}>

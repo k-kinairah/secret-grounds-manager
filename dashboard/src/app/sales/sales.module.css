@@ -117,7 +117,14 @@
 .summaryGrid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(6, minmax(130px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (min-width: 1500px) {
+  .loadingGrid,
+  .summaryGrid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
 }
 
 .loadingGrid span,
@@ -141,8 +148,8 @@
 .metricCard {
   display: grid;
   gap: 7px;
-  min-height: 88px;
-  padding: 13px 14px;
+  min-height: 86px;
+  padding: 12px;
   transition:
     border-color 160ms ease,
     box-shadow 160ms ease,
@@ -165,7 +172,7 @@
 
 .metricCard strong {
   color: var(--text);
-  font-size: 24px;
+  font-size: clamp(19px, 1.45vw, 24px);
   line-height: 1;
 }
 
@@ -311,6 +318,441 @@
   background: rgba(14, 165, 233, 0.07);
 }
 
+.collectionToolbar {
+  align-items: center;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 48%),
+    rgba(8, 17, 31, 0.58);
+  border: 1px solid rgba(56, 189, 248, 0.16);
+  border-radius: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding: 12px;
+}
+
+.collectionFilters {
+  align-items: end;
+  display: grid;
+  flex: 1 1 620px;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  min-width: 0;
+}
+
+.collectionFilters > div {
+  min-width: 0;
+}
+
+.collectionToolbarActions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.collectionActionButton,
+.operatorDetailsButton {
+  background: rgba(14, 165, 233, 0.11);
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 8px;
+  color: #dbeafe;
+  cursor: pointer;
+  font-weight: 900;
+  min-height: 34px;
+  padding: 7px 11px;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.collectionActionButton:hover,
+.collectionActionButton:focus-visible,
+.operatorDetailsButton:hover,
+.operatorDetailsButton:focus-visible {
+  background: rgba(14, 165, 233, 0.18);
+  border-color: rgba(103, 232, 249, 0.48);
+  color: #67e8f9;
+  outline: none;
+}
+
+.collectionTotalTile span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.collectionTotalTile strong {
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.15;
+}
+
+.collectionTotalPrimary {
+  border-color: rgba(34, 211, 238, 0.36) !important;
+}
+
+.collectionTotalPrimary strong {
+  color: #67e8f9;
+}
+
+.collectionTotalWarning strong {
+  color: #fed7aa;
+}
+
+.operatorCardGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  margin-bottom: 14px;
+}
+
+.operatorCollectionCard {
+  background: rgba(8, 17, 31, 0.68);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 8px;
+  display: grid;
+  gap: 11px;
+  padding: 14px;
+}
+
+.operatorCardHeader {
+  align-items: start;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.operatorCardHeader h3 {
+  color: var(--text);
+  font-size: 18px;
+  margin: 3px 0 0;
+}
+
+.operatorCardHeader span,
+.operatorNetValue span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.operatorNetValue {
+  display: grid;
+  gap: 3px;
+  justify-items: end;
+  text-align: right;
+}
+
+.operatorNetValue strong {
+  color: #67e8f9;
+  font-size: 20px;
+}
+
+.operatorGroups {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.collectionGroup {
+  background: rgba(15, 23, 42, 0.52);
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 8px;
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.cashAccountability {
+  border-color: rgba(34, 211, 238, 0.25);
+}
+
+.collectionGroup h4 {
+  color: #dbeafe;
+  font-size: 12px;
+  font-weight: 950;
+  margin: 0 0 2px;
+  text-transform: uppercase;
+}
+
+.moneyRow {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.moneyRow span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.moneyRow strong {
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.moneyRowStrong {
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  margin-top: 2px;
+  padding-top: 7px;
+}
+
+.moneyRowStrong strong {
+  color: #67e8f9;
+  font-size: 15px;
+}
+
+.moneyNegative strong {
+  color: #fed7aa;
+}
+
+.moneyMuted strong {
+  color: #cbd5e1;
+}
+
+.formulaHint {
+  color: #93c5fd;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.operatorDetailsButton {
+  justify-self: start;
+}
+
+.collectionTable {
+  margin-top: 2px;
+  min-width: 1340px;
+}
+
+.collectionTable th:first-child,
+.collectionTable td:first-child {
+  background: rgba(8, 17, 31, 0.96);
+  left: 0;
+  position: sticky;
+  z-index: 1;
+}
+
+.collectionTable td:not(:first-child),
+.collectionTable tfoot td {
+  text-align: right;
+}
+
+.collectionTable tfoot th,
+.collectionTable tfoot td {
+  background: rgba(15, 23, 42, 0.94);
+  border-top: 1px solid rgba(56, 189, 248, 0.26);
+  color: var(--text);
+  font-weight: 950;
+}
+
+.operatorExpandButton {
+  background: transparent;
+  border: 0;
+  color: #dbeafe;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 950;
+  padding: 0;
+  text-align: left;
+}
+
+.operatorExpandButton:hover,
+.operatorExpandButton:focus-visible {
+  color: #67e8f9;
+  outline: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.operatorDetailPanel {
+  background: rgba(8, 17, 31, 0.62);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.operatorDetailPanel h3 {
+  color: var(--text);
+  font-size: 14px;
+  margin: 0;
+}
+
+.detailTransactionGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+.transactionReceipt {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.transactionReceiptHeader {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.transactionReceiptHeader > div {
+  display: grid;
+  gap: 3px;
+}
+
+.transactionReceiptHeader strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.transactionReceiptHeader span,
+.receiptField span,
+.technicalDetails summary {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.statusBadge {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  color: var(--text);
+  flex: 0 0 auto;
+  font-size: 11px !important;
+  font-weight: 950 !important;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.statusCompleted {
+  background: rgba(34, 197, 94, 0.13);
+  border-color: rgba(74, 222, 128, 0.28);
+  color: #bbf7d0 !important;
+}
+
+.statusVoided {
+  background: rgba(251, 146, 60, 0.12);
+  border-color: rgba(251, 146, 60, 0.3);
+  color: #fed7aa !important;
+}
+
+.transactionReceiptBody {
+  display: grid;
+  gap: 8px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.receiptField {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.receiptField strong {
+  color: #dbeafe;
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.transactionReceiptFooter {
+  align-items: center;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.transactionModalOverlay {
+  align-items: center;
+  background: rgba(2, 6, 23, 0.72);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 90;
+}
+
+.transactionModal {
+  background: rgba(8, 17, 31, 0.98);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  display: grid;
+  gap: 14px;
+  max-height: calc(100vh - 40px);
+  max-width: 900px;
+  overflow: auto;
+  padding: 18px;
+  width: min(900px, 100%);
+}
+
+.transactionModalHeader {
+  align-items: start;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.transactionModalHeader h2 {
+  color: var(--text);
+  font-size: 20px;
+  margin: 0 0 4px;
+}
+
+.transactionModalHeader span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.transactionModalGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.detailSection,
+.technicalDetails {
+  background: rgba(15, 23, 42, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.detailSection h3 {
+  color: var(--text);
+  font-size: 14px;
+  margin: 0;
+}
+
+.detailSection > div,
+.technicalDetails {
+  gap: 9px;
+}
+
+.technicalDetails summary {
+  cursor: pointer;
+  text-transform: uppercase;
+}
+
 .breakdownList,
 .stackList,
 .outstandingGrid {
@@ -381,6 +823,29 @@
   .contentGrid {
     grid-template-columns: 1fr;
   }
+
+  .operatorGroups {
+    grid-template-columns: 1fr;
+  }
+
+  .transactionModalGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .collectionFilters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .summaryGrid,
+  .loadingGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operatorCardGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
@@ -417,5 +882,50 @@
 
   .chartRow strong {
     text-align: left;
+  }
+
+  .collectionToolbar,
+  .collectionToolbarActions,
+  .collectionFilters {
+    width: 100%;
+  }
+
+  .collectionFilters {
+    grid-template-columns: 1fr;
+  }
+
+  .collectionToolbarActions {
+    justify-content: stretch;
+  }
+
+  .collectionActionButton,
+  .operatorDetailsButton {
+    width: 100%;
+  }
+
+  .operatorCardHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .operatorNetValue {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .transactionReceiptBody {
+    grid-column: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .transactionReceiptHeader,
+  .transactionModalHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .transactionModalOverlay {
+    align-items: stretch;
+    padding: 10px;
   }
 }

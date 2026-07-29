@@ -19,6 +19,7 @@ import {
   fetchMembers,
   fetchMembershipProducts,
   purchaseMemberTime,
+  refundMemberPurchase,
   resetMemberPin,
   updateMember,
   updateMemberStatus
@@ -32,6 +33,8 @@ import type {
   PaymentMethod
 } from "@/lib/types";
 import { PageTitleIcon } from "./PageTitleIcon";
+import { useToast } from "./ToastProvider";
+import { CloseButton } from "./CloseButton";
 
 function formatMemberBalance(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
@@ -67,6 +70,22 @@ function MoreVerticalIcon() {
       <circle cx="12" cy="19" fill="currentColor" r="1.8" />
     </svg>
   );
+}
+
+function createIdempotencyKey() {
+  return globalThis.crypto?.randomUUID?.() ?? `member-payment-${Date.now()}-${Math.random()}`;
+}
+
+function getChangeState(amount: string, cashReceived: string): { label: string; state: "muted" | "warning" | "ready" } {
+  if (!cashReceived.trim()) {
+    return { label: "Enter cash received", state: "muted" };
+  }
+  const amountValue = Number(amount);
+  const cashValue = Number(cashReceived);
+  if (!Number.isFinite(amountValue) || !Number.isFinite(cashValue) || cashValue <= 0 || cashValue < amountValue) {
+    return { label: "Insufficient cash", state: "warning" };
+  }
+  return { label: formatMoney(cashValue - amountValue), state: "ready" };
 }
 
 function getMemberAccountState(member: MemberRecord): MemberAccountState {
@@ -149,6 +168,13 @@ function describeActivity(transaction: MemberTimeTransaction): {
       return {
         title: "Member Promo Purchased",
         detail: `Added ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
+        amount: transaction.amount_paid,
+        isTechnical: false
+      };
+    case "purchase_refund":
+      return {
+        title: "Purchase Refunded",
+        detail: `Removed ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
         amount: transaction.amount_paid,
         isTechnical: false
       };
@@ -262,6 +288,7 @@ function useModalFocus(
 
 export function MembersManager() {
   const pathname = usePathname();
+  const { pushToast } = useToast();
   const [members, setMembers] = useState<MemberRecord[]>([]);
   const [products, setProducts] = useState<MembershipProduct[]>([]);
   const [query, setQuery] = useState("");
@@ -271,6 +298,11 @@ export function MembersManager() {
   const [isSaving, setIsSaving] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [selectedProductId, setSelectedProductId] = useState("");
+  const [memberPaymentMethod, setMemberPaymentMethod] = useState<PaymentMethod>("cash");
+  const [memberPaymentValue, setMemberPaymentValue] = useState("");
+  const [memberPaymentError, setMemberPaymentError] = useState("");
+  const memberPaymentInputRef = useRef<HTMLInputElement | null>(null);
+  const memberPurchaseKeyRef = useRef(createIdempotencyKey());
   const [showAdvancedActivity, setShowAdvancedActivity] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<MemberStatusFilter>("all");
@@ -281,9 +313,14 @@ export function MembersManager() {
   const [showPin, setShowPin] = useState(false);
   const [showConfirmPin, setShowConfirmPin] = useState(false);
   const [activeMemberTab, setActiveMemberTab] = useState<MemberDetailTab>("overview");
+  const [refundTarget, setRefundTarget] = useState<MemberTimeTransaction | null>(null);
+  const [refundReason, setRefundReason] = useState("Duplicate transaction");
+  const [refundNotes, setRefundNotes] = useState("");
+  const [refundError, setRefundError] = useState("");
   const createModalRef = useRef<HTMLElement | null>(null);
   const detailModalRef = useRef<HTMLElement | null>(null);
   const confirmModalRef = useRef<HTMLElement | null>(null);
+  const refundModalRef = useRef<HTMLElement | null>(null);
   const memberMenuTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const [openMemberMenu, setOpenMemberMenu] = useState<{
     member: MemberRecord;
@@ -325,6 +362,17 @@ export function MembersManager() {
     [members, statusFilter]
   );
   const canManagePins = currentUser?.role === "admin" || currentUser?.role === "owner";
+  const canRefundPurchases = currentUser?.role === "admin" || currentUser?.role === "owner";
+  const refundedPaymentIds = useMemo(
+    () =>
+      new Set(
+        ledger
+          .filter((transaction) => transaction.transaction_type === "purchase_refund")
+          .map((transaction) => transaction.related_payment_id)
+          .filter((paymentId): paymentId is string => Boolean(paymentId))
+      ),
+    [ledger]
+  );
   const isPinResetValid =
     /^[0-9]{4,6}$/.test(pinDraft) && pinDraft === confirmPinDraft;
   const showPinMismatch =
@@ -336,11 +384,13 @@ export function MembersManager() {
   const closeCreateDialog = useCallback(() => setIsCreateOpen(false), []);
   const closeDetailDialog = useCallback(() => setSelectedMember(null), []);
   const closeConfirmDialog = useCallback(() => setConfirmingStatusMember(null), []);
+  const closeRefundDialog = useCallback(() => setRefundTarget(null), []);
   const closeMemberMenu = useCallback(() => setOpenMemberMenu(null), []);
 
   useModalFocus(isCreateOpen, createModalRef, closeCreateDialog);
-  useModalFocus(selectedMember !== null, detailModalRef, closeDetailDialog);
+  useModalFocus(selectedMember !== null && refundTarget === null, detailModalRef, closeDetailDialog);
   useModalFocus(confirmingStatusMember !== null, confirmModalRef, closeConfirmDialog);
+  useModalFocus(refundTarget !== null, refundModalRef, closeRefundDialog);
 
   useEffect(() => {
     setPinDraft("");
@@ -348,6 +398,10 @@ export function MembersManager() {
     setShowPin(false);
     setShowConfirmPin(false);
     setActiveMemberTab("overview");
+    setMemberPaymentMethod("cash");
+    setMemberPaymentValue("");
+    setMemberPaymentError("");
+    memberPurchaseKeyRef.current = createIdempotencyKey();
   }, [selectedMember?.member_id]);
 
   useEffect(() => {
@@ -455,14 +509,14 @@ export function MembersManager() {
         confirm_pin: String(formData.get("confirmMemberPin") ?? ""),
         phone_number: String(formData.get("phoneNumber") ?? "") || undefined
       });
-      setMessage("Member created.");
+      pushToast("Member created", "success");
       await refresh();
       form.reset();
       setIsCreateOpen(false);
     } catch (error) {
       const errorText = error instanceof Error ? error.message : "Could not create member.";
       setCreateError(errorText);
-      setMessage(errorText);
+      pushToast(errorText, "error");
     } finally {
       setIsSaving(false);
     }
@@ -482,9 +536,9 @@ export function MembersManager() {
       });
       setSelectedMember(updated);
       await refresh();
-      setMessage("Member profile updated.");
+      pushToast("Profile saved", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not update member profile.");
+      pushToast(error instanceof Error ? error.message : "Unable to save profile", "error");
     } finally {
       setIsSaving(false);
     }
@@ -502,23 +556,98 @@ export function MembersManager() {
     if (!selectedMember || selectedProduct === null) {
       return;
     }
+    if (isSaving) {
+      return;
+    }
+    const paymentValue = String(formData.get("paymentValue") ?? "").trim();
+    if (memberPaymentMethod === "cash") {
+      if (!paymentValue) {
+        setMemberPaymentError("Enter the cash received.");
+        memberPaymentInputRef.current?.focus();
+        return;
+      }
+      const cashReceived = Number(paymentValue);
+      if (!Number.isFinite(cashReceived) || cashReceived <= 0) {
+        setMemberPaymentError("Enter a valid cash amount.");
+        memberPaymentInputRef.current?.focus();
+        return;
+      }
+      if (cashReceived < Number(selectedProduct.price)) {
+        setMemberPaymentError(`Cash received must be at least ${formatMoney(selectedProduct.price)}.`);
+        memberPaymentInputRef.current?.focus();
+        return;
+      }
+    } else if (!paymentValue) {
+      setMemberPaymentError("Enter the payment reference.");
+      memberPaymentInputRef.current?.focus();
+      return;
+    }
+    setMemberPaymentError("");
     setIsSaving(true);
     try {
-      const paymentMethod = String(formData.get("paymentMethod") ?? "cash") as PaymentMethod;
       const response = await purchaseMemberTime(selectedMember.member_id, {
         product_id: selectedProduct.product_id,
-        payment_method: paymentMethod,
+        payment_method: memberPaymentMethod,
         cash_received:
-          paymentMethod === "cash" ? String(formData.get("cashReceived") ?? "") : undefined,
+          memberPaymentMethod === "cash" ? paymentValue : undefined,
         reference_number:
-          paymentMethod !== "cash" ? String(formData.get("referenceNumber") ?? "") : undefined
+          memberPaymentMethod !== "cash" ? paymentValue : undefined,
+        idempotency_key: memberPurchaseKeyRef.current
       });
       setSelectedMember(response.member);
       setLedger(await fetchMemberLedger(selectedMember.member_id));
-      setMessage("Member time added.");
+      pushToast(
+        "Member time added successfully",
+        "success",
+        memberPaymentMethod === "cash"
+          ? `Member: ${response.member.username ?? response.member.full_name}. Package: ${response.product.name}. Amount due: ${formatMoney(response.payment.amount)}. Cash received: ${formatMoney(response.payment.cash_received ?? "0.00")}. Change: ${formatMoney(response.payment.change_given ?? "0.00")}. New balance: ${formatMemberBalance(response.member.time_balance_seconds)}.`
+          : `Member: ${response.member.username ?? response.member.full_name}. Package: ${response.product.name}. Amount due: ${formatMoney(response.payment.amount)}. Reference: ${response.payment.reference_number ?? "Recorded"}. New balance: ${formatMemberBalance(response.member.time_balance_seconds)}.`
+      );
+      memberPurchaseKeyRef.current = createIdempotencyKey();
+      setMemberPaymentValue("");
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not process purchase.");
+      pushToast(
+        "Unable to add member time",
+        "error",
+        error instanceof Error ? error.message : "Check the payment details and try again."
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleRefundPurchase() {
+    if (!selectedMember || !refundTarget?.related_payment_id) {
+      return;
+    }
+    if (isSaving) {
+      return;
+    }
+    if (refundReason === "Other" && !refundNotes.trim()) {
+      setRefundError("Add a short note when using Other as the refund reason.");
+      return;
+    }
+    setRefundError("");
+    setIsSaving(true);
+    try {
+      const response = await refundMemberPurchase(refundTarget.related_payment_id, {
+        reason: refundReason,
+        notes: refundNotes.trim() || undefined
+      });
+      setSelectedMember(response.member);
+      setLedger(await fetchMemberLedger(response.member.member_id));
+      setRefundTarget(null);
+      setRefundNotes("");
+      setRefundError("");
+      await refresh();
+      pushToast(
+        "Transaction refunded",
+        "warning",
+        `Member: ${response.member.username ?? response.member.full_name}. Time removed: ${formatMemberBalance(Math.abs(response.reversal_transaction.seconds_delta))}. Amount refunded: ${formatMoney(Math.abs(Number(response.reversal_transaction.amount_paid ?? response.payment.amount)))}. New balance: ${formatMemberBalance(response.member.time_balance_seconds)}.`
+      );
+    } catch (error) {
+      setRefundError(error instanceof Error ? error.message : "Check the member balance and try again.");
     } finally {
       setIsSaving(false);
     }
@@ -531,14 +660,18 @@ export function MembersManager() {
 
     const pin = String(formData.get("memberPin") ?? "").trim();
     const confirmPin = String(formData.get("confirmMemberPin") ?? "").trim();
+    if (pin !== confirmPin) {
+      pushToast("PINs do not match", "error");
+      return;
+    }
     setIsSaving(true);
     try {
       const updated = await resetMemberPin(selectedMember.member_id, pin, confirmPin);
       setSelectedMember(updated);
       await refresh();
-      setMessage("Member PIN updated.");
+      pushToast("PIN reset successfully", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not update member PIN.");
+      pushToast(error instanceof Error ? error.message : "Unable to reset PIN", "error");
     } finally {
       setIsSaving(false);
     }
@@ -549,10 +682,10 @@ export function MembersManager() {
     try {
       await updateMemberStatus(member.member_id, member.status === "active" ? "inactive" : "active");
       await refresh();
-      setMessage(member.status === "active" ? "Member disabled." : "Member enabled.");
+      pushToast(member.status === "active" ? "Member disabled" : "Member enabled", "success");
       setConfirmingStatusMember(null);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not update member.");
+      pushToast(error instanceof Error ? error.message : "Could not update member", "error");
     } finally {
       setIsSaving(false);
     }
@@ -597,6 +730,15 @@ export function MembersManager() {
     ...(canManagePins ? [{ id: "security" as MemberDetailTab, label: "Security" }] : []),
     { id: "activity", label: "Activity" }
   ];
+  const refundTimeSeconds = Math.abs(refundTarget?.seconds_delta ?? 0);
+  const refundAmount = Math.abs(Number(refundTarget?.amount_paid ?? 0));
+  const refundBalanceAfter =
+    selectedMember && refundTarget
+      ? selectedMember.time_balance_seconds - refundTimeSeconds
+      : null;
+  const memberChangeState = selectedProduct
+    ? getChangeState(String(selectedProduct.price), memberPaymentValue)
+    : { label: "Enter cash received", state: "muted" as const };
 
   return (
     <main className={styles.page}>
@@ -802,14 +944,7 @@ export function MembersManager() {
                 <h2>Add Member</h2>
                 <p>Create a reusable play-balance profile.</p>
               </div>
-              <button
-                aria-label="Close add member dialog"
-                className={styles.iconButton}
-                onClick={() => setIsCreateOpen(false)}
-                type="button"
-              >
-                X
-              </button>
+              <CloseButton label="Close add member dialog" onClick={() => setIsCreateOpen(false)} />
             </div>
             {createError ? <div className={styles.memberDialogMessage}>{createError}</div> : null}
             <form className={styles.memberFormGrid} onSubmit={handleCreate}>
@@ -987,14 +1122,7 @@ export function MembersManager() {
                 <h2>{selectedMember.full_name}</h2>
                 <p>@{selectedMember.username ?? "not-configured"}</p>
               </div>
-              <button
-                aria-label="Close member detail"
-                className={styles.iconButton}
-                onClick={() => setSelectedMember(null)}
-                type="button"
-              >
-                X
-              </button>
+              <CloseButton label="Close member detail" onClick={() => setSelectedMember(null)} />
             </div>
 
             <div
@@ -1162,7 +1290,15 @@ export function MembersManager() {
                   <div className={styles.memberPaymentGrid}>
                   <label className={styles.field}>
                     Payment method
-                    <select name="paymentMethod">
+                    <select
+                      name="paymentMethod"
+                      onChange={(event) => {
+                        setMemberPaymentMethod(event.target.value as PaymentMethod);
+                        setMemberPaymentError("");
+                        setMemberPaymentValue("");
+                      }}
+                      value={memberPaymentMethod}
+                    >
                       <option value="cash">Cash</option>
                       <option value="gcash">GCash</option>
                       <option value="maya">Maya</option>
@@ -1170,10 +1306,27 @@ export function MembersManager() {
                     </select>
                   </label>
                   <label className={styles.field}>
-                    Cash received / reference
-                    <input name="cashReceived" placeholder="100.00 or reference number" />
+                    {memberPaymentMethod === "cash" ? "Cash received" : "Reference number"}
+                    <input
+                      ref={memberPaymentInputRef}
+                      inputMode={memberPaymentMethod === "cash" ? "decimal" : undefined}
+                      name="paymentValue"
+                      placeholder={memberPaymentMethod === "cash" ? String(selectedProduct.price) : "Required"}
+                      onChange={(event) => {
+                        setMemberPaymentValue(event.target.value);
+                        setMemberPaymentError("");
+                      }}
+                      value={memberPaymentValue}
+                    />
                   </label>
                   </div>
+                  {memberPaymentMethod === "cash" && selectedProduct ? (
+                    <div className={`${styles.changeSummary} ${styles[`changeSummary-${memberChangeState.state}`]}`}>
+                      <span>Change</span>
+                      <strong>{memberChangeState.label}</strong>
+                    </div>
+                  ) : null}
+                  {memberPaymentError ? <p className={styles.formError}>{memberPaymentError}</p> : null}
                   <div className={styles.memberTabActions}>
                   <button className={styles.primaryButton} disabled={isSaving} type="submit">
                     {isSaving ? "Processing..." : "Add Member Time"}
@@ -1295,21 +1448,133 @@ export function MembersManager() {
                     No activity has been recorded for this member.
                   </div>
                 ) : null}
-                {visibleLedger.map(({ transaction, activity }) => (
+                {visibleLedger.map(({ transaction, activity }) => {
+                  const isRefundablePurchase =
+                    canRefundPurchases &&
+                    Boolean(transaction.related_payment_id) &&
+                    !refundedPaymentIds.has(transaction.related_payment_id ?? "") &&
+                    (transaction.transaction_type === "membership_purchase" ||
+                      transaction.transaction_type === "promo_topup");
+                  return (
                   <div className={styles.memberActivityRow} key={transaction.transaction_id}>
                     <div>
                       <strong>{activity.title}</strong>
                       <span>{formatDateTime(transaction.created_at)}</span>
                     </div>
-                    <p>
-                      {activity.amount ? `${formatMoney(activity.amount)} - ` : ""}
-                      {activity.detail}
-                    </p>
+                    <div className={styles.memberActivityDetail}>
+                      <p>
+                        {activity.amount ? `${formatMoney(activity.amount)} - ` : ""}
+                        {activity.detail}
+                      </p>
+                      {isRefundablePurchase ? (
+                        <button
+                          className={styles.secondaryButton}
+                          onClick={() => {
+                            setRefundTarget(transaction);
+                            setRefundReason("Duplicate transaction");
+                            setRefundNotes("");
+                            setRefundError("");
+                          }}
+                          type="button"
+                        >
+                          Refund
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
             ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {refundTarget ? (
+        <div className={`${styles.overlay} ${styles.confirmOverlay}`} role="presentation">
+          <section
+            aria-label="Refund member purchase"
+            aria-modal="true"
+            className={`${styles.dialog} ${styles.refundDialog}`}
+            ref={refundModalRef}
+            role="dialog"
+          >
+            <h2>Refund Member Purchase</h2>
+            <div className={styles.refundSummary} aria-label="Refund summary">
+              {selectedMember ? (
+                <div className={styles.refundSummaryRow}>
+                  <span>Member</span>
+                  <strong>{selectedMember.username ?? selectedMember.full_name}</strong>
+                </div>
+              ) : null}
+              {refundTarget.notes ? (
+                <div className={styles.refundSummaryRow}>
+                  <span>Original package</span>
+                  <strong>{refundTarget.notes}</strong>
+                </div>
+              ) : null}
+              {refundTarget.amount_paid ? (
+                <div className={styles.refundSummaryRow}>
+                  <span>Amount to refund</span>
+                  <strong>{formatMoney(refundAmount)}</strong>
+                </div>
+              ) : null}
+              <div className={`${styles.refundSummaryRow} ${styles.refundSummaryRowHighlight}`}>
+                <span>Time to be removed</span>
+                <strong>{formatMemberBalance(refundTimeSeconds)}</strong>
+              </div>
+              {selectedMember ? (
+                <div className={styles.refundSummaryRow}>
+                  <span>Current balance</span>
+                  <strong>{formatMemberBalance(selectedMember.time_balance_seconds)}</strong>
+                </div>
+              ) : null}
+              {refundBalanceAfter !== null ? (
+                <div className={styles.refundSummaryRow}>
+                  <span>Balance after refund</span>
+                  <strong>{formatMemberBalance(Math.max(0, refundBalanceAfter))}</strong>
+                </div>
+              ) : null}
+            </div>
+            <label className={styles.field}>
+              Refund reason
+              <select
+                onChange={(event) => setRefundReason(event.target.value)}
+                value={refundReason}
+              >
+                <option value="Duplicate transaction">Duplicate transaction</option>
+                <option value="Wrong member">Wrong member</option>
+                <option value="Wrong package">Wrong package</option>
+                <option value="Wrong amount">Wrong amount</option>
+                <option value="Customer cancellation">Customer cancellation</option>
+                <option value="Other">Other</option>
+              </select>
+            </label>
+            <label className={styles.field}>
+              Notes
+              <input
+                onChange={(event) => setRefundNotes(event.target.value)}
+                placeholder={refundReason === "Other" ? "Required" : "Optional"}
+                value={refundNotes}
+              />
+            </label>
+            {refundError ? <p className={styles.formError}>{refundError}</p> : null}
+            <p className={styles.refundWarning}>
+              This will reverse the original payment and remove {formatMemberBalance(refundTimeSeconds)} from the member's balance. The original transaction will remain in history.
+            </p>
+            <div className={styles.dialogActions}>
+              <button className={styles.secondaryButton} disabled={isSaving} onClick={closeRefundDialog} type="button">
+                Cancel
+              </button>
+              <button
+                className={`${styles.primaryButton} ${styles.destructiveButton}`}
+                disabled={isSaving || (refundReason === "Other" && !refundNotes.trim())}
+                onClick={() => void handleRefundPurchase()}
+                type="button"
+              >
+                {isSaving ? "Processing..." : "Confirm Refund"}
+              </button>
             </div>
           </section>
         </div>

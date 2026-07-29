@@ -7,6 +7,8 @@ import type {
   CurrentUser,
   ForceEndSessionResponse,
   MemberRecord,
+  MemberPurchaseRefundResponse,
+  MemberPurchaseResponse,
   MembershipProduct,
   MemberSessionSelection,
   MemberTimeTransaction,
@@ -60,11 +62,20 @@ export function getPollingIntervalMs(): number {
 
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    let message = `Server returned ${response.status}`;
+    let message = `Request failed with status ${response.status}`;
     try {
       const payload = (await response.json()) as { detail?: unknown };
       if (typeof payload.detail === "string") {
         message = payload.detail;
+      } else if (Array.isArray(payload.detail)) {
+        message = payload.detail
+          .map((item) => {
+            if (item && typeof item === "object" && "msg" in item) {
+              return String((item as { msg: unknown }).msg);
+            }
+            return String(item);
+          })
+          .join(" ");
       }
     } catch {
       // Keep the generic status message when the server does not return JSON.
@@ -472,6 +483,30 @@ export async function resetUserPassword(
 export function toCashierMessage(message: string): string {
   const lowerMessage = message.toLowerCase();
 
+  if (lowerMessage.includes("duplicate transaction key") || lowerMessage.includes("already been recorded")) {
+    return "This transaction appears to have already been recorded.";
+  }
+  if (lowerMessage.includes("cash received is required")) {
+    return "Enter the cash received.";
+  }
+  if (lowerMessage.includes("cash received") && lowerMessage.includes("lower")) {
+    return "Cash received must be at least the payment amount.";
+  }
+  if (lowerMessage.includes("cash received") && lowerMessage.includes("only valid for cash")) {
+    return "Cash received is only valid when the payment method is Cash.";
+  }
+  if (lowerMessage.includes("reference") && lowerMessage.includes("required")) {
+    return "Enter the payment reference.";
+  }
+  if (lowerMessage.includes("member is inactive")) {
+    return "This member account is disabled.";
+  }
+  if (lowerMessage.includes("membership product not found")) {
+    return "The selected member package is no longer available.";
+  }
+  if (lowerMessage.includes("not authenticated") || lowerMessage.includes("unauthorized") || lowerMessage.includes("forbidden")) {
+    return "You are not authorized to record this transaction.";
+  }
   if (lowerMessage.includes("offline")) {
     return "This PC is offline. Session actions are disabled until it reconnects.";
   }
@@ -682,9 +717,21 @@ export async function purchaseMemberTime(
     cash_received?: string;
     reference_number?: string;
     notes?: string;
+    idempotency_key?: string;
   }
-): Promise<{ member: MemberRecord }> {
-  return requestJson<{ member: MemberRecord }>(`${getApiBaseUrl()}/members/${memberId}/purchase`, {
+): Promise<MemberPurchaseResponse> {
+  return requestJson<MemberPurchaseResponse>(`${getApiBaseUrl()}/members/${memberId}/purchase`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function refundMemberPurchase(
+  paymentId: string,
+  input: { reason: string; notes?: string }
+): Promise<MemberPurchaseRefundResponse> {
+  return requestJson<MemberPurchaseRefundResponse>(`${getApiBaseUrl()}/member-purchases/${paymentId}/refund`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)

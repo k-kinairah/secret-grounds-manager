@@ -82,6 +82,7 @@ MembershipProductType = Literal["initial_membership", "member_topup"]
 MemberTransactionType = Literal[
     "membership_purchase",
     "promo_topup",
+    "purchase_refund",
     "session_reservation_created",
     "session_usage_finalized",
     "session_reservation_released",
@@ -860,6 +861,7 @@ class PaymentRecord(BaseModel):
     review_required: bool = False
     shift_id: str | None = None
     recorded_by_user_id: str | None = None
+    idempotency_key: str | None = None
     voided_by_user_id: str | None = None
     voided_at: datetime | None = None
     void_reason: str | None = None
@@ -873,6 +875,7 @@ class PaymentCreateRequest(BaseModel):
     cash_received: Decimal | None = None
     reference_number: str | None = None
     notes: str | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
 
     @field_validator("amount")
     @classmethod
@@ -887,6 +890,7 @@ class PaymentCreateRequest(BaseModel):
 
 class VoidPaymentRequest(BaseModel):
     reason: str = Field(..., min_length=1)
+    notes: str | None = None
 
 
 class BillingSummary(BaseModel):
@@ -1101,6 +1105,7 @@ class MemberPurchaseRequest(BaseModel):
     cash_received: Decimal | None = None
     reference_number: str | None = None
     notes: str | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
 
     @field_validator("cash_received")
     @classmethod
@@ -1128,6 +1133,30 @@ class MemberPurchaseResponse(BaseModel):
     product: MembershipProductRecord
     payment: PaymentRecord
     transaction: MemberTimeTransactionRecord
+
+
+class MemberPurchaseRefundRequest(BaseModel):
+    reason: Literal[
+        "Duplicate transaction",
+        "Wrong member",
+        "Wrong package",
+        "Wrong amount",
+        "Customer cancellation",
+        "Other",
+    ]
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def validate_notes(self) -> "MemberPurchaseRefundRequest":
+        if self.reason == "Other" and not (self.notes or "").strip():
+            raise ValueError("Notes are required when reason is Other")
+        return self
+
+
+class MemberPurchaseRefundResponse(BaseModel):
+    member: MemberRecord
+    payment: PaymentRecord
+    reversal_transaction: MemberTimeTransactionRecord
 
 
 class UserPublic(BaseModel):
@@ -1205,6 +1234,12 @@ SalesPeriod = Literal["today", "yesterday", "this_week", "this_month", "custom"]
 
 class SalesSummary(BaseModel):
     total_sales: Decimal = Decimal("0.00")
+    gross_sales: Decimal = Decimal("0.00")
+    refund_total: Decimal = Decimal("0.00")
+    net_sales: Decimal = Decimal("0.00")
+    cash_received_total: Decimal = Decimal("0.00")
+    change_given_total: Decimal = Decimal("0.00")
+    non_cash_collected: Decimal = Decimal("0.00")
     cash_total: Decimal = Decimal("0.00")
     gcash_total: Decimal = Decimal("0.00")
     maya_total: Decimal = Decimal("0.00")
@@ -1239,6 +1274,40 @@ class SalesOperatorBreakdown(BaseModel):
     gcash_total: Decimal = Decimal("0.00")
     maya_total: Decimal = Decimal("0.00")
     other_total: Decimal = Decimal("0.00")
+
+
+class SalesOperatorTransaction(BaseModel):
+    payment_id: str
+    timestamp: datetime
+    customer: str | None = None
+    pc_name: str | None = None
+    sales_type: Literal["pc_session", "member_purchase", "other"]
+    payment_method: PaymentMethod
+    amount_due: Decimal = Decimal("0.00")
+    cash_received: Decimal | None = None
+    change_given: Decimal | None = None
+    reference_number: str | None = None
+    status: PaymentStatus
+    recorded_by_operator: str
+    voided_by_operator: str | None = None
+    voided_at: datetime | None = None
+    void_reason: str | None = None
+    related_reference: str | None = None
+
+
+class SalesOperatorCollection(BaseModel):
+    operator_id: str | None = None
+    operator_name: str
+    transaction_count: int = 0
+    gross_sales: Decimal = Decimal("0.00")
+    refunds_voids: Decimal = Decimal("0.00")
+    net_sales: Decimal = Decimal("0.00")
+    cash_received: Decimal = Decimal("0.00")
+    change_given: Decimal = Decimal("0.00")
+    expected_cash: Decimal = Decimal("0.00")
+    non_cash_collected: Decimal = Decimal("0.00")
+    outstanding: Decimal = Decimal("0.00")
+    transactions: list[SalesOperatorTransaction] = Field(default_factory=list)
 
 
 class SalesPCBreakdown(BaseModel):
@@ -1288,6 +1357,7 @@ class SalesReport(BaseModel):
     payment_methods: list[SalesPaymentMethodBreakdown] = Field(default_factory=list)
     sales_types: list[SalesTypeBreakdown] = Field(default_factory=list)
     operators: list[SalesOperatorBreakdown] = Field(default_factory=list)
+    operator_collections: list[SalesOperatorCollection] = Field(default_factory=list)
     pcs: list[SalesPCBreakdown] = Field(default_factory=list)
     timeseries: list[SalesTimeseriesPoint] = Field(default_factory=list)
     recent_payments: list[SalesRecentPayment] = Field(default_factory=list)

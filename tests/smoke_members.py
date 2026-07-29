@@ -36,9 +36,9 @@ def main() -> None:
             get_member_ledger,
             list_membership_products,
             member_repository,
-            open_shift,
             pc_registry,
             purchase_member_time,
+            refund_member_purchase,
             register_pc,
             reset_member_pin,
             session_service,
@@ -49,11 +49,11 @@ def main() -> None:
             CommandAcknowledgement,
             MemberCreateRequest,
             MemberPinResetRequest,
+            MemberPurchaseRefundRequest,
             MemberPurchaseRequest,
             MemberSessionStartRequest,
             MemberStatusUpdate,
             PCRegistration,
-            ShiftOpenRequest,
             UserCreateRequest,
         )
         from server.user_repository import UserRepository
@@ -70,7 +70,16 @@ def main() -> None:
         )
         cashier_user = user_repository.get_user(cashier.user_id)
         assert cashier_user is not None
-        open_shift(ShiftOpenRequest(opening_cash=Decimal("1000.00")), cashier_user)
+        admin = user_repository.create_user(
+            UserCreateRequest(
+                username="refund-admin",
+                display_name="Admin",
+                password="admin-pass",
+                role="admin",
+            )
+        )
+        admin_user = user_repository.get_user(admin.user_id)
+        assert admin_user is not None
 
         member = create_member(
             MemberCreateRequest(
@@ -134,6 +143,23 @@ def main() -> None:
         membership_fee = next(product for product in products if product.product_id == "membership-fee")
         promo = next(product for product in products if product.product_id == "member-promo")
 
+        try:
+            purchase_member_time(
+                member.member_id,
+                MemberPurchaseRequest(
+                    product_id=membership_fee.product_id,
+                    payment_method="cash",
+                    cash_received=Decimal("1.00"),
+                ),
+                cashier_user,
+            )
+        except HTTPException as error:
+            assert error.status_code == 400
+            assert error.detail == "Cash received cannot be lower than payment amount"
+        else:
+            raise AssertionError("Invalid member purchase payment should be rejected")
+        assert member_repository.get_member(member.member_id).time_balance_seconds == 0
+
         purchase = purchase_member_time(
             member.member_id,
             MemberPurchaseRequest(
@@ -145,6 +171,70 @@ def main() -> None:
         )
         assert purchase.member.time_balance_seconds == 6 * 60 * 60
         assert purchase.payment.change_given == Decimal("400.00")
+        assert purchase.payment.shift_id is None
+        assert purchase.payment.recorded_by_user_id == cashier_user.user_id
+        with get_connection() as connection:
+            payment_row = connection.execute(
+                """
+                SELECT p.recorded_by_user_id, p.shift_id, mt.related_payment_id
+                FROM payments p
+                JOIN member_time_transactions mt ON mt.related_payment_id = p.payment_id
+                WHERE p.payment_id = ?
+                """,
+                (purchase.payment.payment_id,),
+            ).fetchone()
+        assert payment_row is not None
+        assert payment_row["recorded_by_user_id"] == cashier_user.user_id
+        assert payment_row["shift_id"] is None
+        assert payment_row["related_payment_id"] == purchase.payment.payment_id
+
+        refund_member = create_member(
+            MemberCreateRequest(
+                username="Refund.Player",
+                display_name="Refund Player",
+                pin="1234",
+                confirm_pin="1234",
+            ),
+            cashier_user,
+        )
+        refund_purchase_key = "member-refund-smoke-key"
+        refundable_purchase = purchase_member_time(
+            refund_member.member_id,
+            MemberPurchaseRequest(
+                product_id=promo.product_id,
+                payment_method="gcash",
+                reference_number="GC-REFUND-1",
+                idempotency_key=refund_purchase_key,
+            ),
+            cashier_user,
+        )
+        duplicate_purchase = purchase_member_time(
+            refund_member.member_id,
+            MemberPurchaseRequest(
+                product_id=promo.product_id,
+                payment_method="gcash",
+                reference_number="GC-REFUND-1",
+                idempotency_key=refund_purchase_key,
+            ),
+            cashier_user,
+        )
+        assert duplicate_purchase.payment.payment_id == refundable_purchase.payment.payment_id
+        assert duplicate_purchase.transaction.transaction_id == refundable_purchase.transaction.transaction_id
+        assert duplicate_purchase.member.time_balance_seconds == refundable_purchase.member.time_balance_seconds
+        refund = refund_member_purchase(
+            refundable_purchase.payment.payment_id,
+            MemberPurchaseRefundRequest(reason="Duplicate transaction"),
+            admin_user,
+        )
+        assert refund.payment.status == "voided"
+        assert refund.reversal_transaction.transaction_type == "purchase_refund"
+        assert refund.reversal_transaction.seconds_delta == -refundable_purchase.transaction.seconds_delta
+        assert refund.member.time_balance_seconds == 0
+        refund_ledger = get_member_ledger(refund_member.member_id, cashier_user)
+        assert [transaction.transaction_type for transaction in refund_ledger] == [
+            "promo_topup",
+            "purchase_refund",
+        ]
         secured_member = reset_member_pin(
             member.member_id,
             MemberPinResetRequest(pin="1234", confirm_pin="1234"),

@@ -19,6 +19,7 @@ import {
   shouldToastForActivity
 } from "@/lib/activity";
 import { useToast } from "./ToastProvider";
+import { CloseButton } from "./CloseButton";
 import styles from "@/app/page.module.css";
 
 const activityIconByCategory: Record<string, string> = {
@@ -283,9 +284,7 @@ export function ActivityDrawerTrigger({ icon = <span aria-hidden="true">AC</span
                 <p>{isLoading ? "Syncing events..." : `${activity.length} recent events`}</p>
               </div>
               <span className={styles.liveBadge}>Live</span>
-              <button aria-label="Close Live Activity" className={styles.iconButton} onClick={closeDrawer} type="button">
-                x
-              </button>
+              <CloseButton label="Close Live Activity" onClick={closeDrawer} />
             </header>
             <div className={styles.activityFilterRow} aria-label="Activity filters">
               {filterOptions.map((filter) => (

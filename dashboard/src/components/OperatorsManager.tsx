@@ -17,6 +17,7 @@ import type { OperatorActivityRecord, OperatorCreateInput, OperatorManagementRec
 import styles from "@/app/users/users.module.css";
 import { PageTitleIcon } from "./PageTitleIcon";
 import { useToast } from "./ToastProvider";
+import { CloseButton } from "./CloseButton";
 
 type ModalState =
   | { kind: "add" }
@@ -433,7 +434,7 @@ export function OperatorsManager() {
                 <h2>{activityOperator.display_name}</h2>
                 <p>Operator Activity</p>
               </div>
-              <button className={styles.secondaryButton} onClick={() => setActivityOperator(null)} type="button">Close</button>
+              <CloseButton label="Close operator activity" onClick={() => setActivityOperator(null)} />
             </div>
             <div className={styles.staffActivityMeta}>
               <span>{accessLabel(activityOperator)}</span>
@@ -486,7 +487,7 @@ function OperatorFormDialog({
       <form aria-label={title} aria-modal="true" className={styles.staffDialog} onSubmit={onSubmit} role="dialog">
         <div className={styles.staffDialogHeader}>
           <h2>{title}</h2>
-          <button aria-label="Close operator dialog" className={styles.secondaryButton} onClick={onClose} type="button">Close</button>
+          <CloseButton label="Close operator dialog" onClick={onClose} />
         </div>
         {formError ? <div className={styles.message}>{formError}</div> : null}
         <label className={styles.field}>
@@ -618,15 +619,7 @@ function PasswordDialog({
             <h2 id="change-password-title">Change Password</h2>
             <p id="change-password-description">Set a new password for {operator.display_name}.</p>
           </div>
-          <button
-            aria-label="Close change password dialog"
-            className={styles.staffCloseButton}
-            disabled={isSaving}
-            onClick={onClose}
-            type="button"
-          >
-            X
-          </button>
+          <CloseButton disabled={isSaving} label="Close change password dialog" onClick={onClose} />
         </div>
         {formError ? <div className={styles.passwordError} role="alert">{formError}</div> : null}
         <p className={styles.passwordHelper}>The current password cannot be viewed. Saving will replace it with the new password.</p>

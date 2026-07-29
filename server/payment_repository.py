@@ -14,6 +14,7 @@ def decimal_to_storage(value: Decimal | None) -> str | None:
 
 
 def row_to_payment(row: Any) -> PaymentRecord:
+    keys = set(row.keys())
     return PaymentRecord(
         payment_id=row["payment_id"],
         session_id=row["session_id"],
@@ -32,6 +33,7 @@ def row_to_payment(row: Any) -> PaymentRecord:
         review_required=bool(row["review_required"]),
         shift_id=row["shift_id"],
         recorded_by_user_id=row["recorded_by_user_id"],
+        idempotency_key=row["idempotency_key"] if "idempotency_key" in keys else None,
         voided_by_user_id=row["voided_by_user_id"],
         voided_at=(
             datetime.fromisoformat(row["voided_at"])
@@ -65,13 +67,14 @@ class PaymentRepository:
                     review_required,
                     shift_id,
                     recorded_by_user_id,
+                    idempotency_key,
                     voided_by_user_id,
                     voided_at,
                     void_reason,
                     status,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payment.payment_id,
@@ -87,6 +90,7 @@ class PaymentRepository:
                     1 if payment.review_required else 0,
                     payment.shift_id,
                     payment.recorded_by_user_id,
+                    payment.idempotency_key,
                     payment.voided_by_user_id,
                     payment.voided_at.isoformat() if payment.voided_at is not None else None,
                     payment.void_reason,
@@ -96,6 +100,15 @@ class PaymentRepository:
             )
 
         return payment
+
+    def get_payment_by_idempotency_key(self, idempotency_key: str) -> PaymentRecord | None:
+        with get_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM payments WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+
+        return row_to_payment(row) if row is not None else None
 
     def get_payment(self, payment_id: str) -> PaymentRecord | None:
         with get_connection() as connection:

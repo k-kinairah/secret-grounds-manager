@@ -89,17 +89,29 @@ def main() -> None:
         session_id = started.session.session_id
         cash_payment = record_payment(
             session_id,
-            PaymentCreateRequest(payment_method="cash", amount=Decimal("50.00")),
+            PaymentCreateRequest(
+                payment_method="cash",
+                amount=Decimal("50.00"),
+                cash_received=Decimal("100.00"),
+            ),
             cashier,
         ).payments[-1]
         record_payment(
             session_id,
-            PaymentCreateRequest(payment_method="gcash", amount=Decimal("25.00")),
+            PaymentCreateRequest(
+                payment_method="gcash",
+                amount=Decimal("25.00"),
+                reference_number="GC-SALES",
+            ),
             cashier,
         )
         void_candidate = record_payment(
             session_id,
-            PaymentCreateRequest(payment_method="maya", amount=Decimal("10.00")),
+            PaymentCreateRequest(
+                payment_method="maya",
+                amount=Decimal("10.00"),
+                reference_number="MY-VOID",
+            ),
             cashier,
         ).payments[-1]
         void_payment(
@@ -109,7 +121,7 @@ def main() -> None:
         )
 
         unsettled = asyncio.run(
-            start_session(StartSessionRequest(pc_name="PC-DUE", amount=Decimal("80.00")))
+            start_session(StartSessionRequest(pc_name="PC-DUE", amount=Decimal("80.00")), cashier)
         )
         session_repository.update_session(
             unsettled.session.model_copy(
@@ -146,6 +158,12 @@ def main() -> None:
         report = get_sales_report("today", None, None, admin)
         expected_total = Decimal("75.00") + product.price
         assert report.summary.total_sales == expected_total
+        assert report.summary.net_sales == expected_total
+        assert report.summary.refund_total == void_candidate.amount
+        assert report.summary.gross_sales == expected_total + void_candidate.amount
+        assert report.summary.cash_received_total == Decimal("100.00")
+        assert report.summary.change_given_total == Decimal("50.00")
+        assert report.summary.non_cash_collected == Decimal("25.00") + product.price
         assert report.summary.cash_total == Decimal("50.00")
         assert report.summary.gcash_total == Decimal("25.00")
         assert report.summary.maya_total == product.price
@@ -157,6 +175,25 @@ def main() -> None:
         assert any(payment.payment_id == cash_payment.payment_id for payment in report.recent_payments)
         assert report.operators[0].operator_name == "Sales Cashier"
         assert report.operators[0].total_amount == expected_total
+        collection = next(
+            operator for operator in report.operator_collections
+            if operator.operator_name == "Sales Cashier"
+        )
+        assert collection.transaction_count == 4
+        assert collection.gross_sales == expected_total + void_candidate.amount
+        assert collection.refunds_voids == void_candidate.amount
+        assert collection.net_sales == expected_total
+        assert collection.cash_received == Decimal("100.00")
+        assert collection.change_given == Decimal("50.00")
+        assert collection.expected_cash == Decimal("50.00")
+        assert collection.non_cash_collected == Decimal("25.00") + product.price
+        assert collection.outstanding == Decimal("80.00")
+        void_transaction = next(
+            transaction for transaction in collection.transactions
+            if transaction.payment_id == void_candidate.payment_id
+        )
+        assert void_transaction.recorded_by_operator == "Sales Cashier"
+        assert void_transaction.voided_by_operator == "Sales Cashier"
         assert report.pcs[0].pc_name == "PC-SALES"
         assert report.pcs[0].total_amount == Decimal("75.00")
         assert all(pc.total_amount != expected_total for pc in report.pcs)

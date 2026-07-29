@@ -5,6 +5,7 @@ import { sendPcMessage, sendPowerCommand, updatePcMacAddress, wakePc } from "@/l
 import { getPcActionAvailability } from "@/lib/pcStatus";
 import { formatDateTime, formatMoney, formatTimer } from "@/lib/time";
 import type { MessageSeverity, PcSummary, UserRole } from "@/lib/types";
+import { CloseButton } from "./CloseButton";
 
 type IconName =
   | "card"
@@ -342,15 +343,11 @@ export function PcDetailsPanel({
             </div>
             <p>{customerLabel} / {planLabel}</p>
           </div>
-          <button
-            aria-label={`Close ${pc.display_name ?? pc.pc_name} control window`}
-            className={styles.iconButton}
+          <CloseButton
             disabled={isWorking}
+            label={`Close ${pc.display_name ?? pc.pc_name} control window`}
             onClick={onClose}
-            type="button"
-          >
-            <Icon name="x" />
-          </button>
+          />
         </header>
 
         {notice ? <div className={styles.statusMessage}>{notice}</div> : null}

@@ -310,7 +310,11 @@ def main() -> None:
         open_shift(ShiftOpenRequest(opening_cash=Decimal("0.00")), stored_owner)
         billing = record_payment(
             "auth-session",
-            PaymentCreateRequest(payment_method="cash", amount=Decimal("20.00")),
+            PaymentCreateRequest(
+                payment_method="cash",
+                amount=Decimal("20.00"),
+                cash_received=Decimal("20.00"),
+            ),
             stored_owner,
         )
         assert billing.payment_status == "paid"

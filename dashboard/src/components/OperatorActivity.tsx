@@ -5,6 +5,7 @@ import { fetchAdminOperators, fetchOperatorActivity } from "@/lib/api";
 import { formatDateTime, formatMoney } from "@/lib/time";
 import type { OperatorActivityRecord, OperatorManagementRecord } from "@/lib/types";
 import styles from "@/app/history/history.module.css";
+import { CloseButton } from "./CloseButton";
 
 const pageSize = 25;
 const categories = [
@@ -255,7 +256,7 @@ export function OperatorActivity() {
                 <h2>{humanizeAction(selectedActivity.action)}</h2>
                 <p>{selectedActivity.operator_name} / {formatDateTime(selectedActivity.timestamp)}</p>
               </div>
-              <button className={styles.tableButton} onClick={() => setSelectedActivity(null)} type="button">Close</button>
+              <CloseButton label="Close operator activity details" onClick={() => setSelectedActivity(null)} />
             </div>
             <dl className={styles.billingList}>
               <div><span>Context</span><strong>{activityContext(selectedActivity)}</strong></div>

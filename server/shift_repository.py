@@ -151,7 +151,7 @@ class ShiftRepository:
         if shift is None:
             raise HTTPException(
                 status_code=409,
-                detail="Start a cashier shift before recording payments",
+                detail="Open shift is required for this shift-only action",
             )
         return shift.shift_id
 

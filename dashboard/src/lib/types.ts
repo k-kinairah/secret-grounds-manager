@@ -247,13 +247,14 @@ export interface CalculatedTimeResponse {
 
 export interface PaymentRecord {
   payment_id: string;
-  session_id: string;
+  session_id: string | null;
   amount: string;
   payment_method: PaymentMethod;
   cash_received: string | null;
   change_given: string | null;
   reference_number: string | null;
   notes: string | null;
+  idempotency_key: string | null;
   shift_id: string | null;
   status: PaymentStatus;
   created_at: string;
@@ -265,6 +266,7 @@ export interface PaymentInput {
   cash_received?: string;
   reference_number?: string;
   notes?: string;
+  idempotency_key?: string;
 }
 
 export interface PrepaidSessionSelection {
@@ -366,6 +368,12 @@ export type SalesType = "pc_session" | "member_purchase" | "other";
 
 export interface SalesSummary {
   total_sales: string;
+  gross_sales: string;
+  refund_total: string;
+  net_sales: string;
+  cash_received_total: string;
+  change_given_total: string;
+  non_cash_collected: string;
   cash_total: string;
   gcash_total: string;
   maya_total: string;
@@ -400,6 +408,40 @@ export interface SalesOperatorBreakdown {
   gcash_total: string;
   maya_total: string;
   other_total: string;
+}
+
+export interface SalesOperatorTransaction {
+  payment_id: string;
+  timestamp: string;
+  customer: string | null;
+  pc_name: string | null;
+  sales_type: SalesType;
+  payment_method: PaymentMethod;
+  amount_due: string;
+  cash_received: string | null;
+  change_given: string | null;
+  reference_number: string | null;
+  status: PaymentStatus;
+  recorded_by_operator: string;
+  voided_by_operator: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  related_reference: string | null;
+}
+
+export interface SalesOperatorCollection {
+  operator_id: string | null;
+  operator_name: string;
+  transaction_count: number;
+  gross_sales: string;
+  refunds_voids: string;
+  net_sales: string;
+  cash_received: string;
+  change_given: string;
+  expected_cash: string;
+  non_cash_collected: string;
+  outstanding: string;
+  transactions: SalesOperatorTransaction[];
 }
 
 export interface SalesPCBreakdown {
@@ -449,6 +491,7 @@ export interface SalesReport {
   payment_methods: SalesPaymentMethodBreakdown[];
   sales_types: SalesTypeBreakdown[];
   operators: SalesOperatorBreakdown[];
+  operator_collections: SalesOperatorCollection[];
   pcs: SalesPCBreakdown[];
   timeseries: SalesTimeseriesPoint[];
   recent_payments: SalesRecentPayment[];
@@ -672,6 +715,7 @@ export interface MemberTimeTransaction {
   transaction_type:
     | "membership_purchase"
     | "promo_topup"
+    | "purchase_refund"
     | "session_reservation_created"
     | "session_usage_finalized"
     | "session_reservation_released"
@@ -688,4 +732,17 @@ export interface MemberTimeTransaction {
   notes: string | null;
   performed_by_user_id: string | null;
   created_at: string;
+}
+
+export interface MemberPurchaseResponse {
+  member: MemberRecord;
+  product: MembershipProduct;
+  payment: PaymentRecord;
+  transaction: MemberTimeTransaction;
+}
+
+export interface MemberPurchaseRefundResponse {
+  member: MemberRecord;
+  payment: PaymentRecord;
+  reversal_transaction: MemberTimeTransaction;
 }

@@ -839,6 +839,16 @@ async function runAsyncAssertions() {
 
     const membersSource = readFileSync("src/components/MembersManager.tsx", "utf8");
     assert.match(membersSource, /Search by display name, username, or phone/);
+    assert.match(membersSource, /useToast/);
+    assert.match(membersSource, /pushToast/);
+    assert.match(membersSource, /Member time added successfully/);
+    assert.match(membersSource, /Unable to add member time/);
+    assert.match(membersSource, /Profile saved/);
+    assert.match(membersSource, /PIN reset successfully/);
+    assert.match(membersSource, /PINs do not match/);
+    assert.doesNotMatch(membersSource, /setMessage\("Member time added/);
+    assert.doesNotMatch(membersSource, /setMessage\("Member PIN updated/);
+    assert.doesNotMatch(membersSource, /Start a cashier shift before recording payments/);
     assert.match(membersSource, /setIsCreateOpen\(true\)/);
     assert.match(membersSource, /role="dialog"/);
     assert.match(membersSource, /Create Member/);
@@ -929,6 +939,8 @@ async function runAsyncAssertions() {
 
     const authShellSource = readFileSync("src/components/AuthShell.tsx", "utf8");
     assert.match(authShellSource, /isAdminOperator/);
+    assert.doesNotMatch(authShellSource, /user\?\.role === "cashier" && shift === null/);
+    assert.doesNotMatch(authShellSource, /before recording payments/);
     assert.match(authShellSource, /appShell__adminMenu/);
     assert.match(authShellSource, /ToastProvider/);
     assert.match(authShellSource, /Admin/);
@@ -1115,6 +1127,11 @@ async function runAsyncAssertions() {
 
     const toastSource = readFileSync("src/components/ToastProvider.tsx", "utf8");
     assert.match(toastSource, /toastStack/);
+    assert.match(toastSource, /CloseButton/);
+    assert.doesNotMatch(toastSource, />\s*x\s*<\/button>/);
+    assert.match(toastSource, /toast\.title !== title/);
+    assert.match(toastSource, /toast\.message !== message/);
+    assert.match(toastSource, /durationMs/);
     assert.match(toastSource, /success/);
     assert.match(toastSource, /warning/);
     assert.match(toastSource, /error/);
@@ -1152,6 +1169,13 @@ async function runAsyncAssertions() {
     );
 
     const pageCss = readFileSync("src/app/page.module.css", "utf8");
+    assert.match(pageCss, /\.iconButton/);
+    assert.match(pageCss, /\.iconButtonSvg/);
+    assert.match(pageCss, /transform: translateY\(-1px\) scale\(1\.02\)/);
+    assert.match(pageCss, /\.changeSummary/);
+    assert.match(pageCss, /\.changeSummary-muted/);
+    assert.match(pageCss, /\.changeSummary-warning/);
+    assert.match(pageCss, /\.changeSummary-ready/);
     assert.match(pageCss, /\.statusCard/);
     assert.match(pageCss, /\.statusCardDashboard/);
     assert.match(pageCss, /\.statusCardGlyph/);
@@ -1171,7 +1195,15 @@ async function runAsyncAssertions() {
     assert.match(globalsSource, /\.pageTitleIcon/);
     assert.match(globalsSource, /\.pageTitleIcon__svg/);
     assert.match(globalsSource, /\.toastStack/);
+    assert.match(globalsSource, /width: 640px/);
+    assert.match(globalsSource, /\.toast--success/);
+    assert.match(globalsSource, /\.toast--error/);
+    assert.match(globalsSource, /\.toast--warning/);
+    assert.match(globalsSource, /--global-header-height/);
+    assert.match(globalsSource, /--z-confirm-modal/);
+    assert.match(globalsSource, /z-index: var\(--z-toast\)/);
     assert.match(globalsSource, /@keyframes toastIn/);
+    assert.match(globalsSource, /scale\(0\.97\)/);
     assert.match(globalsSource, /\.appShell__adminMenu > button/);
     assert.match(globalsSource, /\.appShell__chevron/);
 
@@ -1221,8 +1253,80 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(remoteCommandsSource, /failure_reason \?\? command\.client_response/);
 
     const salesSource = readFileSync("src/components/SalesManager.tsx", "utf8");
+    const secretSelectSource = readFileSync("src/components/SecretSelect.tsx", "utf8");
+    const secretSelectCss = readFileSync("src/components/SecretSelect.module.css", "utf8");
+
+    assert.match(secretSelectSource, /export interface SecretSelectOption/);
+    assert.match(secretSelectSource, /label: string/);
+    assert.match(secretSelectSource, /leadingIcon\?: ReactNode/);
+    assert.match(secretSelectSource, /placeholder/);
+    assert.match(secretSelectSource, /disabled/);
+    assert.match(secretSelectSource, /error/);
+    assert.match(secretSelectSource, /loading/);
+    assert.match(secretSelectSource, /onClear/);
+    assert.match(secretSelectSource, /searchable/);
+    assert.match(secretSelectSource, /createPortal/);
+    assert.match(secretSelectSource, /role="listbox"/);
+    assert.match(secretSelectSource, /role="option"/);
+    assert.match(secretSelectSource, /aria-expanded/);
+    assert.match(secretSelectSource, /aria-activedescendant/);
+    assert.match(secretSelectSource, /ArrowDown/);
+    assert.match(secretSelectSource, /ArrowUp/);
+    assert.match(secretSelectSource, /Escape/);
+    assert.match(secretSelectSource, /Home/);
+    assert.match(secretSelectSource, /End/);
+    assert.match(secretSelectSource, /No operators found/);
+    assert.match(secretSelectSource, /triggerRef\.current\?\.focus/);
+    assert.match(secretSelectSource, /SelectGlyph name="check"/);
+    assert.match(secretSelectCss, /\.panel/);
+    assert.match(secretSelectCss, /position: fixed/);
+    assert.match(secretSelectCss, /z-index: 110/);
+    assert.match(secretSelectCss, /\.rootActive/);
+    assert.match(secretSelectCss, /\.optionSelected/);
+    assert.match(secretSelectCss, /@keyframes selectIn/);
+
     assert.match(salesSource, /PageTitleIcon name="receipt"/);
-    assert.match(salesSource, /Total Sales/);
+    assert.match(salesSource, /SecretSelect/);
+    assert.match(salesSource, /SelectGlyph name="users"/);
+    assert.match(salesSource, /SelectGlyph name="credit-card"/);
+    assert.match(salesSource, /SelectGlyph name="list-filter"/);
+    assert.match(salesSource, /SelectGlyph name="badge"/);
+    assert.match(salesSource, /searchable/);
+    assert.match(salesSource, /Search operators/);
+    assert.doesNotMatch(salesSource, /<select onChange=\{\(event\) => setOperatorFilter/);
+    assert.doesNotMatch(salesSource, /<select onChange=\{\(event\) => setMethodFilter/);
+    assert.doesNotMatch(salesSource, /<select onChange=\{\(event\) => setTypeFilter/);
+    assert.doesNotMatch(salesSource, /<select onChange=\{\(event\) => setStatusFilter/);
+    assert.match(salesSource, /Net Sales/);
+    assert.match(salesSource, /Gross Sales/);
+    assert.match(salesSource, /Refunds \/ Voids/);
+    assert.match(salesSource, /Cash Received/);
+    assert.match(salesSource, /Change/);
+    assert.match(salesSource, /Non-Cash Collected/);
+    assert.match(salesSource, /Operator Collections/);
+    assert.doesNotMatch(salesSource, /Total Collections/);
+    assert.match(salesSource, /Cash Accountability/);
+    assert.match(salesSource, /Gross sales/);
+    assert.match(salesSource, /Expected drawer cash/);
+    assert.match(salesSource, /View Transactions/);
+    assert.match(salesSource, /Hide Transactions/);
+    assert.match(salesSource, /Member Balance Purchase/);
+    assert.match(salesSource, /Not yet used on a PC/);
+    assert.match(salesSource, /Technical details/);
+    assert.match(salesSource, /TransactionDetailsModal/);
+    assert.match(salesSource, /statusLabel/);
+    assert.match(salesSource, /compactReference/);
+    assert.match(salesSource, /Cash refunds/);
+    assert.match(salesSource, /Clear filters/);
+    assert.match(salesSource, /Show detailed table/);
+    assert.match(salesSource, /summarizeOperatorCollection/);
+    assert.match(salesSource, /Expected drawer cash = cash received - change given - cash refunds paid out/);
+    assert.match(salesSource, /operator_collections/);
+    assert.match(salesSource, /recorded_by_operator/);
+    assert.match(salesSource, /voided_by_operator/);
+    assert.match(salesSource, /payment_method/);
+    assert.match(salesSource, /sales_type/);
+    assert.match(salesSource, /statusFilter/);
     assert.match(salesSource, /Outstanding Settlements/);
     assert.match(salesSource, /Export CSV/);
     assert.match(salesSource, /Sales by Operator/);
@@ -1231,8 +1335,63 @@ async function runAsyncAssertions() {
 
     const salesCss = readFileSync("src/app/sales/sales.module.css", "utf8");
     assert.match(salesCss, /\.summaryGrid/);
+    assert.match(salesCss, /repeat\(7, minmax\(0, 1fr\)\)/);
+    assert.match(salesCss, /repeat\(4, minmax\(0, 1fr\)\)/);
+    assert.match(salesCss, /\.collectionToolbar/);
+    assert.match(salesCss, /grid-template-columns: repeat\(4, minmax\(160px, 1fr\)\)/);
+    assert.match(salesCss, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+    assert.match(salesCss, /\.operatorCardGrid/);
+    assert.match(salesCss, /\.operatorCollectionCard/);
+    assert.match(salesCss, /\.operatorGroups/);
+    assert.match(salesCss, /\.cashAccountability/);
+    assert.match(salesCss, /\.transactionReceipt/);
+    assert.match(salesCss, /\.transactionModal/);
+    assert.match(salesCss, /\.technicalDetails/);
+    assert.match(salesCss, /\.statusBadge/);
+    assert.match(salesCss, /\.collectionTable/);
+    assert.match(salesCss, /position: sticky/);
+    assert.match(salesCss, /\.operatorDetailPanel/);
     assert.match(salesCss, /\.chartRow/);
     assert.match(salesCss, /@media \(max-width: 760px\)/);
+
+    const membersSourceForRefund = readFileSync("src/components/MembersManager.tsx", "utf8");
+    assert.match(membersSourceForRefund, /CloseButton/);
+    assert.match(membersSourceForRefund, /Enter cash received/);
+    assert.match(membersSourceForRefund, /Insufficient cash/);
+    assert.match(membersSourceForRefund, /changeSummary/);
+    assert.match(membersSourceForRefund, /confirmOverlay/);
+    assert.match(membersSourceForRefund, /refundDialog/);
+    assert.match(membersSourceForRefund, /Time to be removed/);
+    assert.doesNotMatch(membersSourceForRefund, /Time to remove<\/span>/);
+    assert.match(membersSourceForRefund, /refundSummary/);
+    assert.match(membersSourceForRefund, /Balance after refund/);
+    assert.match(membersSourceForRefund, /destructiveButton/);
+    assert.match(membersSourceForRefund, /Processing\.\.\./);
+    assert.match(membersSourceForRefund, /refundReason === "Other" && !refundNotes\.trim\(\)/);
+    assert.match(pageCss, /\.confirmOverlay/);
+    assert.match(pageCss, /\.refundDialog/);
+    assert.match(pageCss, /\.refundSummaryRowHighlight/);
+
+    const paymentDialogSource = readFileSync("src/components/PaymentDialog.tsx", "utf8");
+    assert.match(paymentDialogSource, /Enter cash received/);
+    assert.match(paymentDialogSource, /Insufficient cash/);
+    assert.match(paymentDialogSource, /changeSummary/);
+    assert.doesNotMatch(paymentDialogSource, /Enter enough cash/);
+
+    const sessionDialogSource = readFileSync("src/components/SessionDialog.tsx", "utf8");
+    assert.match(sessionDialogSource, /Enter cash received/);
+    assert.match(sessionDialogSource, /Insufficient cash/);
+    assert.match(sessionDialogSource, /changeSummary/);
+
+    for (const sourcePath of [
+      "src/components/ActivityFeed.tsx",
+      "src/components/HistoryTable.tsx",
+      "src/components/OperatorActivity.tsx",
+      "src/components/OperatorsManager.tsx",
+      "src/components/PcDetailsPanel.tsx"
+    ]) {
+      assert.match(readFileSync(sourcePath, "utf8"), /CloseButton/);
+    }
 
     const pageTitleSources: Array<[string, RegExp]> = [
       ["src/app/history/page.tsx", /PageTitleIcon name="history"/],

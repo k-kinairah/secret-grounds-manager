@@ -5,6 +5,7 @@ import { fetchBilling, fetchHistory } from "@/lib/api";
 import { formatDateTime, formatMoney } from "@/lib/time";
 import type { BillingSummary, SessionRecord, SessionStatus } from "@/lib/types";
 import styles from "@/app/history/history.module.css";
+import { CloseButton } from "./CloseButton";
 
 const pageSize = 25;
 const statuses: Array<SessionStatus | "all"> = [
@@ -317,7 +318,7 @@ export function HistoryTable() {
                 <h2>{selectedSession.pc_name} Session Details</h2>
                 <p>{customerName(selectedSession)} / {sessionType(selectedSession)}</p>
               </div>
-              <button className={styles.tableButton} onClick={() => setSelectedSession(null)} type="button">Close</button>
+              <CloseButton label="Close session details" onClick={() => setSelectedSession(null)} />
             </div>
             <div className={styles.detailsGrid}>
               <section>

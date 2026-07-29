@@ -267,6 +267,7 @@ def ensure_payments_accept_membership_payments(connection: sqlite3.Connection) -
                 review_required INTEGER NOT NULL DEFAULT 0,
                 shift_id TEXT,
                 recorded_by_user_id TEXT,
+                idempotency_key TEXT UNIQUE,
                 voided_by_user_id TEXT,
                 voided_at TEXT,
                 void_reason TEXT,
@@ -290,6 +291,7 @@ def ensure_payments_accept_membership_payments(connection: sqlite3.Connection) -
             "review_required",
             "shift_id",
             "recorded_by_user_id",
+            "idempotency_key",
             "voided_by_user_id",
             "voided_at",
             "void_reason",
@@ -344,6 +346,97 @@ def ensure_member_transactions_accept_reservation_events(connection: sqlite3.Con
                     transaction_type IN (
                         'membership_purchase',
                         'promo_topup',
+                        'purchase_refund',
+                        'session_reservation_created',
+                        'session_usage_finalized',
+                        'session_reservation_released',
+                        'session_reservation',
+                        'session_refund',
+                        'manual_adjustment',
+                        'expiration_adjustment'
+                    )
+                ),
+                seconds_delta INTEGER NOT NULL,
+                balance_before_seconds INTEGER NOT NULL,
+                balance_after_seconds INTEGER NOT NULL CHECK (balance_after_seconds >= 0),
+                amount_paid TEXT,
+                related_session_id TEXT,
+                related_payment_id TEXT,
+                notes TEXT,
+                performed_by_user_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (member_id) REFERENCES members(member_id),
+                FOREIGN KEY (related_session_id) REFERENCES sessions(session_id),
+                FOREIGN KEY (related_payment_id) REFERENCES payments(payment_id),
+                FOREIGN KEY (performed_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO member_time_transactions (
+                transaction_id,
+                member_id,
+                transaction_type,
+                seconds_delta,
+                balance_before_seconds,
+                balance_after_seconds,
+                amount_paid,
+                related_session_id,
+                related_payment_id,
+                notes,
+                performed_by_user_id,
+                created_at
+            )
+            SELECT
+                transaction_id,
+                member_id,
+                transaction_type,
+                seconds_delta,
+                balance_before_seconds,
+                balance_after_seconds,
+                amount_paid,
+                related_session_id,
+                related_payment_id,
+                notes,
+                performed_by_user_id,
+                created_at
+            FROM member_time_transactions_old
+            """
+        )
+        connection.execute("DROP TABLE member_time_transactions_old")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {int(original_foreign_keys)}")
+
+
+def ensure_member_transactions_accept_purchase_refund(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'member_time_transactions'"
+    ).fetchone()
+    table_sql = row["sql"] if row is not None else ""
+    if not table_sql or "purchase_refund" in table_sql:
+        return
+
+    original_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    connection.commit()
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute("BEGIN")
+    try:
+        connection.execute("ALTER TABLE member_time_transactions RENAME TO member_time_transactions_old")
+        connection.execute(
+            """
+            CREATE TABLE member_time_transactions (
+                transaction_id TEXT PRIMARY KEY,
+                member_id TEXT NOT NULL,
+                transaction_type TEXT NOT NULL CHECK (
+                    transaction_type IN (
+                        'membership_purchase',
+                        'promo_topup',
+                        'purchase_refund',
                         'session_reservation_created',
                         'session_usage_finalized',
                         'session_reservation_released',
@@ -1166,6 +1259,7 @@ def initialize_database() -> None:
                 review_required INTEGER NOT NULL DEFAULT 0,
                 shift_id TEXT,
                 recorded_by_user_id TEXT,
+                idempotency_key TEXT UNIQUE,
                 voided_by_user_id TEXT,
                 voided_at TEXT,
                 void_reason TEXT,
@@ -1191,6 +1285,7 @@ def initialize_database() -> None:
         )
         add_column_if_missing(connection, "payments", "shift_id", "TEXT")
         add_column_if_missing(connection, "payments", "recorded_by_user_id", "TEXT")
+        add_column_if_missing(connection, "payments", "idempotency_key", "TEXT")
         add_column_if_missing(connection, "payments", "voided_by_user_id", "TEXT")
         add_column_if_missing(connection, "payments", "voided_at", "TEXT")
         add_column_if_missing(connection, "payments", "void_reason", "TEXT")
@@ -1252,6 +1347,7 @@ def initialize_database() -> None:
                     transaction_type IN (
                         'membership_purchase',
                         'promo_topup',
+                        'purchase_refund',
                         'session_reservation_created',
                         'session_usage_finalized',
                         'session_reservation_released',
@@ -1278,6 +1374,7 @@ def initialize_database() -> None:
             """
         )
         ensure_member_transactions_accept_reservation_events(connection)
+        ensure_member_transactions_accept_purchase_refund(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS member_time_reservations (
@@ -1435,6 +1532,13 @@ def initialize_database() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_payments_shift_id
             ON payments (shift_id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_idempotency_key
+            ON payments (idempotency_key)
+            WHERE idempotency_key IS NOT NULL
             """
         )
         connection.execute(

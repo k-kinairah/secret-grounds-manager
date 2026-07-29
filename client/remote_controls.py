@@ -22,7 +22,7 @@ def default_power_executor(command: list[str]) -> None:
 class RemoteControlHandler:
     """Fixed allowlist for production-safe remote client controls."""
 
-    def __init__(self, pc_name: str, power_executor: PowerExecutor = default_power_executor) -> None:
+    def __init__(self, pc_name: str, power_executor: PowerExecutor = default_power_executor) -> None:   
         self.pc_name = pc_name
         self.power_executor = power_executor
 

@@ -63,11 +63,26 @@ def main() -> None:
 
         partial = record_payment(
             session_id,
-            PaymentCreateRequest(payment_method="cash", amount=Decimal("10.00")),
+            PaymentCreateRequest(
+                payment_method="cash",
+                amount=Decimal("10.00"),
+                cash_received=Decimal("10.00"),
+            ),
         )
         assert partial.total_paid == Decimal("10.00")
         assert partial.balance_due == Decimal("10.00")
         assert partial.payment_status == "partially_paid"
+
+        try:
+            record_payment(
+                session_id,
+                PaymentCreateRequest(payment_method="cash", amount=Decimal("1.00")),
+            )
+        except HTTPException as error:
+            assert error.status_code == 400
+            assert error.detail == "Cash received is required"
+        else:
+            raise AssertionError("Cash payments should require cash received")
 
         try:
             record_payment(
@@ -98,7 +113,11 @@ def main() -> None:
         try:
             record_payment(
                 session_id,
-                PaymentCreateRequest(payment_method="gcash", amount=Decimal("1.00")),
+                PaymentCreateRequest(
+                    payment_method="gcash",
+                    amount=Decimal("1.00"),
+                    reference_number="GC-OVER",
+                ),
             )
         except HTTPException as error:
             assert error.status_code == 400

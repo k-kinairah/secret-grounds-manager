@@ -13,6 +13,8 @@ from server.payment_repository import PaymentRepository
 from server.passwords import hash_password, verify_password
 from server.schemas import (
     MemberCreateRequest,
+    MemberPurchaseRefundRequest,
+    MemberPurchaseRefundResponse,
     MemberPurchaseRequest,
     MemberPurchaseResponse,
     MemberRecord,
@@ -594,6 +596,34 @@ class MemberRepository:
             ).fetchall()
         return [row_to_transaction(row) for row in rows]
 
+    def get_transaction_by_payment_id(self, payment_id: str) -> MemberTimeTransactionRecord | None:
+        with get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM member_time_transactions
+                WHERE related_payment_id = ?
+                  AND transaction_type IN ('membership_purchase', 'promo_topup')
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (payment_id,),
+            ).fetchone()
+        return row_to_transaction(row) if row is not None else None
+
+    def get_refund_transaction_by_payment_id(self, payment_id: str) -> MemberTimeTransactionRecord | None:
+        with get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM member_time_transactions
+                WHERE related_payment_id = ?
+                  AND transaction_type = 'purchase_refund'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (payment_id,),
+            ).fetchone()
+        return row_to_transaction(row) if row is not None else None
+
     def apply_balance_delta(
         self,
         member_id: str,
@@ -864,7 +894,32 @@ class MemberRepository:
         product = self.get_product(request.product_id)
         if product is None or not product.is_active:
             raise HTTPException(status_code=404, detail="Membership product not found")
-        shift_id = self.shift_repository.require_payment_shift(actor)
+
+        if request.idempotency_key:
+            existing_payment = self.payment_repository.get_payment_by_idempotency_key(
+                request.idempotency_key
+            )
+            if existing_payment is not None:
+                existing_transaction = self.get_transaction_by_payment_id(
+                    existing_payment.payment_id
+                )
+                if existing_transaction is None or existing_transaction.member_id != member_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Duplicate transaction key belongs to another payment",
+                    )
+                updated_member = self.get_member(member_id)
+                if updated_member is None:
+                    raise HTTPException(status_code=500, detail="Member disappeared after purchase")
+                return MemberPurchaseResponse(
+                    member=updated_member,
+                    product=product,
+                    payment=existing_payment,
+                    transaction=existing_transaction,
+                )
+
+        open_shift = self.shift_repository.get_open_shift_for_user(actor.user_id)
+        shift_id = open_shift.shift_id if open_shift is not None else None
 
         payment_request = PaymentCreateRequest(
             payment_method=request.payment_method,
@@ -877,12 +932,15 @@ class MemberRepository:
         change_given: Decimal | None = None
         if payment_request.payment_method == "cash":
             if cash_received is None:
-                cash_received = product.price
+                raise HTTPException(status_code=400, detail="Cash received is required")
             if cash_received < product.price:
                 raise HTTPException(status_code=400, detail="Cash received cannot be lower than payment amount")
             change_given = money(cash_received - product.price)
-        elif cash_received is not None:
-            raise HTTPException(status_code=400, detail="Cash received is only valid for cash payments")
+        else:
+            if cash_received is not None:
+                raise HTTPException(status_code=400, detail="Cash received is only valid for cash payments")
+            if not (request.reference_number or "").strip():
+                raise HTTPException(status_code=400, detail="Payment reference is required")
 
         payment = PaymentRecord(
             payment_id=str(uuid4()),
@@ -898,6 +956,7 @@ class MemberRepository:
             review_required=False,
             shift_id=shift_id,
             recorded_by_user_id=actor.user_id,
+            idempotency_key=request.idempotency_key,
             status="completed",
             created_at=current_utc_time(),
         )
@@ -919,4 +978,87 @@ class MemberRepository:
             product=product,
             payment=payment,
             transaction=transaction,
+        )
+
+    def refund_purchase(
+        self,
+        payment_id: str,
+        request: MemberPurchaseRefundRequest,
+        actor: UserRecord,
+    ) -> MemberPurchaseRefundResponse:
+        payment = self.payment_repository.get_payment(payment_id)
+        if payment is None:
+            raise HTTPException(status_code=404, detail="Payment not found")
+        if payment.status != "completed":
+            existing_refund = self.get_refund_transaction_by_payment_id(payment_id)
+            if existing_refund is not None:
+                member = self.get_member(existing_refund.member_id)
+                if member is None:
+                    raise HTTPException(status_code=500, detail="Member disappeared after refund")
+                return MemberPurchaseRefundResponse(
+                    member=member,
+                    payment=payment,
+                    reversal_transaction=existing_refund,
+                )
+            raise HTTPException(status_code=409, detail="This transaction has already been voided")
+
+        original_transaction = self.get_transaction_by_payment_id(payment_id)
+        if original_transaction is None:
+            raise HTTPException(status_code=409, detail="Payment is not a member purchase")
+        member = self.get_member(original_transaction.member_id)
+        if member is None:
+            raise HTTPException(status_code=404, detail="Member not found")
+        if self.get_refund_transaction_by_payment_id(payment_id) is not None:
+            raise HTTPException(status_code=409, detail="This transaction has already been refunded")
+        if self.has_active_reservation(member.member_id):
+            raise HTTPException(
+                status_code=409,
+                detail="This purchase cannot be refunded while the member has an active session",
+            )
+        if member.time_balance_seconds < original_transaction.seconds_delta:
+            raise HTTPException(
+                status_code=409,
+                detail="This purchase cannot be fully refunded because some of the time has already been used",
+            )
+
+        notes = request.reason
+        if request.notes and request.notes.strip():
+            notes = f"{notes}: {request.notes.strip()}"
+        voided_payment = self.payment_repository.void_payment(
+            payment_id,
+            actor.user_id,
+            notes,
+        )
+        if voided_payment is None:
+            raise HTTPException(status_code=404, detail="Payment not found")
+
+        reversal_transaction = self.apply_balance_delta(
+            member.member_id,
+            "purchase_refund",
+            -original_transaction.seconds_delta,
+            actor.user_id,
+            amount_paid=-payment.amount,
+            related_payment_id=payment.payment_id,
+            notes=notes,
+        )
+        updated_member = self.get_member(member.member_id)
+        if updated_member is None:
+            raise HTTPException(status_code=500, detail="Member disappeared after refund")
+        with get_connection() as connection:
+            self.record_member_audit(
+                connection,
+                "member_purchase_refunded",
+                actor,
+                updated_member,
+                {
+                    "payment_id": payment.payment_id,
+                    "amount": str(payment.amount),
+                    "seconds_delta": original_transaction.seconds_delta,
+                    "reason": request.reason,
+                },
+            )
+        return MemberPurchaseRefundResponse(
+            member=updated_member,
+            payment=voided_payment,
+            reversal_transaction=reversal_transaction,
         )

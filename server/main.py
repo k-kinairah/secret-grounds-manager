@@ -52,6 +52,8 @@ from server.schemas import (
     QuickOperatorLoginRequest,
     MemberAddTimeRequest,
     MemberCreateRequest,
+    MemberPurchaseRefundRequest,
+    MemberPurchaseRefundResponse,
     MemberPurchaseRequest,
     MemberPurchaseResponse,
     MemberPinResetRequest,
@@ -101,6 +103,8 @@ from server.schemas import (
     SalesTimeseriesPoint,
     SalesTypeBreakdown,
     SalesOperatorBreakdown,
+    SalesOperatorCollection,
+    SalesOperatorTransaction,
     StartSessionRequest,
     TestCommandRequest,
     TestCommandResponse,
@@ -734,6 +738,15 @@ def purchase_member_time(
     return member_repository.purchase(member_id, request, current_user)
 
 
+@app.post("/member-purchases/{payment_id}/refund", response_model=MemberPurchaseRefundResponse)
+def refund_member_purchase(
+    payment_id: str,
+    request: MemberPurchaseRefundRequest,
+    current_user=Depends(require_role("admin")),
+) -> MemberPurchaseRefundResponse:
+    return member_repository.refund_purchase(payment_id, request, current_user)
+
+
 @app.get("/membership-products", response_model=list[MembershipProductRecord])
 def list_membership_products(
     include_inactive: bool = False,
@@ -1157,6 +1170,10 @@ def build_operator_activity(
             action = "Member PIN reset"
             event_category = "operator"
             result = "Updated"
+        elif event_type == "member_purchase_refunded":
+            action = "Member purchase refunded"
+            event_category = "payment"
+            result = "Refunded"
         else:
             continue
         timestamp = row["created_at"]
@@ -1258,9 +1275,15 @@ def build_sales_report(
                 p.session_id,
                 p.amount,
                 p.payment_method,
+                p.cash_received,
+                p.change_given,
+                p.reference_number,
                 p.status,
                 p.action_type,
                 p.recorded_by_user_id,
+                p.voided_by_user_id,
+                p.voided_at,
+                p.void_reason,
                 p.created_at,
                 s.pc_name,
                 s.member_name_snapshot,
@@ -1271,6 +1294,7 @@ def build_sales_report(
             FROM payments p
             LEFT JOIN sessions s ON s.session_id = p.session_id
             LEFT JOIN member_time_transactions mt ON mt.related_payment_id = p.payment_id
+                AND mt.transaction_type IN ('membership_purchase', 'promo_topup')
             LEFT JOIN members m ON m.member_id = mt.member_id
             WHERE p.created_at >= ?
               AND p.created_at < ?
@@ -1279,6 +1303,42 @@ def build_sales_report(
             """,
             (start_text, end_text),
         ).fetchall()
+        refund_rows = connection.execute(
+            """
+            SELECT
+                p.payment_id,
+                p.session_id,
+                p.amount,
+                p.payment_method,
+                p.cash_received,
+                p.change_given,
+                p.reference_number,
+                p.status,
+                p.action_type,
+                p.recorded_by_user_id,
+                p.voided_by_user_id,
+                p.voided_at,
+                p.void_reason,
+                p.created_at,
+                s.pc_name,
+                s.member_name_snapshot,
+                s.member_code_snapshot,
+                m.full_name AS member_full_name,
+                m.member_code AS member_code,
+                mt.transaction_type AS member_transaction_type
+            FROM payments p
+            LEFT JOIN sessions s ON s.session_id = p.session_id
+            LEFT JOIN member_time_transactions mt ON mt.related_payment_id = p.payment_id
+                AND mt.transaction_type IN ('membership_purchase', 'promo_topup')
+            LEFT JOIN members m ON m.member_id = mt.member_id
+            WHERE p.created_at >= ?
+              AND p.created_at < ?
+              AND p.status = 'voided'
+            ORDER BY p.created_at DESC
+            """,
+            (start_text, end_text),
+        ).fetchall()
+        all_payment_rows = [*payment_rows, *refund_rows]
         outstanding_rows = connection.execute(
             """
             SELECT
@@ -1288,6 +1348,7 @@ def build_sales_report(
                 s.member_code_snapshot,
                 s.ended_at,
                 s.total_amount,
+                s.created_by_user_id,
                 COALESCE(SUM(CASE WHEN p.status = 'completed' THEN CAST(p.amount AS REAL) ELSE 0 END), 0) AS total_paid,
                 s.status
             FROM sessions s
@@ -1403,8 +1464,145 @@ def build_sales_report(
         )
         for row in outstanding_rows
     ]
+    operator_collections: dict[str, dict[str, object]] = {}
+    for row in all_payment_rows:
+        amount = parse_money(row["amount"])
+        method = row["payment_method"]
+        status = row["status"]
+        sales_type, _ = sales_type_for_payment(row)
+        operator_id = row["recorded_by_user_id"]
+        operator_key = operator_id or "__system__"
+        entry = operator_collections.setdefault(
+            operator_key,
+            {
+                "operator_id": operator_id,
+                "operator_name": operator_name_for_sales(operator_id, users_by_id),
+                "transaction_count": 0,
+                "gross_sales": Decimal("0.00"),
+                "refunds_voids": Decimal("0.00"),
+                "net_sales": Decimal("0.00"),
+                "cash_received": Decimal("0.00"),
+                "change_given": Decimal("0.00"),
+                "cash_refunds": Decimal("0.00"),
+                "non_cash_collected": Decimal("0.00"),
+                "outstanding": Decimal("0.00"),
+                "transactions": [],
+            },
+        )
+        entry["transaction_count"] = int(entry["transaction_count"]) + 1
+        entry["gross_sales"] = entry["gross_sales"] + amount
+        if status == "voided":
+            entry["refunds_voids"] = entry["refunds_voids"] + amount
+            if method == "cash":
+                entry["cash_refunds"] = entry["cash_refunds"] + amount
+        else:
+            entry["net_sales"] = entry["net_sales"] + amount
+            if method == "cash":
+                entry["cash_received"] = entry["cash_received"] + parse_money(row["cash_received"])
+                entry["change_given"] = entry["change_given"] + parse_money(row["change_given"])
+            else:
+                entry["non_cash_collected"] = entry["non_cash_collected"] + amount
+
+        customer = (
+            row["member_full_name"]
+            or row["member_name_snapshot"]
+            or row["member_code"]
+            or row["member_code_snapshot"]
+        )
+        entry["transactions"].append(
+            SalesOperatorTransaction(
+                payment_id=row["payment_id"],
+                timestamp=storage_datetime(row["created_at"]),
+                customer=customer,
+                pc_name=row["pc_name"],
+                sales_type=sales_type,
+                payment_method=method,
+                amount_due=amount,
+                cash_received=parse_money(row["cash_received"]) if row["cash_received"] is not None else None,
+                change_given=parse_money(row["change_given"]) if row["change_given"] is not None else None,
+                reference_number=row["reference_number"],
+                status=status,
+                recorded_by_operator=operator_name_for_sales(operator_id, users_by_id),
+                voided_by_operator=operator_name_for_sales(row["voided_by_user_id"], users_by_id)
+                if row["voided_by_user_id"]
+                else None,
+                voided_at=storage_datetime(row["voided_at"]) if row["voided_at"] is not None else None,
+                void_reason=row["void_reason"],
+                related_reference=row["session_id"] or row["payment_id"],
+            )
+        )
+
+    for row in outstanding_rows:
+        operator_id = row["created_by_user_id"]
+        operator_key = operator_id or "__system__"
+        entry = operator_collections.setdefault(
+            operator_key,
+            {
+                "operator_id": operator_id,
+                "operator_name": operator_name_for_sales(operator_id, users_by_id),
+                "transaction_count": 0,
+                "gross_sales": Decimal("0.00"),
+                "refunds_voids": Decimal("0.00"),
+                "net_sales": Decimal("0.00"),
+                "cash_received": Decimal("0.00"),
+                "change_given": Decimal("0.00"),
+                "cash_refunds": Decimal("0.00"),
+                "non_cash_collected": Decimal("0.00"),
+                "outstanding": Decimal("0.00"),
+                "transactions": [],
+            },
+        )
+        entry["outstanding"] = entry["outstanding"] + (parse_money(row["total_amount"]) - parse_money(row["total_paid"]))
+
+    operator_collection_rows = [
+        SalesOperatorCollection(
+            operator_id=values["operator_id"],
+            operator_name=values["operator_name"],
+            transaction_count=values["transaction_count"],
+            gross_sales=values["gross_sales"],
+            refunds_voids=values["refunds_voids"],
+            net_sales=values["net_sales"],
+            cash_received=values["cash_received"],
+            change_given=values["change_given"],
+            expected_cash=values["cash_received"] - values["change_given"] - values["cash_refunds"],
+            non_cash_collected=values["non_cash_collected"],
+            outstanding=values["outstanding"],
+            transactions=sorted(values["transactions"], key=lambda item: item.timestamp, reverse=True),
+        )
+        for values in sorted(
+            operator_collections.values(),
+            key=lambda value: (value["net_sales"], value["gross_sales"]),
+            reverse=True,
+        )
+    ]
     outstanding_amount = sum((item.amount_due for item in outstanding), Decimal("0.00"))
     total_sales = sum((parse_money(row["amount"]) for row in payment_rows), Decimal("0.00"))
+    refund_total = sum((parse_money(row["amount"]) for row in refund_rows), Decimal("0.00"))
+    gross_sales = total_sales + refund_total
+    cash_received_total = sum(
+        (
+            parse_money(row["cash_received"])
+            for row in payment_rows
+            if row["payment_method"] == "cash"
+        ),
+        Decimal("0.00"),
+    )
+    change_given_total = sum(
+        (
+            parse_money(row["change_given"])
+            for row in payment_rows
+            if row["payment_method"] == "cash"
+        ),
+        Decimal("0.00"),
+    )
+    non_cash_collected = sum(
+        (
+            parse_money(row["amount"])
+            for row in payment_rows
+            if row["payment_method"] != "cash"
+        ),
+        Decimal("0.00"),
+    )
     payment_count = len(payment_rows)
     average = (total_sales / payment_count).quantize(Decimal("0.01")) if payment_count else Decimal("0.00")
 
@@ -1415,6 +1613,12 @@ def build_sales_report(
         grouping=grouping,
         summary=SalesSummary(
             total_sales=total_sales,
+            gross_sales=gross_sales,
+            refund_total=refund_total,
+            net_sales=total_sales,
+            cash_received_total=cash_received_total,
+            change_given_total=change_given_total,
+            non_cash_collected=non_cash_collected,
             cash_total=method_totals["cash"]["amount"],
             gcash_total=method_totals["gcash"]["amount"],
             maya_total=method_totals["maya"]["amount"],
@@ -1456,6 +1660,7 @@ def build_sales_report(
             )
             for values in sorted(operator_totals.values(), key=lambda value: value["total"], reverse=True)
         ],
+        operator_collections=operator_collection_rows,
         pcs=[
             SalesPCBreakdown(
                 pc_name=values["pc_name"],

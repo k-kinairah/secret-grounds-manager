@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "@/app/page.module.css";
 import { fetchMembers } from "@/lib/api";
-import { calculateCashChange } from "@/lib/paymentSelection";
 import { calculatePreviewSeconds } from "@/lib/sessionSelection";
 import { formatMoney, formatNaturalDuration, formatRateDuration, minutesToSeconds } from "@/lib/time";
 import type { CurrentUser, MemberRecord, MemberSessionSelection, PaymentMethod, PcSummary, PrepaidSessionSelection, RateProfile } from "@/lib/types";
@@ -23,6 +22,22 @@ interface SessionDialogProps {
 }
 
 const quickAmounts = ["5.00", "10.00", "20.00", "50.00"];
+
+function createIdempotencyKey() {
+  return globalThis.crypto?.randomUUID?.() ?? `session-payment-${Date.now()}-${Math.random()}`;
+}
+
+function getChangeState(amount: string, cashReceived: string): { label: string; state: "muted" | "warning" | "ready" } {
+  if (!cashReceived.trim()) {
+    return { label: "Enter cash received", state: "muted" };
+  }
+  const amountValue = Number(amount);
+  const cashValue = Number(cashReceived);
+  if (!Number.isFinite(amountValue) || !Number.isFinite(cashValue) || cashValue <= 0 || cashValue < amountValue) {
+    return { label: "Insufficient cash", state: "warning" };
+  }
+  return { label: formatMoney(cashValue - amountValue), state: "ready" };
+}
 
 export function SessionDialog({
   mode,
@@ -48,8 +63,13 @@ export function SessionDialog({
   const [memberQuery, setMemberQuery] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [memberPin, setMemberPin] = useState("");
+  const [validationError, setValidationError] = useState("");
   const [useMemberCap, setUseMemberCap] = useState(false);
   const [memberMinutes, setMemberMinutes] = useState("60");
+  const amountRef = useRef<HTMLInputElement | null>(null);
+  const cashRef = useRef<HTMLInputElement | null>(null);
+  const referenceRef = useRef<HTMLInputElement | null>(null);
+  const idempotencyKeyRef = useRef(createIdempotencyKey());
   const title = mode === "start" ? `Start ${pc.pc_name}` : `Add time to ${pc.pc_name}`;
   const previewSeconds = useMemo(
     () => calculatePreviewSeconds(amount, meteredRate),
@@ -62,10 +82,7 @@ export function SessionDialog({
       : selectedRateId === "custom"
         ? "0.00"
         : selectedPackage?.price ?? "0.00";
-  const change = calculateCashChange(
-    selectedPaymentAmount,
-    cashReceived || selectedPaymentAmount
-  );
+  const changeState = getChangeState(selectedPaymentAmount, cashReceived);
   const selectedMember = members.find((member) => member.member_id === selectedMemberId) ?? null;
   const memberDurationMinutes = Number(memberMinutes || "0");
   const memberDurationSeconds =
@@ -106,14 +123,56 @@ export function SessionDialog({
     return {
       payment_method: paymentMethod,
       amount: paymentAmount,
-      cash_received: paymentMethod === "cash" ? cashReceived || paymentAmount : undefined,
+      cash_received: paymentMethod === "cash" ? cashReceived : undefined,
       reference_number: paymentMethod !== "cash" ? referenceNumber : undefined,
-      notes: notes || undefined
+      notes: notes || undefined,
+      idempotency_key: idempotencyKeyRef.current
     };
   }
 
+  function validatePayment(paymentAmount: string): boolean {
+    const amountValue = Number(paymentAmount);
+    if (!Number.isFinite(amountValue) || amountValue < 0) {
+      setValidationError("Enter a valid payment amount.");
+      amountRef.current?.focus();
+      return false;
+    }
+    if (amountValue === 0) {
+      setValidationError("");
+      return true;
+    }
+    if (paymentMethod === "cash") {
+      if (!cashReceived.trim()) {
+        setValidationError("Enter the cash received.");
+        cashRef.current?.focus();
+        return false;
+      }
+      const cashValue = Number(cashReceived);
+      if (!Number.isFinite(cashValue) || cashValue <= 0) {
+        setValidationError("Enter a valid cash amount.");
+        cashRef.current?.focus();
+        return false;
+      }
+      if (cashValue < amountValue) {
+        setValidationError(`Cash received must be at least ${formatMoney(paymentAmount)}.`);
+        cashRef.current?.focus();
+        return false;
+      }
+    } else if (!referenceNumber.trim()) {
+      setValidationError("Enter the payment reference.");
+      referenceRef.current?.focus();
+      return false;
+    }
+    setValidationError("");
+    return true;
+  }
+
   function confirm() {
+    if (isLoading) {
+      return;
+    }
     if (activeTab === "open_time") {
+      setValidationError("");
       onConfirm({ sessionMode: "open_time" });
       return;
     }
@@ -127,8 +186,10 @@ export function SessionDialog({
         memberBalanceAfter === null ||
         memberBalanceAfter < 0
       ) {
+        setValidationError("Select a member and enter a valid 4-6 digit PIN.");
         return;
       }
+      setValidationError("");
       onConfirm({
         sessionMode: "member_balance",
         memberUsername: selectedMember.username ?? "",
@@ -140,11 +201,15 @@ export function SessionDialog({
     }
 
     if (activeTab === "amount") {
+      if (!validatePayment(amount)) {
+        return;
+      }
       onConfirm({ amount, payment: buildPayment(amount) });
       return;
     }
 
     if (selectedRateId === "custom") {
+      setValidationError("");
       onConfirm({
         durationSeconds: minutesToSeconds(Number(customMinutes)),
         payment: buildPayment("0.00")
@@ -152,6 +217,9 @@ export function SessionDialog({
       return;
     }
 
+    if (!validatePayment(selectedPackage?.price ?? "0.00")) {
+      return;
+    }
     onConfirm({ rateId: selectedRateId, payment: buildPayment(selectedPackage?.price ?? "0.00") });
   }
 
@@ -323,6 +391,7 @@ export function SessionDialog({
               <span>
                 ₱
                 <input
+                  ref={amountRef}
                   inputMode="decimal"
                   onChange={(event) => setAmount(event.target.value)}
                   placeholder="20.00"
@@ -395,23 +464,25 @@ export function SessionDialog({
                 <label className={styles.field}>
                   Cash received
                   <input
+                    ref={cashRef}
                     inputMode="decimal"
                     onChange={(event) => setCashReceived(event.target.value)}
                     placeholder={selectedPaymentAmount}
                     value={cashReceived}
                   />
                 </label>
-                <div className={styles.paymentSummary}>
+                <div className={`${styles.changeSummary} ${styles[`changeSummary-${changeState.state}`]}`}>
                   <span>Change</span>
-                  <strong>{change === null ? "Invalid cash" : formatMoney(Math.max(change, 0))}</strong>
+                  <strong>{changeState.label}</strong>
                 </div>
               </>
             ) : (
               <label className={styles.field}>
                 Reference number
                 <input
+                  ref={referenceRef}
                   onChange={(event) => setReferenceNumber(event.target.value)}
-                  placeholder="Optional"
+                  placeholder="Required"
                   value={referenceNumber}
                 />
               </label>
@@ -427,6 +498,7 @@ export function SessionDialog({
           </div>
         ) : null}
 
+        {validationError ? <p className={styles.formError}>{validationError}</p> : null}
         <div className={styles.dialogActions}>
           <button className={styles.secondaryButton} disabled={isLoading} onClick={onCancel}>
             Cancel

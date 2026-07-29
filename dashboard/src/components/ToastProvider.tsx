@@ -1,17 +1,19 @@
 "use client";
 
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
+import { CloseButton } from "./CloseButton";
 
 export type ToastVariant = "success" | "warning" | "info" | "error";
 
 interface ToastRecord {
   id: number;
-  message: string;
+  title: string;
+  message?: string;
   variant: ToastVariant;
 }
 
 interface ToastContextValue {
-  pushToast: (message: string, variant?: ToastVariant) => void;
+  pushToast: (title: string, variant?: ToastVariant, message?: string) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -23,10 +25,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
-  const pushToast = useCallback((message: string, variant: ToastVariant = "info") => {
+  const pushToast = useCallback((title: string, variant: ToastVariant = "info", message?: string) => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
-    setToasts((current) => [{ id, message, variant }, ...current].slice(0, 4));
-    window.setTimeout(() => dismissToast(id), 4200);
+    const durationMs = variant === "success" || variant === "info" ? 4800 : 8500;
+    setToasts((current) => [
+      { id, title, message, variant },
+      ...current.filter(
+        (toast) => toast.title !== title || toast.message !== message || toast.variant !== variant
+      )
+    ].slice(0, 4));
+    window.setTimeout(() => dismissToast(id), durationMs);
   }, [dismissToast]);
 
   const value = useMemo(() => ({ pushToast }), [pushToast]);
@@ -38,10 +46,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((toast) => (
           <div className={`toast toast--${toast.variant}`} key={toast.id} role="status">
             <span className="toast__icon" aria-hidden="true">{toast.variant.slice(0, 1).toUpperCase()}</span>
-            <span>{toast.message}</span>
-            <button aria-label="Dismiss notification" onClick={() => dismissToast(toast.id)} type="button">
-              x
-            </button>
+            <span className="toast__body">
+              <strong>{toast.title}</strong>
+              {toast.message ? <small>{toast.message}</small> : null}
+            </span>
+            <CloseButton label="Dismiss notification" onClick={() => dismissToast(toast.id)} size="small" />
           </div>
         ))}
       </div>

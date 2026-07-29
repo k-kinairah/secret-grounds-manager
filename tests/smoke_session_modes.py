@@ -186,7 +186,11 @@ def main() -> None:
         assert unpaid.payment_status == "unpaid"
         settled = record_payment(
             open_started.session.session_id,
-            PaymentCreateRequest(payment_method="gcash", amount=Decimal("2.00")),
+            PaymentCreateRequest(
+                payment_method="gcash",
+                amount=Decimal("2.00"),
+                reference_number="GC-OPEN",
+            ),
         )
         assert settled.payment_status == "paid"
         assert settled.session.status == "completed"

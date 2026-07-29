@@ -91,20 +91,18 @@ def main() -> None:
             )
         )
 
-        try:
-            record_payment(
-                "shift-session",
-                PaymentCreateRequest(
-                    payment_method="cash",
-                    amount=Decimal("100.00"),
-                    cash_received=Decimal("500.00"),
-                ),
-                cashier_user,
-            )
-        except HTTPException as error:
-            assert error.status_code == 409
-        else:
-            raise AssertionError("Authenticated payment without open shift should be rejected")
+        paid_without_shift = record_payment(
+            "shift-session",
+            PaymentCreateRequest(
+                payment_method="cash",
+                amount=Decimal("10.00"),
+                cash_received=Decimal("10.00"),
+            ),
+            cashier_user,
+        )
+        no_shift_payment = paid_without_shift.payments[-1]
+        assert no_shift_payment.shift_id is None
+        assert no_shift_payment.recorded_by_user_id == cashier.user_id
 
         opened = open_shift(ShiftOpenRequest(opening_cash=Decimal("1000.00")), cashier_user)
         assert opened.shift.status == "open"
@@ -134,17 +132,30 @@ def main() -> None:
             "shift-session",
             PaymentCreateRequest(
                 payment_method="gcash",
-                amount=Decimal("50.00"),
+                amount=Decimal("40.00"),
                 reference_number="GCASH-1",
+                idempotency_key="shift-digital-payment-key",
             ),
             cashier_user,
         )
         assert paid_digital.payments[-1].shift_id == opened.shift.shift_id
+        duplicate_digital = record_payment(
+            "shift-session",
+            PaymentCreateRequest(
+                payment_method="gcash",
+                amount=Decimal("40.00"),
+                reference_number="GCASH-1",
+                idempotency_key="shift-digital-payment-key",
+            ),
+            cashier_user,
+        )
+        assert len(duplicate_digital.payments) == len(paid_digital.payments)
+        assert duplicate_digital.payments[-1].payment_id == paid_digital.payments[-1].payment_id
 
         current_totals = shift_repository.get_shift(opened.shift.shift_id, cashier_user)
         assert current_totals is not None
         assert current_totals.totals.cash_payments == Decimal("100.00")
-        assert current_totals.totals.gcash_payments == Decimal("50.00")
+        assert current_totals.totals.gcash_payments == Decimal("40.00")
         assert current_totals.totals.expected_cash == Decimal("1100.00")
         assert current_totals.totals.payment_count == 2
         assert current_totals.totals.sessions_handled == 1
@@ -154,7 +165,10 @@ def main() -> None:
             VoidPaymentRequest(reason="Cash count correction"),
             owner_user,
         )
-        assert voided.payments[0].status == "voided"
+        voided_cash_payment = next(
+            payment for payment in voided.payments if payment.payment_id == cash_payment.payment_id
+        )
+        assert voided_cash_payment.status == "voided"
         after_void = shift_repository.get_shift(opened.shift.shift_id, cashier_user)
         assert after_void is not None
         assert after_void.totals.expected_cash == Decimal("1000.00")
@@ -226,14 +240,21 @@ def main() -> None:
 
         assert any(shift.shift_id == opened.shift.shift_id for shift in list_shifts(owner_user))
         owner_view = get_shift(opened.shift.shift_id, owner_user)
-        assert owner_view.shift.gcash_payments == Decimal("50.00")
+        assert owner_view.shift.gcash_payments == Decimal("40.00")
 
         with get_connection() as connection:
             payment_row = connection.execute(
-                "SELECT shift_id FROM payments WHERE payment_id = ?",
+                "SELECT shift_id, recorded_by_user_id FROM payments WHERE payment_id = ?",
                 (cash_payment.payment_id,),
             ).fetchone()
+            no_shift_row = connection.execute(
+                "SELECT shift_id, recorded_by_user_id FROM payments WHERE payment_id = ?",
+                (no_shift_payment.payment_id,),
+            ).fetchone()
         assert payment_row["shift_id"] == opened.shift.shift_id
+        assert payment_row["recorded_by_user_id"] == cashier.user_id
+        assert no_shift_row["shift_id"] is None
+        assert no_shift_row["recorded_by_user_id"] == cashier.user_id
 
         print("Shift smoke test passed.")
 
