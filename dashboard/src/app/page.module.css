@@ -478,6 +478,7 @@
   min-height: 0;
   overflow: auto;
   padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .activityHeader {
@@ -1261,10 +1262,18 @@
   display: inline-flex;
   font-size: 13px;
   font-weight: 900;
-  gap: 8px;
+  gap: 9px;
   justify-content: center;
+  line-height: 1;
   min-height: 40px;
   padding: 9px 10px;
+}
+
+.primaryButton svg,
+.secondaryButton svg,
+.dangerButton svg {
+  display: block;
+  flex-shrink: 0;
 }
 
 .primaryButton {
@@ -1441,6 +1450,7 @@
   max-width: 92vw;
   overflow: auto;
   padding: 22px;
+  scrollbar-gutter: stable;
   width: min(980px, 92vw);
 }
 
@@ -1603,8 +1613,8 @@
 
 .buttonIcon {
   flex: 0 0 auto;
-  height: 17px;
-  width: 17px;
+  height: 19px;
+  width: 19px;
 }
 
 .helperWarning {
@@ -2931,6 +2941,7 @@
   gap: 18px;
   overflow: auto;
   padding: 18px 20px 22px;
+  scrollbar-gutter: stable;
 }
 
 .memberOverviewGrid {

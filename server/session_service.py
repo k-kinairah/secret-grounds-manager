@@ -707,6 +707,11 @@ class SessionService:
             member = self.member_repository.get_member(session.member_id)  # type: ignore[attr-defined]
             update_values.update(
                 {
+                    "ended_reason": (
+                        "Member balance exhausted"
+                        if ended_reason == "timer_finished"
+                        else ended_reason
+                    ),
                     "actual_elapsed_seconds": actual_elapsed_seconds,
                     "billed_seconds": consumed_seconds,
                     "total_seconds": consumed_seconds,
@@ -1256,6 +1261,11 @@ class SessionService:
         else:
             raise HTTPException(status_code=400, detail="Member username is required")
         self.member_repository.verify_member_pin(member.member_id, member_pin)  # type: ignore[attr-defined]
+        if self.repository.get_active_member_session(member.member_id) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Member already has an active session",
+            )
         session_id = str(uuid4())
         reserved_seconds = duration_seconds or member.time_balance_seconds
         if reserved_seconds <= 0:
@@ -1287,7 +1297,7 @@ class SessionService:
             created_by_user_id=actor_user_id,
             member_id=member.member_id,
             member_code_snapshot=member.member_code,
-            member_name_snapshot=member.full_name,
+            member_name_snapshot=member.full_name or member.username or member.member_code,
             member_balance_before_seconds=member.time_balance_seconds,
             member_balance_after_seconds=member.time_balance_seconds,
         )
@@ -1308,6 +1318,7 @@ class SessionService:
                 "duration_seconds": reserved_seconds,
                 "max_usable_seconds": reserved_seconds,
                 "scheduled_end_at": session.scheduled_end_at.isoformat(),
+                "member_display_name": member.full_name or member.username or member.member_code,
             },
         )
         try:

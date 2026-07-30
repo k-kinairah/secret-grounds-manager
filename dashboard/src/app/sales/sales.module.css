@@ -280,6 +280,7 @@
 
 .tableWrap {
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .table {
@@ -292,7 +293,7 @@
 .table th,
 .table td {
   border-bottom: 1px solid rgba(148, 163, 184, 0.13);
-  padding: 11px 12px;
+  padding: 12px 18px;
   text-align: left;
   white-space: nowrap;
 }
@@ -300,35 +301,34 @@
 .table th {
   color: var(--muted);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
 
 .table td {
   color: #dbeafe;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .table tbody tr {
-  transition: background-color 160ms ease;
+  transition: background-color 160ms ease, box-shadow 160ms ease;
 }
 
 .table tbody tr:hover {
-  background: rgba(14, 165, 233, 0.07);
+  background: rgba(14, 165, 233, 0.075);
+  box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.08), 0 0 18px rgba(14, 165, 233, 0.08);
 }
 
 .collectionToolbar {
-  align-items: center;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 48%),
     rgba(8, 17, 31, 0.58);
   border: 1px solid rgba(56, 189, 248, 0.16);
   border-radius: 14px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  justify-content: space-between;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, auto);
   margin-bottom: 16px;
   padding: 12px;
 }
@@ -354,17 +354,44 @@
   justify-content: flex-end;
 }
 
+.collectionActionCell {
+  align-content: start;
+  display: grid;
+  gap: 6px;
+}
+
+.collectionActionSpacer {
+  color: transparent;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: normal;
+  pointer-events: none;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.collectionActionRow {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .collectionActionButton,
 .operatorDetailsButton {
   background: rgba(14, 165, 233, 0.11);
   border: 1px solid rgba(56, 189, 248, 0.24);
-  border-radius: 8px;
+  border-radius: 12px;
   color: #dbeafe;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   font-weight: 900;
-  min-height: 34px;
-  padding: 7px 11px;
-  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+  min-height: 44px;
+  padding: 0 14px;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, color 160ms ease;
 }
 
 .collectionActionButton:hover,
@@ -373,6 +400,7 @@
 .operatorDetailsButton:focus-visible {
   background: rgba(14, 165, 233, 0.18);
   border-color: rgba(103, 232, 249, 0.48);
+  box-shadow: 0 0 22px rgba(14, 165, 233, 0.16);
   color: #67e8f9;
   outline: none;
 }
@@ -403,10 +431,23 @@
 }
 
 .operatorCardGrid {
+  align-items: stretch;
   display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 18px;
+  grid-template-columns: 1fr;
   margin-bottom: 14px;
+}
+
+.operatorCardGridSingle {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.operatorCardGridDouble {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.operatorCardGridMultiple {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .operatorCollectionCard {
@@ -414,8 +455,10 @@
   border: 1px solid rgba(56, 189, 248, 0.2);
   border-radius: 8px;
   display: grid;
-  gap: 11px;
-  padding: 14px;
+  gap: 16px;
+  grid-template-rows: auto 1fr auto;
+  min-height: 392px;
+  padding: 18px;
 }
 
 .operatorCardHeader {
@@ -427,7 +470,7 @@
 
 .operatorCardHeader h3 {
   color: var(--text);
-  font-size: 18px;
+  font-size: 20px;
   margin: 3px 0 0;
 }
 
@@ -435,7 +478,7 @@
 .operatorNetValue span {
   color: var(--muted);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 800;
   text-transform: uppercase;
 }
 
@@ -453,8 +496,8 @@
 
 .operatorGroups {
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  grid-template-columns: 1fr;
 }
 
 .collectionGroup {
@@ -462,9 +505,9 @@
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 8px;
   display: grid;
-  gap: 7px;
+  gap: 10px;
   min-width: 0;
-  padding: 10px;
+  padding: 14px;
 }
 
 .cashAccountability {
@@ -482,7 +525,7 @@
 .moneyRow {
   align-items: baseline;
   display: flex;
-  gap: 8px;
+  gap: 12px;
   justify-content: space-between;
 }
 
@@ -527,11 +570,43 @@
 
 .operatorDetailsButton {
   justify-self: start;
+  min-height: 46px;
+  padding-inline: 18px;
 }
 
 .collectionTable {
   margin-top: 2px;
-  min-width: 1340px;
+  min-width: 1620px;
+  table-layout: fixed;
+}
+
+.collectionOperatorColumn {
+  width: 230px;
+}
+
+.collectionCountColumn {
+  width: 120px;
+}
+
+.collectionMoneyColumn {
+  width: 125px;
+}
+
+.collectionRefundsColumn {
+  width: 160px;
+}
+
+.collectionCashReceivedColumn,
+.collectionCashRefundsColumn {
+  width: 150px;
+}
+
+.collectionExpectedCashColumn {
+  width: 165px;
+}
+
+.collectionOutstandingColumn {
+  width: 140px;
 }
 
 .collectionTable th:first-child,
@@ -542,16 +617,50 @@
   z-index: 1;
 }
 
+.numericCell,
 .collectionTable td:not(:first-child),
 .collectionTable tfoot td {
-  text-align: right;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.collectionTable th,
+.collectionTable td {
+  padding-inline: 20px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.collectionTable th {
+  line-height: 1.25;
+  text-align: center;
+}
+
+.collectionTable tbody td:first-child,
+.collectionTable tfoot th:first-child {
+  text-align: left;
+}
+
+.salesGroupCell {
+  background: rgba(14, 165, 233, 0.035);
+}
+
+.cashGroupCell {
+  background: rgba(34, 197, 94, 0.035);
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.otherGroupCell {
+  background: rgba(168, 85, 247, 0.035);
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
 }
 
 .collectionTable tfoot th,
 .collectionTable tfoot td {
-  background: rgba(15, 23, 42, 0.94);
-  border-top: 1px solid rgba(56, 189, 248, 0.26);
+  background: rgba(5, 12, 24, 0.98);
+  border-top: 2px solid rgba(103, 232, 249, 0.42);
   color: var(--text);
+  font-size: 15px;
   font-weight: 950;
 }
 
@@ -564,6 +673,7 @@
   font-weight: 950;
   padding: 0;
   text-align: left;
+  width: 100%;
 }
 
 .operatorExpandButton:hover,
@@ -574,19 +684,194 @@
   text-underline-offset: 3px;
 }
 
-.operatorDetailPanel {
-  background: rgba(8, 17, 31, 0.62);
-  border: 1px solid rgba(56, 189, 248, 0.18);
-  border-radius: 8px;
-  display: grid;
-  gap: 10px;
-  padding: 12px;
+.operatorModalBackdrop {
+  align-items: flex-start;
+  background: rgba(2, 6, 23, 0.72);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: calc(var(--global-header-height) + 24px) 24px 24px;
+  position: fixed;
+  z-index: 95;
 }
 
-.operatorDetailPanel h3 {
+.operatorModal {
+  background: rgba(8, 17, 31, 0.98);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  max-height: calc(100vh - var(--global-header-height) - 48px);
+  max-width: calc(100vw - 48px);
+  overflow: hidden;
+  width: min(1120px, 100%);
+}
+
+.operatorModalHeader {
+  align-items: start;
+  background: rgba(8, 17, 31, 0.98);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.18);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  padding: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.operatorModalTitle {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.operatorModalTitle h2 {
   color: var(--text);
-  font-size: 14px;
+  font-size: 22px;
   margin: 0;
+}
+
+.operatorModalTitle p {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.operatorModalTotals {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  max-width: 560px;
+}
+
+.operatorModalSummaryItem {
+  background: rgba(15, 23, 42, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.operatorModalSummaryItem span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.operatorModalSummaryItem strong {
+  color: var(--text);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.operatorModalSummaryPrimary {
+  border-color: rgba(34, 211, 238, 0.3);
+}
+
+.operatorModalSummaryPrimary strong {
+  color: #67e8f9;
+}
+
+.operatorModalClose {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  color: #dbeafe;
+  cursor: pointer;
+  font-weight: 950;
+  min-height: 36px;
+  padding: 8px 12px;
+}
+
+.operatorModalClose:hover,
+.operatorModalClose:focus-visible {
+  border-color: rgba(103, 232, 249, 0.48);
+  color: #67e8f9;
+  outline: none;
+}
+
+.operatorModalFilters {
+  align-items: end;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(150px, 1fr)) minmax(240px, 1.4fr);
+  padding: 12px 16px;
+}
+
+.operatorModalSearch {
+  color: var(--muted);
+  display: grid;
+  font-size: 11px;
+  font-weight: 900;
+  gap: 6px;
+  text-transform: uppercase;
+}
+
+.operatorModalSearch input {
+  background: rgba(8, 17, 31, 0.92);
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.operatorModalSearch input:focus {
+  border-color: rgba(103, 232, 249, 0.55);
+  outline: none;
+}
+
+.operatorModalBody {
+  overflow: auto;
+  padding: 14px 16px;
+  scrollbar-gutter: stable;
+}
+
+.operatorPagination {
+  align-items: center;
+  background: rgba(8, 17, 31, 0.98);
+  border-top: 1px solid rgba(56, 189, 248, 0.18);
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+
+.operatorPagination span,
+.operatorPagination strong {
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.operatorPagination div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.operatorPagination button {
+  background: rgba(14, 165, 233, 0.11);
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 8px;
+  color: #dbeafe;
+  cursor: pointer;
+  font-weight: 900;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.operatorPagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .detailTransactionGrid {
@@ -685,7 +970,7 @@
   justify-content: center;
   padding: 20px;
   position: fixed;
-  z-index: 90;
+  z-index: 105;
 }
 
 .transactionModal {
@@ -699,6 +984,7 @@
   max-width: 900px;
   overflow: auto;
   padding: 18px;
+  scrollbar-gutter: stable;
   width: min(900px, 100%);
 }
 
@@ -750,6 +1036,21 @@
 
 .technicalDetails summary {
   cursor: pointer;
+  text-transform: uppercase;
+}
+
+.technicalDetailsCompact {
+  border-top: 1px solid rgba(148, 163, 184, 0.13);
+  display: grid;
+  gap: 7px;
+  padding-top: 8px;
+}
+
+.technicalDetailsCompact summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
   text-transform: uppercase;
 }
 
@@ -814,6 +1115,66 @@
   }
 }
 
+@media (min-width: 980px) {
+  .operatorCardGrid {
+    grid-template-columns: repeat(2, minmax(420px, 1fr));
+  }
+
+  .operatorCardGridSingle {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .operatorCardGridDouble {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operatorCardGridMultiple {
+    grid-template-columns: repeat(2, minmax(420px, 1fr));
+  }
+
+  .operatorGroups {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operatorCardGridSingle .operatorGroups {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .cashAccountability {
+    grid-column: span 2;
+  }
+
+  .operatorCardGridSingle .cashAccountability {
+    grid-column: auto;
+  }
+}
+
+@media (min-width: 1520px) {
+  .operatorCardGrid {
+    grid-template-columns: repeat(3, minmax(420px, 1fr));
+  }
+
+  .operatorCardGridSingle {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .operatorCardGridDouble {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operatorCardGridMultiple {
+    grid-template-columns: repeat(3, minmax(420px, 1fr));
+  }
+
+  .operatorGroups {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .cashAccountability {
+    grid-column: auto;
+  }
+}
+
 @media (max-width: 1180px) {
   .summaryGrid,
   .loadingGrid {
@@ -824,16 +1185,20 @@
     grid-template-columns: 1fr;
   }
 
-  .operatorGroups {
-    grid-template-columns: 1fr;
-  }
-
   .transactionModalGrid {
     grid-template-columns: 1fr;
   }
 
+  .operatorModalFilters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .collectionFilters {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .collectionToolbar {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -843,9 +1208,6 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .operatorCardGrid {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 760px) {
@@ -885,7 +1247,8 @@
   }
 
   .collectionToolbar,
-  .collectionToolbarActions,
+  .collectionActionCell,
+  .collectionActionRow,
   .collectionFilters {
     width: 100%;
   }
@@ -894,8 +1257,29 @@
     grid-template-columns: 1fr;
   }
 
-  .collectionToolbarActions {
+  .collectionActionRow {
     justify-content: stretch;
+  }
+
+  .operatorModalBackdrop {
+    align-items: stretch;
+    padding: calc(var(--global-header-height) + 10px) 10px 10px;
+  }
+
+  .operatorModal {
+    max-height: calc(100vh - var(--global-header-height) - 20px);
+    max-width: calc(100vw - 20px);
+  }
+
+  .operatorModalHeader,
+  .operatorPagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .operatorModalTotals,
+  .operatorModalFilters {
+    grid-template-columns: 1fr;
   }
 
   .collectionActionButton,

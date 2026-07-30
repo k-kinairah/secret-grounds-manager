@@ -43,7 +43,7 @@ function Icon({ name }: { name: IconName }) {
     stroke: "currentColor",
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
-    strokeWidth: 2
+    strokeWidth: 2.15
   };
   const paths: Record<IconName, ReactNode> = {
     card: (
@@ -67,19 +67,19 @@ function Icon({ name }: { name: IconName }) {
         <path {...common} d="M8 13h5" />
       </>
     ),
-    moon: <path {...common} d="M20 15.5A8 8 0 0 1 8.5 4 7 7 0 1 0 20 15.5z" />,
+    moon: <path {...common} d="M21 12.8A8.5 8.5 0 1 1 11.2 3 6.6 6.6 0 0 0 21 12.8z" />,
     play: <path {...common} d="M8 5v14l11-7-11-7z" />,
     power: (
       <>
-        <path {...common} d="M12 3v8" />
-        <path {...common} d="M17.5 6.5A8 8 0 1 1 6.5 6.5" />
+        <path {...common} d="M12 2.8v9" />
+        <path {...common} d="M18.4 6.6a9 9 0 1 1-12.8 0" />
       </>
     ),
     powerOff: (
       <>
-        <path {...common} d="M12 3v5" />
-        <path {...common} d="M18.4 6.6A8 8 0 0 1 7.2 18" />
-        <path {...common} d="M4 4l16 16" />
+        <path {...common} d="M12 2.8v6" />
+        <path {...common} d="M18.4 6.6a9 9 0 0 1-11 14" />
+        <path {...common} d="M3.8 3.8 20.2 20.2" />
       </>
     ),
     refresh: (
@@ -92,8 +92,8 @@ function Icon({ name }: { name: IconName }) {
     ),
     rotate: (
       <>
-        <path {...common} d="M20 6v5h-5" />
-        <path {...common} d="M18 9a7 7 0 1 0 1 6" />
+        <path {...common} d="M21 3v6h-6" />
+        <path {...common} d="M20 12a8 8 0 1 1-2.35-5.65L21 9" />
       </>
     ),
     save: (

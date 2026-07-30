@@ -247,6 +247,25 @@ class SessionRepository:
 
         return row_to_session(row)
 
+    def get_active_member_session(self, member_id: str) -> SessionRecord | None:
+        with get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM sessions
+                WHERE member_id = ?
+                  AND session_mode = 'member_balance'
+                  AND status IN ('active', 'grace_period', 'shutting_down', 'ending')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (member_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return row_to_session(row)
+
     def list_active_sessions(self) -> list[SessionRecord]:
         with get_connection() as connection:
             rows = connection.execute(

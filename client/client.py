@@ -41,6 +41,7 @@ class LocalSession:
     stop_event: Event
     timer_thread: Thread | None
     session_mode: str = "prepaid"
+    customer_name: str | None = None
     expiration_state: str = "active"
     grace_shutdown_monotonic: float | None = None
     final_warning_sent: bool = False
@@ -82,6 +83,7 @@ class SecretGroundsClient:
             enable_gui=enable_lock_screen,
             enable_dev_escape=enable_dev_escape,
             open_setup_wizard=open_setup_wizard,
+            member_login_action=self.member_login_from_lock_screen,
         )
         self.recovery_store = recovery_store or SessionRecoveryStore(
             SESSION_RECOVERY_PATH
@@ -90,6 +92,7 @@ class SecretGroundsClient:
             pc_name,
             position=CUSTOMER_OVERLAY_POSITION,
             enable_gui=enable_customer_overlay,
+            logout_action=self.customer_logout_current_session,
         )
         self.lock_screen.start()
 
@@ -110,6 +113,43 @@ class SecretGroundsClient:
             json=self.build_payload(),
             timeout=self.request_timeout,
         )
+
+    def member_login_from_lock_screen(self, username: str, pin: str) -> str | None:
+        try:
+            response = self.session.post(
+                f"{self.server_url}/client/member-login",
+                json={
+                    **self.build_payload(include_mac=True),
+                    "member_username": username,
+                    "member_pin": pin,
+                },
+                timeout=max(self.request_timeout, 10),
+            )
+            if response.status_code >= 400:
+                try:
+                    detail = response.json().get("detail")
+                except ValueError:
+                    detail = None
+                return detail if isinstance(detail, str) else "We could not log you in. Please ask the cashier."
+            payload = response.json()
+            session_payload = payload.get("session", {})
+            display_name = payload.get("member_display_name")
+            if isinstance(session_payload, dict) and isinstance(session_payload.get("session_id"), str):
+                with self.active_session_lock:
+                    if self.active_session is not None and isinstance(display_name, str):
+                        self.active_session.customer_name = display_name
+                        self.customer_overlay.show_session(
+                            session_type=self.human_session_mode(self.active_session.session_mode),
+                            customer_name=display_name,
+                            is_elapsed=False,
+                        )
+            return None
+        except requests.ConnectionError:
+            return "Connection lost. Please try again or ask the cashier."
+        except requests.Timeout:
+            return "Login is taking too long. Please try again."
+        except requests.RequestException:
+            return "We could not log you in. Please ask the cashier."
 
     def register_once(self) -> bool:
         try:
@@ -337,6 +377,7 @@ class SecretGroundsClient:
         duration_seconds: int | None,
         scheduled_end_at: str,
         session_mode: str = "prepaid",
+        customer_name: str | None = None,
     ) -> bool:
         old_stop_event: Event | None = None
         with self.active_session_lock:
@@ -374,6 +415,7 @@ class SecretGroundsClient:
                     )
                     self.customer_overlay.show_session(
                         session_type=self.human_session_mode(session_mode),
+                        customer_name=customer_name or self.active_session.customer_name,
                         is_elapsed=session_mode == "open_time",
                     )
                     print(f"Local session {session_id} is already active.")
@@ -422,6 +464,7 @@ class SecretGroundsClient:
                 stop_event=stop_event,
                 timer_thread=timer_thread,
                 session_mode=session_mode,
+                customer_name=customer_name,
             )
             self.recovery_store.save(
                 session_id=session_id,
@@ -446,6 +489,7 @@ class SecretGroundsClient:
             print(f"Session {session_id} unlocked.")
             self.customer_overlay.show_session(
                 session_type=self.human_session_mode(session_mode),
+                customer_name=customer_name,
                 is_elapsed=session_mode == "open_time",
             )
             timer_thread.start()
@@ -467,6 +511,7 @@ class SecretGroundsClient:
         session_mode = payload.get("session_mode", "prepaid")
         duration_seconds = payload.get("duration_seconds")
         scheduled_end_at = payload.get("scheduled_end_at")
+        member_display_name = payload.get("member_display_name")
         print(
             "start_session received: "
             f"server_session_id={session_id}, session_mode={session_mode}, "
@@ -509,6 +554,11 @@ class SecretGroundsClient:
             duration_seconds=duration_seconds,
             scheduled_end_at=scheduled_end_at,
             session_mode=session_mode if isinstance(session_mode, str) else "prepaid",
+            customer_name=(
+                member_display_name
+                if isinstance(member_display_name, str)
+                else None
+            ),
         )
         if not initialized:
             return self.build_acknowledgement(
@@ -834,6 +884,37 @@ class SecretGroundsClient:
                 self.active_session = None
         print(f"Session {session_id} finished after grace period.")
 
+    def customer_logout_current_session(self) -> str | None:
+        with self.active_session_lock:
+            if self.active_session is None:
+                return "No active session to log out."
+            session_id = self.active_session.session_id
+            scheduled_end_at = self.active_session.scheduled_end_at
+            session_mode = self.active_session.session_mode
+            if session_mode == "open_time":
+                return "Please ask the cashier to end this session."
+            self.active_session.stop_event.set()
+            self.active_session = None
+
+        self.recovery_store.mark_pending_completion(
+            session_id=session_id,
+            pc_name=self.pc_name,
+            scheduled_end_at=scheduled_end_at or datetime.now(timezone.utc).isoformat(),
+            session_mode=session_mode,
+        )
+        sent = self.send_client_event(
+            {
+                "event_type": "session_finished",
+                "session_id": session_id,
+                "message": "customer_logout",
+            }
+        )
+        self.customer_overlay.hide()
+        self.lock_screen.show_locked("Session locked after customer logout.")
+        if sent:
+            return None
+        return "Logout saved. Reconnecting to finish with the server."
+
     def maybe_send_final_warning(self, session_id: str, remaining_seconds: int) -> None:
         if remaining_seconds > 30:
             return
@@ -1048,6 +1129,7 @@ class SecretGroundsClient:
         scheduled_end_at = server_session.get("scheduled_end_at")
         shutdown_at = server_session.get("shutdown_at")
         server_time = server_state.get("server_time")
+        member_display_name = server_session.get("member_name_snapshot") or server_session.get("member_code_snapshot")
 
         if not isinstance(session_id, str):
             print("Reconciliation failed: server session is missing session_id.")
@@ -1085,6 +1167,7 @@ class SecretGroundsClient:
                 duration_seconds=None,
                 scheduled_end_at=str(scheduled_end_at or server_time or ""),
                 session_mode="open_time",
+                customer_name=member_display_name if isinstance(member_display_name, str) else None,
             )
 
         if not isinstance(scheduled_end_at, str):
@@ -1119,6 +1202,7 @@ class SecretGroundsClient:
             duration_seconds=remaining_seconds,
             scheduled_end_at=scheduled_end_at,
             session_mode=session_mode,
+            customer_name=member_display_name if isinstance(member_display_name, str) else None,
         )
 
     def initialize_grace_period_from_server(

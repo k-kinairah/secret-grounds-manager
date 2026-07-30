@@ -7,6 +7,7 @@ from typing import Callable
 
 
 GuiAction = Callable[[], None]
+MemberLoginAction = Callable[[str, str], str | None]
 
 
 @dataclass
@@ -21,6 +22,8 @@ class LockScreenState:
     instruction: str = "Please ask the cashier to start a session"
     countdown: str | None = None
     is_final_warning: bool = False
+    login_message: str | None = None
+    is_login_processing: bool = False
 
 
 @dataclass(frozen=True)
@@ -51,11 +54,13 @@ class LockScreenController:
         enable_gui: bool,
         enable_dev_escape: bool,
         open_setup_wizard: Callable[[], None] | None = None,
+        member_login_action: MemberLoginAction | None = None,
     ) -> None:
         self.pc_name = pc_name
         self.enable_gui = enable_gui
         self.enable_dev_escape = enable_dev_escape
         self.open_setup_wizard = open_setup_wizard
+        self.member_login_action = member_login_action
         self.state = LockScreenState()
         self.state_lock = Lock()
         self.stop_event = Event()
@@ -67,6 +72,12 @@ class LockScreenController:
         self.instruction_label = None
         self.countdown_label = None
         self.title_label = None
+        self.username_entry = None
+        self.pin_entry = None
+        self.login_button = None
+        self.pin_toggle_button = None
+        self.login_message_label = None
+        self.pin_visible = False
 
     def start(self) -> None:
         if self.enable_dev_escape:
@@ -97,6 +108,8 @@ class LockScreenController:
             self.state.instruction = "Please ask the cashier to start a session"
             self.state.countdown = None
             self.state.is_final_warning = False
+            self.state.login_message = None
+            self.state.is_login_processing = False
 
         if reason:
             print(reason)
@@ -169,6 +182,8 @@ class LockScreenController:
         with self.state_lock:
             self.state.is_locked = False
             self.state.dev_escape_active = False
+            self.state.login_message = None
+            self.state.is_login_processing = False
 
         print("Lock screen hidden.")
 
@@ -332,6 +347,106 @@ class LockScreenController:
         cashier.pack(pady=8)
         self.instruction_label = cashier
 
+        if self.member_login_action is not None:
+            login_frame = tk.Frame(
+                container,
+                background="#0B1220",
+                highlightthickness=1,
+                highlightbackground="#1F2937",
+                padx=18,
+                pady=16,
+            )
+            login_frame.pack(pady=(22, 4))
+
+            login_title = tk.Label(
+                login_frame,
+                text="Member Login",
+                font=("Segoe UI", 15, "bold"),
+                foreground="#F9FAFB",
+                background="#0B1220",
+            )
+            login_title.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+            username_label = tk.Label(
+                login_frame,
+                text="Username",
+                font=("Segoe UI", 10, "bold"),
+                foreground="#CBD5E1",
+                background="#0B1220",
+            )
+            username_label.grid(row=1, column=0, sticky="w")
+            self.username_entry = tk.Entry(
+                login_frame,
+                width=24,
+                font=("Segoe UI", 13),
+                foreground="#F8FAFC",
+                background="#111827",
+                insertbackground="#F8FAFC",
+                relief="flat",
+            )
+            self.username_entry.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(4, 10))
+
+            pin_label = tk.Label(
+                login_frame,
+                text="PIN",
+                font=("Segoe UI", 10, "bold"),
+                foreground="#CBD5E1",
+                background="#0B1220",
+            )
+            pin_label.grid(row=3, column=0, sticky="w")
+            self.pin_entry = tk.Entry(
+                login_frame,
+                width=14,
+                font=("Segoe UI", 13),
+                foreground="#F8FAFC",
+                background="#111827",
+                insertbackground="#F8FAFC",
+                relief="flat",
+                show="*",
+            )
+            self.pin_entry.grid(row=4, column=0, sticky="ew", pady=(4, 10))
+            self.pin_toggle_button = tk.Button(
+                login_frame,
+                text="Show PIN",
+                command=self._toggle_pin_visibility,
+                font=("Segoe UI", 9, "bold"),
+                foreground="#E0FAFF",
+                background="#164E63",
+                activeforeground="#FFFFFF",
+                activebackground="#155E75",
+                relief="flat",
+                padx=10,
+            )
+            self.pin_toggle_button.grid(row=4, column=1, sticky="ew", padx=(8, 0), pady=(4, 10))
+            self.login_button = tk.Button(
+                login_frame,
+                text="Log in",
+                command=self._submit_member_login,
+                font=("Segoe UI", 10, "bold"),
+                foreground="#020617",
+                background="#22D3EE",
+                activeforeground="#020617",
+                activebackground="#67E8F9",
+                relief="flat",
+                padx=14,
+            )
+            self.login_button.grid(row=4, column=2, sticky="ew", padx=(8, 0), pady=(4, 10))
+            self.login_message_label = tk.Label(
+                login_frame,
+                text="",
+                font=("Segoe UI", 10),
+                foreground="#FBBF24",
+                background="#0B1220",
+                wraplength=360,
+                justify="left",
+            )
+            self.login_message_label.grid(row=5, column=0, columnspan=3, sticky="w")
+            login_frame.columnconfigure(0, weight=1)
+            if self.username_entry is not None:
+                self.username_entry.bind("<Return>", lambda _: self._submit_member_login())
+            if self.pin_entry is not None:
+                self.pin_entry.bind("<Return>", lambda _: self._submit_member_login())
+
         self.countdown_label = tk.Label(
             container,
             text="",
@@ -435,4 +550,72 @@ class LockScreenController:
                 text=model.countdown or "",
                 foreground=model.accent,
             )
+        self._update_login_state()
         self._update_connection_label()
+
+    def _submit_member_login(self) -> None:
+        if self.member_login_action is None:
+            return
+        with self.state_lock:
+            if self.state.is_login_processing:
+                return
+            self.state.login_message = None
+
+        username = self.username_entry.get().strip() if self.username_entry is not None else ""
+        pin = self.pin_entry.get().strip() if self.pin_entry is not None else ""
+        if not username:
+            self._set_login_message("Enter your username.")
+            return
+        if not pin:
+            self._set_login_message("Enter your PIN.")
+            return
+
+        with self.state_lock:
+            self.state.is_login_processing = True
+            self.state.login_message = "Checking your account..."
+        self._update_login_state()
+
+        def run_login() -> None:
+            message = self.member_login_action(username, pin)
+            self._schedule(lambda: self._finish_member_login(message))
+
+        Thread(target=run_login, daemon=True).start()
+
+    def _finish_member_login(self, message: str | None) -> None:
+        with self.state_lock:
+            self.state.is_login_processing = False
+            self.state.login_message = message
+        self._update_login_state()
+
+    def _set_login_message(self, message: str) -> None:
+        with self.state_lock:
+            self.state.login_message = message
+            self.state.is_login_processing = False
+        self._update_login_state()
+
+    def _toggle_pin_visibility(self) -> None:
+        self.pin_visible = not self.pin_visible
+        if self.pin_entry is not None:
+            self.pin_entry.configure(show="" if self.pin_visible else "*")
+        if self.pin_toggle_button is not None:
+            self.pin_toggle_button.configure(text="Hide PIN" if self.pin_visible else "Show PIN")
+
+    def _update_login_state(self) -> None:
+        with self.state_lock:
+            is_processing = self.state.is_login_processing
+            message = self.state.login_message
+            is_locked = self.state.is_locked
+        state = "disabled" if is_processing or not is_locked else "normal"
+        if self.login_button is not None:
+            self.login_button.configure(
+                state=state,
+                text="Logging in..." if is_processing else "Log in",
+            )
+        if self.username_entry is not None:
+            self.username_entry.configure(state=state)
+        if self.pin_entry is not None:
+            self.pin_entry.configure(state=state)
+        if self.pin_toggle_button is not None:
+            self.pin_toggle_button.configure(state="disabled" if is_processing else "normal")
+        if self.login_message_label is not None:
+            self.login_message_label.configure(text=message or "")

@@ -725,6 +725,37 @@ class MemberSessionStartRequest(BaseModel):
         return self
 
 
+class ClientMemberLoginRequest(BaseModel):
+    pc_name: str = Field(..., min_length=1)
+    ip_address: str = Field(..., min_length=1)
+    mac_address: str | None = None
+    member_username: str
+    member_pin: str
+
+    @field_validator("member_username")
+    @classmethod
+    def validate_member_username(cls, value: str) -> str:
+        username = validate_member_username_value(value)
+        if username is None:
+            raise ValueError("Member username is required")
+        return username
+
+    @field_validator("member_pin")
+    @classmethod
+    def validate_member_pin(cls, value: str) -> str:
+        pin = validate_member_pin_value(value)
+        if pin is None:
+            raise ValueError("Member PIN is required")
+        return pin
+
+
+class ClientMemberLoginResponse(BaseModel):
+    session: SessionRecord
+    member_display_name: str
+    remaining_seconds: int
+    rounding_rule: str = "Balances are tracked and deducted in whole seconds."
+
+
 class MemberAddTimeRequest(BaseModel):
     member_id: str = Field(..., min_length=1)
     seconds: int = Field(..., gt=0)
@@ -779,6 +810,8 @@ class SessionStateSummary(BaseModel):
     shutdown_at: datetime | None = None
     total_seconds: int
     session_mode: SessionMode = "prepaid"
+    member_code_snapshot: str | None = None
+    member_name_snapshot: str | None = None
 
 
 class PCSessionStateResponse(BaseModel):

@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from threading import Lock, Thread
+from typing import Callable
 
 
 DEFAULT_REMINDER_THRESHOLDS_SECONDS = [15 * 60, 5 * 60, 60, 0]
@@ -52,11 +53,13 @@ class CustomerOverlayController:
         thresholds_seconds: list[int] | None = None,
         position: str = "top-right",
         enable_gui: bool = True,
+        logout_action: Callable[[], str | None] | None = None,
     ) -> None:
         self.state = CustomerOverlayState(pc_name=pc_name)
         self.thresholds_seconds = thresholds_seconds or DEFAULT_REMINDER_THRESHOLDS_SECONDS
         self.position = position
         self.enable_gui = enable_gui
+        self.logout_action = logout_action
         self.lock = Lock()
         self.gui_started = False
         self.gui_ready = False
@@ -67,6 +70,7 @@ class CustomerOverlayController:
         self.meta_label = None
         self.connection_label = None
         self.notice_label = None
+        self.logout_button = None
 
     def show_session(
         self,
@@ -322,6 +326,19 @@ class CustomerOverlayController:
                 padx=8,
                 pady=5,
             )
+            self.logout_button = tk.Button(
+                container,
+                text="Log out",
+                command=self.handle_logout_clicked,
+                font=("Segoe UI", 9, "bold"),
+                foreground="#020617",
+                background="#FBBF24",
+                activeforeground="#020617",
+                activebackground="#FDE68A",
+                relief="flat",
+                padx=10,
+                pady=5,
+            )
             self.root = root
             self.gui_ready = True
             self.refresh_gui()
@@ -381,11 +398,29 @@ class CustomerOverlayController:
                 self.notice_label.pack(fill="x", pady=(8, 0))
             else:
                 self.notice_label.pack_forget()
-        self.root.geometry(
-            self.geometry_for_position(self.root, 360, 218 if model.notice else 182)
-        )
+        if self.logout_button is not None:
+            if model.session_type != "Open Time":
+                self.logout_button.pack(fill="x", pady=(8, 0))
+            else:
+                self.logout_button.pack_forget()
+        panel_height = 182
+        if model.notice:
+            panel_height += 36
+        if model.session_type != "Open Time":
+            panel_height += 42
+        self.root.geometry(self.geometry_for_position(self.root, 360, panel_height))
         self.root.deiconify()
         self.root.attributes("-topmost", True)
+
+    def handle_logout_clicked(self) -> None:
+        if self.logout_action is None:
+            return
+        message = self.logout_action()
+        if message:
+            with self.lock:
+                self.state.notice = message
+                self.state.notice_ticks_remaining = TIME_ADDED_CONFIRMATION_TICKS
+            self.schedule_gui_refresh()
 
     def format_timer(self, total_seconds: int | None) -> str:
         if total_seconds is None:

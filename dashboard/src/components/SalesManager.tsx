@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchSalesReport, getSalesExportUrl, type SalesReportFilters } from "@/lib/api";
 import { formatDateTime, formatMoney, formatNaturalDuration } from "@/lib/time";
@@ -42,6 +42,15 @@ const STATUS_FILTER_OPTIONS: SecretSelectOption[] = [
   { label: "All statuses", value: "all" },
   { label: "Completed", value: "completed" },
   { label: "Voided / Refunded", value: "voided" }
+];
+
+const OPERATOR_TRANSACTION_PAGE_SIZE = 25;
+
+const SORT_FILTER_OPTIONS: SecretSelectOption[] = [
+  { label: "Newest first", value: "newest" },
+  { label: "Oldest first", value: "oldest" },
+  { label: "Highest amount", value: "highest" },
+  { label: "Lowest amount", value: "lowest" }
 ];
 
 function todayInputValue(): string {
@@ -130,6 +139,13 @@ function compactReference(reference: string | null): string | null {
   return `...${reference.slice(-6)}`;
 }
 
+function salesPeriodLabel(period: SalesPeriod, startDate: string, endDate: string): string {
+  if (period === "custom") {
+    return startDate === endDate ? startDate : `${startDate} to ${endDate}`;
+  }
+  return PERIODS.find((option) => option.value === period)?.label ?? "Selected period";
+}
+
 export function SalesManager() {
   const [period, setPeriod] = useState<SalesPeriod>("today");
   const [startDate, setStartDate] = useState(todayInputValue);
@@ -141,7 +157,7 @@ export function SalesManager() {
   const [methodFilter, setMethodFilter] = useState<PaymentMethod | "all">("all");
   const [typeFilter, setTypeFilter] = useState<SalesType | "all">("all");
   const [statusFilter, setStatusFilter] = useState<PaymentStatus | "all">("all");
-  const [expandedOperatorKey, setExpandedOperatorKey] = useState<string | null>(null);
+  const [selectedOperatorKey, setSelectedOperatorKey] = useState<string | null>(null);
   const [showDetailedTable, setShowDetailedTable] = useState(false);
 
   const filters: SalesReportFilters = useMemo(
@@ -287,14 +303,15 @@ export function SalesManager() {
           </section>
 
           <OperatorCollections
-            expandedOperatorKey={expandedOperatorKey}
             methodFilter={methodFilter}
             operatorCollections={operatorCollections}
             operatorFilter={operatorFilter}
             operatorOptions={operatorOptions}
-            setExpandedOperatorKey={setExpandedOperatorKey}
+            periodLabel={salesPeriodLabel(period, startDate, endDate)}
+            selectedOperatorKey={selectedOperatorKey}
             setMethodFilter={setMethodFilter}
             setOperatorFilter={setOperatorFilter}
+            setSelectedOperatorKey={setSelectedOperatorKey}
             setShowDetailedTable={setShowDetailedTable}
             setStatusFilter={setStatusFilter}
             setTypeFilter={setTypeFilter}
@@ -458,14 +475,15 @@ export function SalesManager() {
 }
 
 function OperatorCollections({
-  expandedOperatorKey,
   methodFilter,
   operatorCollections,
   operatorFilter,
   operatorOptions,
-  setExpandedOperatorKey,
+  periodLabel,
+  selectedOperatorKey,
   setMethodFilter,
   setOperatorFilter,
+  setSelectedOperatorKey,
   setShowDetailedTable,
   setStatusFilter,
   setTypeFilter,
@@ -473,14 +491,15 @@ function OperatorCollections({
   statusFilter,
   typeFilter
 }: {
-  expandedOperatorKey: string | null;
   methodFilter: PaymentMethod | "all";
   operatorCollections: OperatorCollectionView[];
   operatorFilter: string;
   operatorOptions: SalesOperatorCollection[];
-  setExpandedOperatorKey: (key: string | null) => void;
+  periodLabel: string;
+  selectedOperatorKey: string | null;
   setMethodFilter: (value: PaymentMethod | "all") => void;
   setOperatorFilter: (value: string) => void;
+  setSelectedOperatorKey: (key: string | null) => void;
   setShowDetailedTable: (value: boolean) => void;
   setStatusFilter: (value: PaymentStatus | "all") => void;
   setTypeFilter: (value: SalesType | "all") => void;
@@ -489,7 +508,18 @@ function OperatorCollections({
   typeFilter: SalesType | "all";
 }) {
   const [selectedTransaction, setSelectedTransaction] = useState<SalesOperatorTransaction | null>(null);
+  const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const hasActiveFilters = operatorFilter !== "all" || methodFilter !== "all" || typeFilter !== "all" || statusFilter !== "all";
+  const selectedOperator =
+    operatorCollections.find((operator) => (operator.operator_id ?? operator.operator_name) === selectedOperatorKey) ?? null;
+  const operatorGridClassName = [
+    styles.operatorCardGrid,
+    operatorCollections.length === 1
+      ? styles.operatorCardGridSingle
+      : operatorCollections.length === 2
+        ? styles.operatorCardGridDouble
+        : styles.operatorCardGridMultiple
+  ].join(" ");
   const totals = operatorCollections.reduce(
     (sum, operator) => ({
       transaction_count: sum.transaction_count + operator.transaction_count,
@@ -522,6 +552,15 @@ function OperatorCollections({
     setTypeFilter("all");
     setStatusFilter("all");
   };
+  const closeOperatorModal = () => {
+    const closingKey = selectedOperatorKey;
+    setSelectedOperatorKey(null);
+    window.setTimeout(() => {
+      if (closingKey) {
+        triggerRefs.current[closingKey]?.focus();
+      }
+    }, 0);
+  };
   const operatorFilterOptions = useMemo(
     () => [
       { label: "All operators", value: "all" },
@@ -541,8 +580,8 @@ function OperatorCollections({
           <p>Expected drawer cash = cash received - change given - cash refunds paid out.</p>
         </div>
       </div>
-      <div className={styles.collectionToolbar}>
-        <div className={styles.collectionFilters} aria-label="Operator collection filters">
+      <div className={styles.collectionToolbar} aria-label="Operator collection filters">
+        <div className={styles.collectionFilters}>
           <SecretSelect
             active={operatorFilter !== "all"}
             label="Operator"
@@ -582,24 +621,26 @@ function OperatorCollections({
             value={statusFilter}
           />
         </div>
-        <div className={styles.collectionToolbarActions}>
-          {hasActiveFilters ? (
-            <button className={styles.collectionActionButton} onClick={clearFilters} type="button">
-              Clear filters
+        <div className={styles.collectionActionCell}>
+          <span aria-hidden="true" className={styles.collectionActionSpacer}>Action</span>
+          <div className={styles.collectionActionRow}>
+            {hasActiveFilters ? (
+              <button className={styles.collectionActionButton} onClick={clearFilters} type="button">
+                Clear filters
+              </button>
+            ) : null}
+            <button className={styles.collectionActionButton} onClick={() => setShowDetailedTable(!showDetailedTable)} type="button">
+              {showDetailedTable ? "Hide detailed table" : "Show detailed table"}
             </button>
-          ) : null}
-          <button className={styles.collectionActionButton} onClick={() => setShowDetailedTable(!showDetailedTable)} type="button">
-            {showDetailedTable ? "Hide detailed table" : "Show detailed table"}
-          </button>
+          </div>
         </div>
       </div>
       {operatorCollections.length === 0 ? (
         <div className={styles.miniEmpty}>No operator collections match the current filters.</div>
       ) : (
-        <div className={styles.operatorCardGrid}>
+        <div className={operatorGridClassName}>
           {operatorCollections.map((operator) => {
             const operatorKey = operator.operator_id ?? operator.operator_name;
-            const isExpanded = expandedOperatorKey === operatorKey;
             return (
               <article className={styles.operatorCollectionCard} key={operatorKey}>
                 <div className={styles.operatorCardHeader}>
@@ -629,10 +670,17 @@ function OperatorCollections({
                     <MoneyRow label="Outstanding" value={formatMoney(operator.outstanding)} tone={Number(operator.outstanding) > 0 ? "warning" : "muted"} />
                   </CollectionGroup>
                 </div>
-                <button className={styles.operatorDetailsButton} onClick={() => setExpandedOperatorKey(isExpanded ? null : operatorKey)} type="button">
-                  {isExpanded ? "Hide Transactions" : "View Transactions"}
+                <button
+                  className={styles.operatorDetailsButton}
+                  onClick={() => setSelectedOperatorKey(operatorKey)}
+                  ref={(element) => {
+                    triggerRefs.current[operatorKey] = element;
+                  }}
+                  type="button"
+                >
+                  <SelectGlyph name="list-filter" />
+                  View Transactions
                 </button>
-                {isExpanded ? <OperatorTransactionDetails onViewDetails={setSelectedTransaction} operator={operator} /> : null}
               </article>
             );
           })}
@@ -640,11 +688,17 @@ function OperatorCollections({
       )}
       {showDetailedTable ? (
         <OperatorCollectionsTable
-          expandedOperatorKey={expandedOperatorKey}
-          onViewDetails={setSelectedTransaction}
+          onViewOperator={setSelectedOperatorKey}
           operatorCollections={operatorCollections}
-          setExpandedOperatorKey={setExpandedOperatorKey}
           totals={totals}
+        />
+      ) : null}
+      {selectedOperator ? (
+        <OperatorTransactionsModal
+          onClose={closeOperatorModal}
+          onViewDetails={setSelectedTransaction}
+          operator={selectedOperator}
+          periodLabel={periodLabel}
         />
       ) : null}
       {selectedTransaction ? (
@@ -707,62 +761,284 @@ function MoneyRow({
   );
 }
 
-function OperatorTransactionDetails({
+function OperatorTransactionsModal({
+  onClose,
   onViewDetails,
-  operator
+  operator,
+  periodLabel
 }: {
+  onClose: () => void;
   onViewDetails: (transaction: SalesOperatorTransaction) => void;
   operator: OperatorCollectionView;
+  periodLabel: string;
+}) {
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [modalTypeFilter, setModalTypeFilter] = useState<SalesType | "all">("all");
+  const [modalMethodFilter, setModalMethodFilter] = useState<PaymentMethod | "all">("all");
+  const [modalStatusFilter, setModalStatusFilter] = useState<PaymentStatus | "all">("all");
+  const [sortOrder, setSortOrder] = useState("newest");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const filteredTransactions = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return operator.transactions
+      .filter((transaction) => {
+        if (modalTypeFilter !== "all" && transaction.sales_type !== modalTypeFilter) {
+          return false;
+        }
+        if (modalMethodFilter !== "all" && transaction.payment_method !== modalMethodFilter) {
+          return false;
+        }
+        if (modalStatusFilter !== "all" && transaction.status !== modalStatusFilter) {
+          return false;
+        }
+        if (!query) {
+          return true;
+        }
+        return [
+          transaction.customer,
+          transaction.pc_name,
+          transaction.payment_id,
+          transaction.reference_number,
+          transaction.related_reference,
+          transaction.recorded_by_operator,
+          SALES_TYPE_LABELS[transaction.sales_type],
+          transactionSourceLabel(transaction)
+        ]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(query));
+      })
+      .sort((left, right) => {
+        if (sortOrder === "oldest") {
+          return Date.parse(left.timestamp) - Date.parse(right.timestamp);
+        }
+        if (sortOrder === "highest") {
+          return moneyNumber(right.amount_due) - moneyNumber(left.amount_due);
+        }
+        if (sortOrder === "lowest") {
+          return moneyNumber(left.amount_due) - moneyNumber(right.amount_due);
+        }
+        return Date.parse(right.timestamp) - Date.parse(left.timestamp);
+      });
+  }, [modalMethodFilter, modalStatusFilter, modalTypeFilter, operator.transactions, searchQuery, sortOrder]);
+  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / OPERATOR_TRANSACTION_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * OPERATOR_TRANSACTION_PAGE_SIZE;
+  const visibleTransactions = filteredTransactions.slice(pageStart, pageStart + OPERATOR_TRANSACTION_PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [modalMethodFilter, modalStatusFilter, modalTypeFilter, operator, searchQuery, sortOrder]);
+
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || modalRef.current === null) {
+        return;
+      }
+      const focusable = Array.from(
+        modalRef.current.querySelectorAll<HTMLElement>(
+          "button, input, summary, [href], [tabindex]:not([tabindex='-1'])"
+        )
+      ).filter((element) => !element.hasAttribute("disabled"));
+      if (focusable.length === 0) {
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className={styles.operatorModalBackdrop} role="presentation">
+      <div aria-modal="true" className={styles.operatorModal} ref={modalRef} role="dialog">
+        <header className={styles.operatorModalHeader}>
+          <div className={styles.operatorModalTitle}>
+            <h2>{operator.operator_name} Transactions</h2>
+            <p>{operator.transaction_count} transactions · {periodLabel}</p>
+            <div className={styles.operatorModalTotals}>
+              <ModalSummaryItem label="Net sales" tone="primary" value={formatMoney(operator.net_sales)} />
+              <ModalSummaryItem label="Expected drawer cash" value={formatMoney(operator.expected_cash)} />
+            </div>
+          </div>
+          <button aria-label={`Close ${operator.operator_name} transactions`} className={styles.operatorModalClose} onClick={onClose} ref={closeButtonRef} type="button">
+            Close
+          </button>
+        </header>
+        <div className={styles.operatorModalFilters}>
+          <SecretSelect
+            active={modalTypeFilter !== "all"}
+            label="Transaction type"
+            leadingIcon={<SelectGlyph name="list-filter" />}
+            onChange={(nextValue) => setModalTypeFilter(nextValue as SalesType | "all")}
+            options={TYPE_FILTER_OPTIONS}
+            placeholder="All types"
+            value={modalTypeFilter}
+          />
+          <SecretSelect
+            active={modalMethodFilter !== "all"}
+            label="Payment method"
+            leadingIcon={<SelectGlyph name="credit-card" />}
+            onChange={(nextValue) => setModalMethodFilter(nextValue as PaymentMethod | "all")}
+            options={METHOD_FILTER_OPTIONS}
+            placeholder="All methods"
+            value={modalMethodFilter}
+          />
+          <SecretSelect
+            active={modalStatusFilter !== "all"}
+            label="Status"
+            leadingIcon={<SelectGlyph name="badge" />}
+            onChange={(nextValue) => setModalStatusFilter(nextValue as PaymentStatus | "all")}
+            options={STATUS_FILTER_OPTIONS}
+            placeholder="All statuses"
+            value={modalStatusFilter}
+          />
+          <SecretSelect
+            active={sortOrder !== "newest"}
+            label="Sort"
+            leadingIcon={<SelectGlyph name="list-filter" />}
+            onChange={setSortOrder}
+            options={SORT_FILTER_OPTIONS}
+            placeholder="Newest first"
+            value={sortOrder}
+          />
+          <label className={styles.operatorModalSearch}>
+            Search
+            <input
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Member, PC, transaction ID, reference"
+              type="search"
+              value={searchQuery}
+            />
+          </label>
+        </div>
+        <div className={styles.operatorModalBody}>
+          {visibleTransactions.length === 0 ? (
+            <div className={styles.miniEmpty}>No transactions match the selected filters.</div>
+          ) : (
+            <div className={styles.detailTransactionGrid}>
+              {visibleTransactions.map((transaction) => (
+                <TransactionReceipt
+                  key={transaction.payment_id}
+                  onViewDetails={onViewDetails}
+                  transaction={transaction}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+        <footer className={styles.operatorPagination}>
+          <span>
+            {filteredTransactions.length === 0
+              ? "0 results"
+              : `${pageStart + 1}-${Math.min(pageStart + OPERATOR_TRANSACTION_PAGE_SIZE, filteredTransactions.length)} of ${filteredTransactions.length}`}
+          </span>
+          <div>
+            <button aria-label="Previous operator transaction page" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)} type="button">
+              Previous
+            </button>
+            <strong>Page {currentPage} of {totalPages}</strong>
+            <button aria-label="Next operator transaction page" disabled={currentPage >= totalPages} onClick={() => setPage(currentPage + 1)} type="button">
+              Next
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function ModalSummaryItem({
+  label,
+  tone = "default",
+  value
+}: {
+  label: string;
+  tone?: "default" | "primary";
+  value: string;
 }) {
   return (
-    <div className={styles.operatorDetailPanel}>
-      <h3>{operator.operator_name} transactions</h3>
-      {operator.transactions.length === 0 ? (
-        <div className={styles.miniEmpty}>No transactions match these filters.</div>
-      ) : (
-        <div className={styles.detailTransactionGrid}>
-          {operator.transactions.map((transaction) => (
-            <article className={styles.transactionReceipt} key={transaction.payment_id}>
-              <div className={styles.transactionReceiptHeader}>
-                <div>
-                  <strong>{transaction.sales_type === "member_purchase" ? "Member Balance Purchase" : SALES_TYPE_LABELS[transaction.sales_type]}</strong>
-                  <span>{formatDateTime(transaction.timestamp)}</span>
-                </div>
-                <span className={`${styles.statusBadge} ${transaction.status === "completed" ? styles.statusCompleted : styles.statusVoided}`}>
-                  {statusLabel(transaction)}
-                </span>
-              </div>
-              <div className={styles.transactionReceiptBody}>
-                <ReceiptField label="Member" value={transaction.customer ?? "Walk-in"} />
-                <ReceiptField label="Operator" value={transaction.recorded_by_operator} />
-                <ReceiptField label="Amount due" value={formatMoney(transaction.amount_due)} />
-                <ReceiptField label="Payment method" value={displayMethod(transaction.payment_method)} />
-                {transaction.payment_method === "cash" ? (
-                  <>
-                    <ReceiptField label="Cash received" value={formatMoney(transaction.cash_received)} />
-                    <ReceiptField label="Change" value={formatMoney(transaction.change_given)} />
-                  </>
-                ) : (
-                  <ReceiptField label="Payment reference" value={compactReference(transaction.reference_number) ?? "Not provided"} />
-                )}
-                <ReceiptField label={transaction.sales_type === "member_purchase" ? "Usage status" : "PC / Session"} value={transactionSourceLabel(transaction)} />
-                {transaction.status === "voided" ? (
-                  <>
-                    <ReceiptField label="Correction amount" value={formatMoney(transaction.amount_due)} />
-                    <ReceiptField label="Corrected by" value={transaction.voided_by_operator ?? "Unknown"} />
-                  </>
-                ) : null}
-              </div>
-              <div className={styles.transactionReceiptFooter}>
-                <button className={styles.operatorDetailsButton} onClick={() => onViewDetails(transaction)} type="button">
-                  View details
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
+    <div className={`${styles.operatorModalSummaryItem} ${tone === "primary" ? styles.operatorModalSummaryPrimary : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
+  );
+}
+
+function TransactionReceipt({
+  onViewDetails,
+  transaction
+}: {
+  onViewDetails: (transaction: SalesOperatorTransaction) => void;
+  transaction: SalesOperatorTransaction;
+}) {
+  return (
+    <article aria-label={`${SALES_TYPE_LABELS[transaction.sales_type]} ${statusLabel(transaction)} ${formatMoney(transaction.amount_due)}`} className={styles.transactionReceipt}>
+      <div className={styles.transactionReceiptHeader}>
+        <div>
+          <strong>{transaction.sales_type === "member_purchase" ? "Member Balance Purchase" : SALES_TYPE_LABELS[transaction.sales_type]}</strong>
+          <span>{formatDateTime(transaction.timestamp)}</span>
+        </div>
+        <span className={`${styles.statusBadge} ${transaction.status === "completed" ? styles.statusCompleted : styles.statusVoided}`}>
+          {statusLabel(transaction)}
+        </span>
+      </div>
+      <div className={styles.transactionReceiptBody}>
+        <ReceiptField label="Member / customer" value={transaction.customer ?? "Walk-in"} />
+        <ReceiptField label="Operator" value={transaction.recorded_by_operator} />
+        <ReceiptField label="Amount due" value={formatMoney(transaction.amount_due)} />
+        <ReceiptField label="Payment method" value={displayMethod(transaction.payment_method)} />
+        {transaction.payment_method === "cash" ? (
+          <>
+            <ReceiptField label="Cash received" value={formatMoney(transaction.cash_received)} />
+            <ReceiptField label="Change" value={formatMoney(transaction.change_given)} />
+          </>
+        ) : (
+          <ReceiptField label="Payment reference" value={compactReference(transaction.reference_number) ?? "Not provided"} />
+        )}
+        <ReceiptField label={transaction.sales_type === "member_purchase" ? "Usage status" : "PC / Session"} value={transactionSourceLabel(transaction)} />
+        {transaction.status === "voided" ? (
+          <>
+            <ReceiptField label="Correction amount" value={formatMoney(transaction.amount_due)} />
+            <ReceiptField label="Corrected by" value={transaction.voided_by_operator ?? "Unknown"} />
+          </>
+        ) : null}
+      </div>
+      <details className={styles.technicalDetailsCompact}>
+        <summary>Technical details</summary>
+        <ReceiptField label="Transaction UUID" value={transaction.payment_id} />
+        <ReceiptField label="Reference" value={transaction.reference_number ?? "None"} />
+        <ReceiptField label="Linked reversal ID" value={transaction.related_reference ?? "None"} />
+      </details>
+      <div className={styles.transactionReceiptFooter}>
+        <button className={styles.operatorDetailsButton} onClick={() => onViewDetails(transaction)} type="button">
+          View details
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -854,16 +1130,12 @@ function TransactionDetailsModal({
 }
 
 function OperatorCollectionsTable({
-  expandedOperatorKey,
-  onViewDetails,
+  onViewOperator,
   operatorCollections,
-  setExpandedOperatorKey,
   totals
 }: {
-  expandedOperatorKey: string | null;
-  onViewDetails: (transaction: SalesOperatorTransaction) => void;
+  onViewOperator: (key: string) => void;
   operatorCollections: OperatorCollectionView[];
-  setExpandedOperatorKey: (key: string | null) => void;
   totals: {
     transaction_count: number;
     gross_sales: number;
@@ -880,19 +1152,32 @@ function OperatorCollectionsTable({
   return (
     <div className={styles.tableWrap}>
       <table className={`${styles.table} ${styles.collectionTable}`}>
+        <colgroup>
+          <col className={styles.collectionOperatorColumn} />
+          <col className={styles.collectionCountColumn} />
+          <col className={styles.collectionMoneyColumn} />
+          <col className={styles.collectionRefundsColumn} />
+          <col className={styles.collectionMoneyColumn} />
+          <col className={styles.collectionCashReceivedColumn} />
+          <col className={styles.collectionMoneyColumn} />
+          <col className={styles.collectionCashRefundsColumn} />
+          <col className={styles.collectionExpectedCashColumn} />
+          <col className={styles.collectionMoneyColumn} />
+          <col className={styles.collectionOutstandingColumn} />
+        </colgroup>
         <thead>
           <tr>
             <th>Operator</th>
-            <th>Transactions</th>
-            <th>Gross</th>
-            <th>Refunds / Voids</th>
-            <th>Net</th>
-            <th>Cash Received</th>
-            <th>Change</th>
-            <th>Cash Refunds</th>
-            <th>Expected Cash</th>
-            <th>Non-Cash</th>
-            <th>Outstanding</th>
+            <th className={styles.numericCell}>Transactions</th>
+            <th className={`${styles.numericCell} ${styles.salesGroupCell}`}>Gross</th>
+            <th className={`${styles.numericCell} ${styles.salesGroupCell}`}>Refunds / Voids</th>
+            <th className={`${styles.numericCell} ${styles.salesGroupCell}`}>Net</th>
+            <th className={`${styles.numericCell} ${styles.cashGroupCell}`}>Cash Received</th>
+            <th className={styles.numericCell}>Change</th>
+            <th className={styles.numericCell}>Cash Refunds</th>
+            <th className={`${styles.numericCell} ${styles.cashGroupCell}`}>Expected Cash</th>
+            <th className={`${styles.numericCell} ${styles.otherGroupCell}`}>Non-Cash</th>
+            <th className={styles.numericCell}>Outstanding</th>
           </tr>
         </thead>
         <tbody>
@@ -903,50 +1188,40 @@ function OperatorCollectionsTable({
           ) : null}
           {operatorCollections.map((operator) => {
             const operatorKey = operator.operator_id ?? operator.operator_name;
-            const isExpanded = expandedOperatorKey === operatorKey;
             return (
-              <Fragment key={operatorKey}>
-                <tr>
-                  <td>
-                    <button className={styles.operatorExpandButton} onClick={() => setExpandedOperatorKey(isExpanded ? null : operatorKey)} type="button">
-                      {operator.operator_name}
-                    </button>
-                  </td>
-                  <td>{operator.transaction_count}</td>
-                  <td>{formatMoney(operator.gross_sales)}</td>
-                  <td>{formatMoney(operator.refunds_voids)}</td>
-                  <td>{formatMoney(operator.net_sales)}</td>
-                  <td>{formatMoney(operator.cash_received)}</td>
-                  <td>{formatMoney(operator.change_given)}</td>
-                  <td>{formatMoney(operator.cash_refunds)}</td>
-                  <td>{formatMoney(operator.expected_cash)}</td>
-                  <td>{formatMoney(operator.non_cash_collected)}</td>
-                  <td>{formatMoney(operator.outstanding)}</td>
-                </tr>
-                {isExpanded ? (
-                  <tr>
-                    <td colSpan={11}>
-                      <OperatorTransactionDetails onViewDetails={onViewDetails} operator={operator} />
-                    </td>
-                  </tr>
-                ) : null}
-              </Fragment>
+              <tr key={operatorKey}>
+                <td>
+                  <button className={styles.operatorExpandButton} onClick={() => onViewOperator(operatorKey)} type="button">
+                    {operator.operator_name}
+                  </button>
+                </td>
+                <td className={styles.numericCell}>{operator.transaction_count}</td>
+                <td className={`${styles.numericCell} ${styles.salesGroupCell}`}>{formatMoney(operator.gross_sales)}</td>
+                <td className={`${styles.numericCell} ${styles.salesGroupCell}`}>{formatMoney(operator.refunds_voids)}</td>
+                <td className={`${styles.numericCell} ${styles.salesGroupCell}`}>{formatMoney(operator.net_sales)}</td>
+                <td className={`${styles.numericCell} ${styles.cashGroupCell}`}>{formatMoney(operator.cash_received)}</td>
+                <td className={styles.numericCell}>{formatMoney(operator.change_given)}</td>
+                <td className={styles.numericCell}>{formatMoney(operator.cash_refunds)}</td>
+                <td className={`${styles.numericCell} ${styles.cashGroupCell}`}>{formatMoney(operator.expected_cash)}</td>
+                <td className={`${styles.numericCell} ${styles.otherGroupCell}`}>{formatMoney(operator.non_cash_collected)}</td>
+                <td className={styles.numericCell}>{formatMoney(operator.outstanding)}</td>
+              </tr>
             );
           })}
         </tbody>
         <tfoot>
           <tr>
             <th>Totals</th>
-            <td>{totals.transaction_count}</td>
-            <td>{formatMoney(totals.gross_sales)}</td>
-            <td>{formatMoney(totals.refunds_voids)}</td>
-            <td>{formatMoney(totals.net_sales)}</td>
-            <td>{formatMoney(totals.cash_received)}</td>
-            <td>{formatMoney(totals.change_given)}</td>
-            <td>{formatMoney(totals.cash_refunds)}</td>
-            <td>{formatMoney(totals.expected_cash)}</td>
-            <td>{formatMoney(totals.non_cash_collected)}</td>
-            <td>{formatMoney(totals.outstanding)}</td>
+            <td className={styles.numericCell}>{totals.transaction_count}</td>
+            <td className={`${styles.numericCell} ${styles.salesGroupCell}`}>{formatMoney(totals.gross_sales)}</td>
+            <td className={`${styles.numericCell} ${styles.salesGroupCell}`}>{formatMoney(totals.refunds_voids)}</td>
+            <td className={`${styles.numericCell} ${styles.salesGroupCell}`}>{formatMoney(totals.net_sales)}</td>
+            <td className={`${styles.numericCell} ${styles.cashGroupCell}`}>{formatMoney(totals.cash_received)}</td>
+            <td className={styles.numericCell}>{formatMoney(totals.change_given)}</td>
+            <td className={styles.numericCell}>{formatMoney(totals.cash_refunds)}</td>
+            <td className={`${styles.numericCell} ${styles.cashGroupCell}`}>{formatMoney(totals.expected_cash)}</td>
+            <td className={`${styles.numericCell} ${styles.otherGroupCell}`}>{formatMoney(totals.non_cash_collected)}</td>
+            <td className={styles.numericCell}>{formatMoney(totals.outstanding)}</td>
           </tr>
         </tfoot>
       </table>

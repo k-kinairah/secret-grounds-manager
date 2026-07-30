@@ -31,6 +31,8 @@ from server.schemas import (
     ClientEvent,
     ClientCommand,
     ClientSafeSettings,
+    ClientMemberLoginRequest,
+    ClientMemberLoginResponse,
     CommandAcknowledgement,
     BroadcastCommandRequest,
     BroadcastCommandResponse,
@@ -2132,7 +2134,12 @@ def get_registered_pcs(
                     else None
                 ),
                 member_balance_after_seconds=(
-                    display_session.member_balance_after_seconds
+                    remaining_seconds
+                    if display_session is not None
+                    and display_session.session_mode == "member_balance"
+                    and display_session.status in {"active", "grace_period", "ending"}
+                    and remaining_seconds is not None
+                    else display_session.member_balance_after_seconds
                     if display_session is not None
                     else None
                 ),
@@ -2165,6 +2172,8 @@ def get_pc_session_state(pc_name: str) -> PCSessionStateResponse:
                 shutdown_at=active_session.shutdown_at,
                 total_seconds=active_session.total_seconds,
                 session_mode=active_session.session_mode,
+                member_code_snapshot=active_session.member_code_snapshot,
+                member_name_snapshot=active_session.member_name_snapshot,
             )
             if has_client_active_session and active_session is not None
             else None
@@ -2248,6 +2257,23 @@ def get_registered_pc_or_404(pc_name: str) -> PCRecord:
     pc = pc_registry.get(cleaned_pc_name)
     if pc is None:
         raise HTTPException(status_code=404, detail="PC is not registered")
+    return pc
+
+
+def require_registered_client_identity(
+    pc_name: str,
+    ip_address: str,
+    mac_address: str | None,
+) -> PCRecord:
+    cleaned_pc_name, _ = clean_pc_payload(pc_name, ip_address)
+    pc = pc_registry.get(cleaned_pc_name)
+    if pc is None or pc.status == "offline":
+        raise HTTPException(status_code=409, detail="This computer is not currently available.")
+    expected_mac = pc_metadata_repository.get_mac_address(cleaned_pc_name)
+    if expected_mac and mac_address and expected_mac.casefold() != mac_address.casefold():
+        raise HTTPException(status_code=403, detail="This computer is not currently available.")
+    if expected_mac and not mac_address:
+        raise HTTPException(status_code=403, detail="This computer is not currently available.")
     return pc
 
 
@@ -2744,6 +2770,63 @@ async def start_member_session(
     )
     recovery_flags.pop(response.session.pc_name, None)
     return response
+
+
+def friendly_member_login_error(error: HTTPException) -> HTTPException:
+    detail = str(error.detail)
+    if error.status_code in {403, 404} or "Invalid member username or PIN" in detail:
+        return HTTPException(status_code=403, detail="Username or PIN is incorrect.")
+    if error.status_code == 429:
+        return HTTPException(status_code=429, detail="This member is temporarily locked. Please try again shortly.")
+    if detail in {"Member is inactive", "Member is expired"}:
+        return HTTPException(status_code=409, detail="This member account is disabled.")
+    if "setup is required" in detail:
+        return HTTPException(status_code=409, detail="Member account setup is required. Please ask the cashier for help.")
+    if "no available time balance" in detail or "Insufficient member time balance" in detail:
+        return HTTPException(
+            status_code=409,
+            detail="This account has no remaining play time. Please ask the cashier to add time.",
+        )
+    if detail == "Member already has an active session" or "active reserved session" in detail:
+        return HTTPException(status_code=409, detail="This member is already using another PC.")
+    if "offline" in detail or "WebSocket" in detail or "active session" in detail:
+        return HTTPException(status_code=409, detail="This computer is not currently available.")
+    return HTTPException(status_code=409, detail="We could not start your session. Please ask the cashier for help.")
+
+
+@app.post("/client/member-login", response_model=ClientMemberLoginResponse)
+async def client_member_login(
+    request: ClientMemberLoginRequest,
+) -> ClientMemberLoginResponse:
+    mark_stale_pcs_offline()
+    pc = require_registered_client_identity(
+        request.pc_name,
+        request.ip_address,
+        request.mac_address,
+    )
+    try:
+        response = await session_service.start_member_session(
+            pc.pc_name,
+            request.member_username,
+            None,
+            request.member_pin,
+            None,
+            None,
+        )
+    except HTTPException as error:
+        raise friendly_member_login_error(error) from error
+
+    recovery_flags.pop(response.session.pc_name, None)
+    display_name = (
+        response.session.member_name_snapshot
+        or response.session.member_code_snapshot
+        or request.member_username
+    )
+    return ClientMemberLoginResponse(
+        session=response.session,
+        member_display_name=display_name,
+        remaining_seconds=response.session.total_seconds,
+    )
 
 
 @app.post("/sessions/{session_id}/add-time", response_model=SessionCommandResponse)

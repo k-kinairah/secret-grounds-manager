@@ -31,6 +31,7 @@ def main() -> None:
 
         from server.database import get_connection, initialize_database
         from server.main import (
+            client_member_login,
             create_member,
             end_session,
             get_member_ledger,
@@ -46,6 +47,7 @@ def main() -> None:
             update_member_status,
         )
         from server.schemas import (
+            ClientMemberLoginRequest,
             CommandAcknowledgement,
             MemberCreateRequest,
             MemberPinResetRequest,
@@ -296,6 +298,102 @@ def main() -> None:
             ]
 
         session_service.send_required_command = acknowledge_command
+        self_login_member = create_member(
+            MemberCreateRequest(
+                username="Self.Login",
+                display_name="Self Login",
+                pin="2468",
+                confirm_pin="2468",
+            ),
+            cashier_user,
+        )
+        purchase_member_time(
+            self_login_member.member_id,
+            MemberPurchaseRequest(
+                product_id=promo.product_id,
+                payment_method="gcash",
+                reference_number="SELF-LOGIN-1",
+            ),
+            cashier_user,
+        )
+        with get_connection() as connection:
+            before_payment_count = connection.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+        self_login = asyncio.run(
+            client_member_login(
+                ClientMemberLoginRequest(
+                    pc_name="PC-MEMBER",
+                    ip_address="127.0.0.1",
+                    member_username="Self.Login",
+                    member_pin="2468",
+                )
+            )
+        )
+        assert self_login.member_display_name == "Self Login"
+        assert self_login.session.session_mode == "member_balance"
+        assert self_login.remaining_seconds == 4 * 60 * 60
+        with get_connection() as connection:
+            after_payment_count = connection.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+        assert after_payment_count == before_payment_count
+        try:
+            asyncio.run(
+                client_member_login(
+                    ClientMemberLoginRequest(
+                        pc_name="PC-MEMBER",
+                        ip_address="127.0.0.1",
+                        member_username="Self.Login",
+                        member_pin="2468",
+                    )
+                )
+            )
+        except HTTPException as error:
+            assert error.status_code == 409
+            assert error.detail == "This computer is not currently available."
+        else:
+            raise AssertionError("Client self-login should reject unavailable PCs")
+        ended_self_login = asyncio.run(end_session(self_login.session.session_id, cashier_user))
+        assert ended_self_login.session.ended_reason == "manual_end"
+
+        no_balance_member = create_member(
+            MemberCreateRequest(
+                username="Empty.Player",
+                display_name="Empty Player",
+                pin="1357",
+                confirm_pin="1357",
+            ),
+            cashier_user,
+        )
+        try:
+            asyncio.run(
+                client_member_login(
+                    ClientMemberLoginRequest(
+                        pc_name="PC-MEMBER",
+                        ip_address="127.0.0.1",
+                        member_username=no_balance_member.username,
+                        member_pin="1357",
+                    )
+                )
+            )
+        except HTTPException as error:
+            assert error.status_code == 409
+            assert error.detail == "This account has no remaining play time. Please ask the cashier to add time."
+        else:
+            raise AssertionError("Client self-login should reject members with no balance")
+        try:
+            asyncio.run(
+                client_member_login(
+                    ClientMemberLoginRequest(
+                        pc_name="PC-MEMBER",
+                        ip_address="127.0.0.1",
+                        member_username="Self.Login",
+                        member_pin="0000",
+                    )
+                )
+            )
+        except HTTPException as error:
+            assert error.status_code == 403
+            assert error.detail == "Username or PIN is incorrect."
+        else:
+            raise AssertionError("Client self-login should hide wrong-PIN details")
         try:
             asyncio.run(
                 start_member_session(

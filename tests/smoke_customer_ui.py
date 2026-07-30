@@ -44,17 +44,21 @@ def start_command(
     duration_seconds: int,
     scheduled_end_at: str | None = None,
     session_mode: str = "prepaid",
+    member_display_name: str | None = None,
 ) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "session_id": session_id,
+        "duration_seconds": duration_seconds,
+        "scheduled_end_at": scheduled_end_at
+        or (datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)).isoformat(),
+        "session_mode": session_mode,
+    }
+    if member_display_name is not None:
+        payload["member_display_name"] = member_display_name
     return {
         "command_id": f"start-{session_id}",
         "type": "start_session",
-        "payload": {
-            "session_id": session_id,
-            "duration_seconds": duration_seconds,
-            "scheduled_end_at": scheduled_end_at
-            or (datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)).isoformat(),
-            "session_mode": session_mode,
-        },
+        "payload": payload,
     }
 
 
@@ -102,6 +106,71 @@ def test_member_display_has_no_sensitive_text() -> None:
     assert "luffy" in visible_text
     for forbidden in ("pin", "admin", "password", "payment"):
         assert forbidden not in visible_text
+
+
+def test_lock_screen_member_login_validation_message() -> None:
+    lock_screen = LockScreenController(
+        "PC-LOGIN",
+        enable_gui=False,
+        enable_dev_escape=True,
+        member_login_action=lambda _username, _pin: None,
+    )
+    lock_screen._set_login_message("Username or PIN is incorrect.")
+    assert lock_screen.state.login_message == "Username or PIN is incorrect."
+    assert lock_screen.state.is_login_processing is False
+
+
+def test_member_start_command_shows_display_name() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
+        client = create_client(temp_directory)
+        websocket = CapturingWebSocket()
+        try:
+            client.set_current_websocket(websocket)
+            ack = client.start_local_session(
+                start_command(
+                    "member-ui",
+                    300,
+                    session_mode="member_balance",
+                    member_display_name="Nami",
+                ),
+                websocket,  # type: ignore[arg-type]
+            )
+            model = client.customer_overlay.build_view_model()
+            assert ack["status"] == "completed"
+            assert model.title == "Member Session Active"
+            assert model.customer_name == "Nami"
+            assert not client.lock_screen.is_locked()
+        finally:
+            client.end_local_session(
+                {
+                    "command_id": "end-member-ui",
+                    "type": "end_session",
+                    "payload": {"session_id": "member-ui"},
+                }
+            )
+            client.stop()
+
+
+def test_customer_logout_sends_completion_and_locks() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
+        client = create_client(temp_directory)
+        websocket = CapturingWebSocket()
+        try:
+            client.set_current_websocket(websocket)
+            client.start_local_session(
+                start_command("member-logout", 300, session_mode="member_balance"),
+                websocket,  # type: ignore[arg-type]
+            )
+            message = client.customer_logout_current_session()
+            assert message is None
+            assert client.lock_screen.is_locked()
+            assert any(
+                sent.get("event_type") == "session_finished"
+                and sent.get("message") == "customer_logout"
+                for sent in websocket.sent_messages
+            )
+        finally:
+            client.stop()
 
 
 def test_reminders_fire_once_and_do_not_replay_after_reconnect() -> None:
@@ -238,6 +307,9 @@ def main() -> None:
     test_active_prepaid_overlay()
     test_open_time_elapsed_overlay()
     test_member_display_has_no_sensitive_text()
+    test_lock_screen_member_login_validation_message()
+    test_member_start_command_shows_display_name()
+    test_customer_logout_sends_completion_and_locks()
     test_reminders_fire_once_and_do_not_replay_after_reconnect()
     test_add_time_confirmation_and_countdown_update()
     test_grace_screen_uses_shutdown_countdown_and_final_warning_once()
