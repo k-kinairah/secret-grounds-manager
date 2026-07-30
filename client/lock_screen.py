@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from threading import Event, Lock, Thread
 from typing import Callable
 
+from client.tk_runtime import (
+    create_tk_root,
+    log_tk_startup_error,
+    show_native_startup_error,
+)
+
 
 GuiAction = Callable[[], None]
 MemberLoginAction = Callable[[str, str], str | None]
@@ -78,6 +84,9 @@ class LockScreenController:
         self.pin_toggle_button = None
         self.login_message_label = None
         self.pin_visible = False
+        self.gui_ready_event = Event()
+        self.gui_error: BaseException | None = None
+        self.pump_after_id = None
 
     def start(self) -> None:
         if self.enable_dev_escape:
@@ -268,12 +277,13 @@ class LockScreenController:
 
     def _run_gui(self) -> None:
         try:
-            import tkinter as tk
-        except ImportError:
-            print("Tkinter is unavailable; lock state will be tracked without GUI.")
+            tk, self.root = create_tk_root()
+        except Exception as error:
+            self.gui_error = error
+            self.gui_ready_event.set()
+            log_tk_startup_error("Lock screen Tk root creation failed", error)
+            show_native_startup_error("Lock screen Tk root creation failed", error)
             return
-
-        self.root = tk.Tk()
         self.root.title("Secret Grounds")
         self.root.configure(background="#05070D")
         self.root.attributes("-fullscreen", True)
@@ -476,6 +486,7 @@ class LockScreenController:
 
         self._update_connection_label()
         self._show_window()
+        self.gui_ready_event.set()
         self._pump_actions()
         self.root.mainloop()
 
@@ -491,7 +502,7 @@ class LockScreenController:
             self._destroy_window()
             return
 
-        self.root.after(100, self._pump_actions)
+        self.pump_after_id = self.root.after(100, self._pump_actions)
 
     def _show_window(self) -> None:
         if self.root is None:
@@ -509,8 +520,16 @@ class LockScreenController:
 
     def _destroy_window(self) -> None:
         if self.root is not None:
-            self.root.destroy()
+            root = self.root
+            if self.pump_after_id is not None:
+                try:
+                    root.after_cancel(self.pump_after_id)
+                except Exception:
+                    pass
+                self.pump_after_id = None
             self.root = None
+            root.quit()
+            root.destroy()
 
     def _prevent_close(self) -> None:
         self._ensure_visible()
@@ -619,3 +638,87 @@ class LockScreenController:
             self.pin_toggle_button.configure(state="disabled" if is_processing else "normal")
         if self.login_message_label is not None:
             self.login_message_label.configure(text=message or "")
+
+
+def run_lock_screen_gui_smoke(timeout_seconds: float = 6.0) -> None:
+    login_calls: list[tuple[str, str]] = []
+    login_release = Event()
+
+    def login_action(username: str, pin: str) -> str:
+        login_calls.append((username, pin))
+        login_release.wait(timeout=2)
+        return "That username or PIN did not match. Please try again."
+
+    controller = LockScreenController(
+        "TEST-PC-01",
+        enable_gui=True,
+        enable_dev_escape=True,
+        member_login_action=login_action,
+    )
+    print(
+        "WARNING: Development lock-screen escape is enabled. "
+        "Disable ENABLE_DEV_ESCAPE before deployment."
+    )
+    try:
+        finished = Event()
+        errors: list[str] = []
+
+        def exercise_login_widgets() -> None:
+            try:
+                required_widgets = [
+                    controller.root,
+                    controller.username_entry,
+                    controller.pin_entry,
+                    controller.pin_toggle_button,
+                    controller.login_button,
+                ]
+                if any(widget is None for widget in required_widgets):
+                    raise AssertionError("Member login widgets were not created.")
+
+                controller.username_entry.insert(0, "test_member")
+                controller.pin_entry.insert(0, "1234")
+                if controller.pin_entry.cget("show") != "*":
+                    raise AssertionError("PIN entry is not masked by default.")
+                controller._toggle_pin_visibility()
+                if controller.pin_entry.cget("show") != "":
+                    raise AssertionError("PIN show toggle did not reveal the PIN.")
+                controller._toggle_pin_visibility()
+                if controller.pin_entry.cget("show") != "*":
+                    raise AssertionError("PIN hide toggle did not mask the PIN.")
+
+                controller._submit_member_login()
+                controller._submit_member_login()
+                controller.root.after(200, finish_login_widget_checks)
+            except Exception as error:
+                errors.append(str(error))
+                login_release.set()
+                if controller.root is not None:
+                    controller.root.after(0, controller._destroy_window)
+                finished.set()
+
+        def finish_login_widget_checks() -> None:
+            try:
+                if len(login_calls) != 1:
+                    raise AssertionError("Processing guard allowed duplicate login submission.")
+                login_release.set()
+                controller.root.after(300, finish_smoke)
+            except Exception as error:
+                errors.append(str(error))
+                login_release.set()
+                finish_smoke()
+
+        def finish_smoke() -> None:
+            if controller.root is not None:
+                controller._destroy_window()
+                finished.set()
+
+        controller._schedule(exercise_login_widgets)
+        controller._run_gui()
+        if controller.gui_error is not None:
+            raise RuntimeError(f"Lock screen GUI failed: {controller.gui_error}") from controller.gui_error
+        if not finished.is_set():
+            raise RuntimeError("Lock screen GUI closed before smoke checks completed.")
+        if errors:
+            raise RuntimeError(errors[0])
+    finally:
+        controller.stop()

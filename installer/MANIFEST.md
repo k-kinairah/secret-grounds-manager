@@ -33,6 +33,12 @@ Installs:
 - `VERSION`
 - `client\SecretGroundsClient.exe`
 - `client\_internal\`
+- `client\_internal\_tcl_data\`
+- `client\_internal\_tk_data\`
+- `client\_internal\tkinter\`
+- `client\_internal\_tkinter.pyd`
+- `client\_internal\tcl86t.dll`
+- `client\_internal\tk86t.dll`
 - `client\config.example.json`
 - client production scripts
 

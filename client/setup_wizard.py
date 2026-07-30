@@ -15,6 +15,7 @@ from client.config import (
     load_client_config,
     save_client_config,
 )
+from client.tk_runtime import configure_tk_runtime, log_tk_startup_error
 
 
 def build_setup_payload(
@@ -79,9 +80,11 @@ def show_setup_wizard(
     allow_cancel: bool = True,
 ) -> ClientConfig | None:
     try:
+        configure_tk_runtime()
         import tkinter as tk
         from tkinter import messagebox
-    except ImportError as error:
+    except Exception as error:
+        log_tk_startup_error("Setup wizard GUI unavailable", error)
         raise ClientConfigError(
             "Tkinter is unavailable, so the first-run setup wizard cannot open."
         ) from error

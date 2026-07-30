@@ -7,6 +7,8 @@ import time
 from threading import Thread
 from typing import Any, Callable
 
+from client.tk_runtime import create_tk_root, log_tk_startup_error
+
 
 PowerExecutor = Callable[[list[str]], None]
 
@@ -94,9 +96,10 @@ class RemoteControlHandler:
         announcement: bool,
     ) -> None:
         try:
-            import tkinter as tk
-        except ImportError:
-            print(f"Tkinter unavailable. Message fallback: {title} - {message}")
+            tk, root = create_tk_root()
+        except Exception as error:
+            log_tk_startup_error("Remote message GUI unavailable", error)
+            print(f"Message fallback: {title} - {message}")
             return
 
         colors = {
@@ -105,7 +108,6 @@ class RemoteControlHandler:
             "urgent": ("#F43F5E", "#FFF1F2"),
         }
         accent, foreground = colors[severity]
-        root = tk.Tk()
         root.title("Secret Grounds Message")
         root.configure(background="#030712")
         root.attributes("-topmost", True)

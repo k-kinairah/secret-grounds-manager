@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from threading import Lock, Thread
 from typing import Callable
 
+from client.tk_runtime import create_tk_root, log_tk_startup_error
+
 
 DEFAULT_REMINDER_THRESHOLDS_SECONDS = [15 * 60, 5 * 60, 60, 0]
 TIME_ADDED_CONFIRMATION_TICKS = 6
@@ -239,13 +241,12 @@ class CustomerOverlayController:
 
     def run_gui(self) -> None:
         try:
-            import tkinter as tk
+            tk, root = create_tk_root()
         except Exception as error:
-            print(f"Customer overlay GUI unavailable: {error}")
+            log_tk_startup_error("Customer overlay GUI unavailable", error)
             return
 
         try:
-            root = tk.Tk()
             root.overrideredirect(True)
             root.attributes("-topmost", True)
             root.configure(bg="#05070D")
@@ -344,7 +345,7 @@ class CustomerOverlayController:
             self.refresh_gui()
             root.mainloop()
         except Exception as error:
-            print(f"Customer overlay GUI failed: {error}")
+            log_tk_startup_error("Customer overlay GUI failed", error)
 
     def geometry_for_position(self, root, width: int, height: int) -> str:
         screen_width = root.winfo_screenwidth()
@@ -432,3 +433,31 @@ class CustomerOverlayController:
         if hours:
             return f"{hours}:{minutes:02d}:{seconds:02d}"
         return f"{minutes}:{seconds:02d}"
+
+
+def run_customer_overlay_gui_smoke() -> None:
+    tk, root = create_tk_root()
+
+    controller = CustomerOverlayController(
+        "TEST-PC-01",
+        enable_gui=False,
+        logout_action=lambda: "Logout is disabled during the GUI smoke test.",
+    )
+    controller.show_session("Member Time", customer_name="Test Member")
+    controller.update_time(180)
+    model = controller.build_view_model()
+
+    try:
+        root.withdraw()
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        root.configure(bg="#05070D")
+        frame = tk.Frame(root, bg="#05070D", padx=18, pady=14)
+        frame.pack(fill="both", expand=True)
+        tk.Label(frame, text=model.title, bg="#05070D", fg="#F8FAFC").pack(anchor="w")
+        tk.Label(frame, text=model.timer_value, bg="#05070D", fg=model.accent).pack(anchor="w")
+        tk.Label(frame, text=model.customer_name, bg="#05070D", fg="#CBD5E1").pack(anchor="w")
+        root.update_idletasks()
+        root.update()
+    finally:
+        root.destroy()

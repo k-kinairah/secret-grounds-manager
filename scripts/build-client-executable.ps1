@@ -15,12 +15,7 @@ try {
     & $pythonExe -m PyInstaller `
         --noconfirm `
         --clean `
-        --name "SecretGroundsClient" `
-        --onedir `
-        --collect-submodules client `
-        --collect-submodules server `
-        --add-data "VERSION;." `
-        "scripts\pyinstaller_client_entry.py"
+        "SecretGroundsClient.spec"
     if ($LASTEXITCODE -ne 0) {
         throw "Client executable build failed."
     }
