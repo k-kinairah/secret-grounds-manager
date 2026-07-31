@@ -89,6 +89,23 @@ def run_ping_client(received_commands: list[dict[str, Any]]) -> None:
         )
 
 
+def run_never_completing_client(received_commands: list[dict[str, Any]]) -> None:
+    # Simulates a client that acknowledges receipt but then hangs/crashes
+    # before sending the final "completed"/"failed" acknowledgement, so the
+    # server's own command_timeout_seconds must be what ends the wait.
+    with SimpleWebSocketClient("ws://127.0.0.1:8765/ws/PC-TIMEOUT", timeout=10) as websocket:
+        command = websocket.receive_json()
+        received_commands.append(command)
+        websocket.send_json(
+            {
+                "command_id": command["command_id"],
+                "status": "received",
+                "message": "Command received",
+            }
+        )
+        time.sleep(8)
+
+
 def main() -> None:
     database_path = str(PROJECT_ROOT / "tests" / "smoke_websocket_commands.sqlite3")
     if Path(database_path).exists():
@@ -142,6 +159,29 @@ def main() -> None:
         assert command_payload["acknowledgements"][0]["status"] == "received"
         assert command_payload["acknowledgements"][1]["status"] == "completed"
         assert command_payload["acknowledgements"][1]["message"] == "pong"
+
+        register_pc("PC-TIMEOUT", "127.0.0.3")
+        received_timeout_commands: list[dict[str, Any]] = []
+        timeout_thread = threading.Thread(
+            target=run_never_completing_client,
+            args=(received_timeout_commands,),
+        )
+        timeout_thread.start()
+        time.sleep(0.5)
+
+        timeout_response = admin_session.post(
+            f"{SERVER_URL}/commands/test-ping",
+            json={"pc_name": "PC-TIMEOUT"},
+            timeout=10,
+        )
+        timeout_thread.join(timeout=10)
+        assert received_timeout_commands, "Timeout client did not receive command"
+        assert timeout_response.status_code == 502
+        timeout_detail = timeout_response.json()["detail"]
+        # The message must name what actually happened (a timeout waiting for
+        # acknowledgement) rather than a bare/empty asyncio.TimeoutError string.
+        assert "did not acknowledge" in timeout_detail
+        assert "ping" in timeout_detail
 
         register_pc("PC-OFFLINE", "127.0.0.2")
         time.sleep(16)

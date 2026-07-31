@@ -1,4 +1,5 @@
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock, Thread
@@ -73,6 +74,7 @@ class SecretGroundsClient:
         self.stop_event = Event()
         self.active_session: LocalSession | None = None
         self.active_session_lock = Lock()
+        self.last_session_init_failure_reason: str | None = None
         self.processed_command_ids: set[str] = set()
         self.remote_controls = RemoteControlHandler(pc_name)
         self.final_warning_sound_enabled = EXPIRATION_SOUND_ENABLED
@@ -380,6 +382,7 @@ class SecretGroundsClient:
         customer_name: str | None = None,
     ) -> bool:
         old_stop_event: Event | None = None
+        self.last_session_init_failure_reason = None
         with self.active_session_lock:
             local_session_id = (
                 self.active_session.session_id
@@ -393,20 +396,33 @@ class SecretGroundsClient:
             )
             if self.active_session is not None:
                 if self.active_session.session_id == session_id:
-                    self.recovery_store.save(
-                        session_id=session_id,
-                        pc_name=self.pc_name,
-                        scheduled_end_at=scheduled_end_at
-                        or datetime.now(timezone.utc).isoformat(),
-                        state="active",
-                        session_mode=session_mode,
-                    )
+                    try:
+                        self.recovery_store.save(
+                            session_id=session_id,
+                            pc_name=self.pc_name,
+                            scheduled_end_at=scheduled_end_at
+                            or datetime.now(timezone.utc).isoformat(),
+                            state="active",
+                            session_mode=session_mode,
+                        )
+                    except Exception as error:
+                        print(
+                            "Recovery state save failed for already-active "
+                            f"session_id={session_id}: {error}"
+                        )
+                        self.last_session_init_failure_reason = (
+                            f"Could not save session state: {error}"
+                        )
+                        return False
                     try:
                         self.lock_screen.hide_for_session()
                     except Exception as error:
                         print(
                             "Lock screen hide failed for already-active "
                             f"session_id={session_id}: {error}"
+                        )
+                        self.last_session_init_failure_reason = (
+                            f"Could not unlock the PC: {error}"
                         )
                         return False
                     print(
@@ -431,6 +447,7 @@ class SecretGroundsClient:
             timer_thread = None
             if session_mode != "open_time":
                 if duration_seconds is None or duration_seconds <= 0:
+                    self.last_session_init_failure_reason = "Invalid duration"
                     return False
                 timer_thread = Thread(
                     target=self.run_session_timer,
@@ -457,6 +474,7 @@ class SecretGroundsClient:
                     args=(session_id, started_monotonic, stop_event),
                     daemon=True,
                 )
+            previous_active_session = self.active_session
             self.active_session = LocalSession(
                 session_id=session_id,
                 deadline_monotonic=deadline_monotonic,
@@ -466,14 +484,22 @@ class SecretGroundsClient:
                 session_mode=session_mode,
                 customer_name=customer_name,
             )
-            self.recovery_store.save(
-                session_id=session_id,
-                pc_name=self.pc_name,
-                scheduled_end_at=scheduled_end_at
-                or datetime.now(timezone.utc).isoformat(),
-                state="active",
-                session_mode=session_mode,
-            )
+            try:
+                self.recovery_store.save(
+                    session_id=session_id,
+                    pc_name=self.pc_name,
+                    scheduled_end_at=scheduled_end_at
+                    or datetime.now(timezone.utc).isoformat(),
+                    state="active",
+                    session_mode=session_mode,
+                )
+            except Exception as error:
+                self.active_session = previous_active_session
+                print(f"Recovery state save failed for session_id={session_id}: {error}")
+                self.last_session_init_failure_reason = (
+                    f"Could not save session state: {error}"
+                )
+                return False
             print(f"Local session persisted: session_id={session_id}, state=active.")
             if old_stop_event is not None:
                 old_stop_event.set()
@@ -485,6 +511,7 @@ class SecretGroundsClient:
                 self.active_session = None
                 self.recovery_store.clear()
                 print(f"Lock screen hide failed for session_id={session_id}: {error}")
+                self.last_session_init_failure_reason = f"Could not unlock the PC: {error}"
                 return False
             print(f"Session {session_id} unlocked.")
             self.customer_overlay.show_session(
@@ -531,7 +558,8 @@ class SecretGroundsClient:
                 return self.build_acknowledgement(
                     command_id,
                     "failed",
-                    "Client already has an active session",
+                    self.last_session_init_failure_reason
+                    or "Client already has an active session",
                 )
             print(f"Open-time session {session_id} started.")
             return self.build_acknowledgement(
@@ -564,7 +592,8 @@ class SecretGroundsClient:
             return self.build_acknowledgement(
                 command_id,
                 "failed",
-                "Client already has an active session",
+                self.last_session_init_failure_reason
+                or "Client already has an active session",
             )
 
         print(f"{session_mode} session {session_id} started for up to {duration_seconds} seconds.")
@@ -977,6 +1006,11 @@ class SecretGroundsClient:
             return
 
         command_id = str(command.get("command_id", ""))
+        command_type = command.get("type")
+        print(
+            "Command received: "
+            f"command_id={command_id}, type={command_type}, payload={command.get('payload')}"
+        )
 
         websocket.send_json(
             self.build_acknowledgement(
@@ -985,7 +1019,34 @@ class SecretGroundsClient:
                 message="Command received",
             )
         )
-        websocket.send_json(self.execute_command(command, websocket))
+        print(f"Acknowledgement sent: command_id={command_id}, status=received")
+
+        # A handler must never let an exception escape here: the caller (the
+        # WebSocket read loop) has no try/except of its own around this call,
+        # so an unhandled exception would abandon the command mid-flight
+        # (server times out waiting for the second acknowledgement) and, for
+        # exception types the outer loop doesn't specifically catch, would
+        # kill the whole command-processing thread silently.
+        try:
+            result = self.execute_command(command, websocket)
+        except Exception as error:
+            print(
+                "Command handler raised an unhandled exception: "
+                f"command_id={command_id}, type={command_type}, error={error}"
+            )
+            print(traceback.format_exc())
+            result = self.build_acknowledgement(
+                command_id=command_id,
+                status="failed",
+                message=f"Client error: {error}",
+            )
+
+        websocket.send_json(result)
+        print(
+            "Acknowledgement sent: "
+            f"command_id={command_id}, status={result.get('status')}, "
+            f"message={result.get('message')}"
+        )
 
     def run_websocket_loop(self) -> None:
         websocket_url = self.build_websocket_url()
@@ -1010,6 +1071,17 @@ class SecretGroundsClient:
 
             except (ConnectionError, OSError, ValueError) as error:
                 print(f"Command WebSocket disconnected: {error}")
+                self.handle_websocket_offline()
+                time.sleep(self.heartbeat_interval)
+            except Exception as error:
+                # handle_command already contains its own command-handler
+                # try/except, so reaching here means something outside that
+                # (reconciliation, registration, etc.) raised an unexpected
+                # error. Log it plainly and keep retrying instead of letting
+                # this daemon thread die silently and stop processing commands
+                # for good.
+                print(f"Unexpected error in command WebSocket loop: {error}")
+                print(traceback.format_exc())
                 self.handle_websocket_offline()
                 time.sleep(self.heartbeat_interval)
 

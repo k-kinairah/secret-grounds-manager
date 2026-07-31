@@ -39,7 +39,7 @@ def read(relative_path: str) -> str:
 def test_version_consistency() -> None:
     version = read("VERSION").strip()
     package = json.loads(read("dashboard/package.json"))
-    assert version == "1.0.0-rc.1"
+    assert version == "1.0.0-rc.2"
     assert APP_VERSION == version
     assert CLIENT_VERSION == version
     assert package["version"] == version
@@ -61,14 +61,15 @@ def test_cashier_scripts_use_production_startup_and_pid_identity() -> None:
     assert "uvicorn" in backend
     assert "Wait-SgHttpReady" in backend
     assert "healthz" in backend
-    assert "node.exe" in dashboard
+    assert "Resolve-SgNodePath" in dashboard
     assert "next\\dist\\bin\\next" in dashboard
     assert '"start"' in dashboard
     assert "next dev" not in dashboard.lower()
     assert "secret-grounds-pids.json" in common
     assert "CommandLine" in common
     assert "Start-Process" in common
-    assert "RedirectStandardOutput" in common
+    assert "function Start-SgLoggedProcess" in common
+    assert "launch-wrappers" in common
     assert "HasExited" in common
     assert "Show-SgLogTail" in common
     assert "dashboard-console.log" in dashboard

@@ -1,5 +1,7 @@
 # Secret Grounds Installer Prototype Manifest
 
+> **`SecretGroundsSetup-1.0.0-rc.1.exe` is obsolete and must not be distributed.** It predates the Tcl/Tk packaging fix (broken Tkinter in the packaged client) and predates upgrade-safe Customer Computer configuration handling. Use `1.0.0-rc.2` or later.
+
 ## Cashier Computer
 
 Installs:
@@ -40,12 +42,19 @@ Installs:
 - `client\_internal\tcl86t.dll`
 - `client\_internal\tk86t.dll`
 - `client\config.example.json`
-- client production scripts
+- client production scripts, including `scripts\client-config-tool.ps1`
 
 Creates:
 
 - `client\config.json`
+- `client\config-backups\` (timestamped backups made before any explicit configuration change or when an existing config is found invalid)
 - optional scheduled task: `Secret Grounds Client`
+
+Upgrade behavior:
+
+- If a valid `client\config.json` already exists, Setup detects it before installing, prefills the wizard from it, defaults to preserving it unchanged, and never overwrites it with wizard defaults. Unattended/silent re-runs preserve it automatically.
+- If the installer user explicitly edits the prefilled fields, the previous config is backed up before the new values are written.
+- If the existing `client\config.json` is invalid, Setup backs it up and exits without making changes rather than overwriting it silently.
 
 ## Preserved User Data
 

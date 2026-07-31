@@ -403,10 +403,26 @@ function Start-SgLoggedProcess {
 
     Normalize-SgPathEnvironment
 
-    $Script:LastSgLaunchIdentity = $FilePath
+    # Redirecting stdout/stderr via Start-Process -RedirectStandardOutput/-RedirectStandardError uses
+    # anonymous .NET pipes that nobody drains for a detached (non -Wait) process; once the child fills the
+    # pipe buffer it blocks on write and the whole restart workflow hangs. A generated .cmd wrapper performs
+    # plain OS-level file redirection instead, so the child's handles go straight to the log files.
+    $commandParts = @((ConvertTo-SgCmdArgument $FilePath))
+    foreach ($argument in $Arguments) {
+        $commandParts += ConvertTo-SgCmdArgument $argument
+    }
+    $commandLine = ($commandParts -join ' ') + ' >> ' + (ConvertTo-SgCmdArgument $resolvedLog) + ' 2>> ' + (ConvertTo-SgCmdArgument $resolvedErrorLog)
+
+    $wrapperDir = Join-Path $Script:SecretGroundsRoot "logs\launch-wrappers"
+    New-Item -ItemType Directory -Force -Path $wrapperDir | Out-Null
+    $wrapperPath = Join-Path $wrapperDir "$Role.cmd"
+    Set-Content -LiteralPath $wrapperPath -Value @("@echo off", $commandLine) -Encoding ASCII
+
+    # The wrapper's own path becomes the launched process's command line (the target program's argv is
+    # inside the file, not on cmd.exe's command line), so identity tracking must match on the wrapper path.
+    $Script:LastSgLaunchIdentity = $wrapperPath
     $process = Start-Process `
-        -FilePath $FilePath `
-        -ArgumentList $Arguments `
+        -FilePath $wrapperPath `
         -WorkingDirectory $WorkingDirectory `
         -WindowStyle Hidden `
         -PassThru

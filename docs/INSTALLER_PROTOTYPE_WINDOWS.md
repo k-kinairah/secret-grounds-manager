@@ -2,7 +2,9 @@
 
 This prototype uses Inno Setup and builds a single role-selecting installer:
 
-`dist/installer/SecretGroundsSetup-1.0.0-rc.1.exe`
+`dist/installer/SecretGroundsSetup-1.0.0-rc.2.exe`
+
+> **RC.1 is obsolete and must not be distributed.** `SecretGroundsSetup-1.0.0-rc.1.exe` was built before the Tcl/Tk packaging fix (bundled a client with a broken Tkinter runtime) and before the Customer Computer upgrade-safe configuration handling described below. Only RC.2 and later should be used for Customer Computer installs or upgrades.
 
 ## Build Prerequisites
 

@@ -639,10 +639,21 @@ class SessionService:
             "Sending client command payload: "
             f"pc_name={pc_name}, command={command.model_dump(mode='json')}"
         )
-        acknowledgements = await asyncio.wait_for(
-            self.connection_manager.send_command(pc_name, command),
-            timeout=self.command_timeout_seconds,
-        )
+        try:
+            acknowledgements = await asyncio.wait_for(
+                self.connection_manager.send_command(pc_name, command),
+                timeout=self.command_timeout_seconds,
+            )
+        except asyncio.TimeoutError as error:
+            print(
+                "Client command timed out waiting for acknowledgement: "
+                f"pc_name={pc_name}, command_id={command.command_id}, "
+                f"type={command.type}, timeout_seconds={self.command_timeout_seconds}"
+            )
+            raise RuntimeError(
+                f"Client did not acknowledge the {command.type} command within "
+                f"{self.command_timeout_seconds} seconds"
+            ) from error
 
         if len(acknowledgements) < 2:
             raise RuntimeError("Command did not return both acknowledgements")

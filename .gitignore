@@ -13,6 +13,7 @@ config/.env
 logs/*.log
 logs/*.json
 logs/*.pid
+logs/launch-wrappers/
 data/*.db
 data/*.sqlite3
 backups/*.db

@@ -64,12 +64,22 @@ class ClientConnectionManager:
 
         normalized_pc_name = self.normalize_pc_name(pc_name)
         websocket = self.active_connections[normalized_pc_name]
+        print(
+            "Command WebSocket send: "
+            f"pc_name={normalized_pc_name}, command_id={command.command_id}, "
+            f"type={command.type}"
+        )
         await websocket.send_json(command.model_dump(mode="json"))
 
         acknowledgements: list[CommandAcknowledgement] = []
         try:
             while len(acknowledgements) < 2:
                 acknowledgement = await acknowledgement_queue.get()
+                print(
+                    "Command WebSocket acknowledgement received: "
+                    f"pc_name={normalized_pc_name}, command_id={acknowledgement.command_id}, "
+                    f"status={acknowledgement.status}, message={acknowledgement.message}"
+                )
                 acknowledgements.append(acknowledgement)
                 if on_acknowledgement is not None:
                     on_acknowledgement(acknowledgement)
@@ -89,3 +99,12 @@ class ClientConnectionManager:
 
         if acknowledgement_queue is not None:
             await acknowledgement_queue.put(acknowledgement)
+        else:
+            # Nothing is awaiting this command_id anymore (already timed out,
+            # already completed, or it belongs to a stale/duplicate message).
+            # Log it instead of silently dropping it so a mismatch is visible.
+            print(
+                "Command WebSocket acknowledgement had no pending waiter: "
+                f"command_id={acknowledgement.command_id}, status={acknowledgement.status}, "
+                f"message={acknowledgement.message}"
+            )
