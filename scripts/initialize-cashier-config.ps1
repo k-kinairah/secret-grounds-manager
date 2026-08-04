@@ -38,7 +38,12 @@ if ([string]::IsNullOrWhiteSpace($CorsOrigins)) {
 }
 
 $secretBytes = [byte[]]::new(32)
-[System.Security.Cryptography.RandomNumberGenerator]::Fill($secretBytes)
+$secretRandomNumberGenerator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    $secretRandomNumberGenerator.GetBytes($secretBytes)
+} finally {
+    $secretRandomNumberGenerator.Dispose()
+}
 $secret = [Convert]::ToBase64String($secretBytes)
 
 New-Item -ItemType Directory -Force -Path `

@@ -58,6 +58,7 @@ Source: "..\scripts\install-cashier-role.ps1"; DestDir: "{app}\scripts"; Flags: 
 Source: "..\scripts\install-cashier-autostart.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\remove-cashier-autostart.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\install-backend-firewall-rule.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
+Source: "..\scripts\open-dashboard.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\install-startup-folder-shortcuts.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\remove-client-autostart.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\remove-client-startup-folder-shortcut.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
@@ -73,24 +74,23 @@ Source: "..\scripts\install-startup-folder-shortcuts.ps1"; DestDir: "{app}\scrip
 Source: "..\scripts\remove-client-startup-folder-shortcut.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
 Source: "..\scripts\client-config-tool.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 Source: "..\scripts\read-client-config-status.ps1"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "..\scripts\read-cashier-status.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
-Name: "{group}\Secret Grounds Dashboard"; Filename: "http://127.0.0.1:3001"; Check: IsCashier
+Name: "{group}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14; Check: IsCashier
 Name: "{group}\Start Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\start-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
 Name: "{group}\Stop Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
 Name: "{group}\Restart Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\restart-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
 Name: "{group}\Secret Grounds Status"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\status-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
-Name: "{commondesktop}\Secret Grounds Dashboard"; Filename: "http://127.0.0.1:3001"; Check: IsCashier
+Name: "{commondesktop}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14; Check: IsCashier
 Name: "{group}\Configure Secret Grounds Client"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure-client.ps1"""; WorkingDir: "{app}"; Check: IsClient
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\initialize-cashier-config.ps1"" -BackendPort 18001 -DashboardPort 3001"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Preparing cashier configuration..."; Check: IsCashier
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-backend-firewall-rule.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Installing Private-network firewall rule..."; Check: IsCashier
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-cashier-role.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Installing cashier autostart..."; Check: IsCashier
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure-client.ps1"" -Mode Preserve -ClientConfigPath ""{app}\client\config.json"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Preserving existing client configuration..."; Check: IsClientPreserve
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure-client.ps1"" -Mode {code:GetConfigMode} -ServerHost ""{code:GetClientServerHost}"" -ServerPort {code:GetClientServerPort} -StationId ""{code:GetClientStationId}"" -DisplayName ""{code:GetClientDisplayName}"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Saving validated client configuration..."; Check: IsClientOnline
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure-client.ps1"" -Mode {code:GetConfigMode} -ServerHost ""{code:GetClientServerHost}"" -ServerPort {code:GetClientServerPort} -StationId ""{code:GetClientStationId}"" -DisplayName ""{code:GetClientDisplayName}"" -AllowOffline"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Saving offline client configuration..."; Check: IsClientOffline
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-client-autostart.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Installing client autostart..."; Check: ShouldInstallClientAutostart
+Filename: "http://127.0.0.1:3001"; Description: "Open Secret Grounds Dashboard"; Flags: postinstall shellexec skipifsilent; Check: CashierServicesAreHealthy
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop-secret-grounds.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
@@ -102,6 +102,7 @@ var
   RolePage: TInputOptionWizardPage;
   ClientPage: TInputQueryWizardPage;
   ClientOptionsPage: TInputOptionWizardPage;
+  CashierOptionsPage: TInputOptionWizardPage;
   SelectedRole: String;
   RetainShopData: Boolean;
   ExistingConfigStatus: String;
@@ -113,6 +114,9 @@ var
   ExistingConfigBackupPath: String;
   ConfigModeValue: String;
   PreviousInstallLocation: String;
+  ExistingCashierConfigFound: Boolean;
+  ExistingCashierAutostartEnabled: Boolean;
+  CashierServicesHealthy: Boolean;
 
 function IsCashier: Boolean;
 begin
@@ -318,16 +322,63 @@ begin
   end;
 end;
 
+procedure DetectExistingCashierState;
+var
+  ScriptPath, TempOut, CmdParams: String;
+  ResultCode: Integer;
+  Lines: TArrayOfString;
+  I, EqPos: Integer;
+  Key, Value: String;
+  ExtractedOk: Boolean;
+begin
+  ExistingCashierConfigFound := False;
+  ExistingCashierAutostartEnabled := False;
+
+  if PreviousInstallLocation = '' then Exit;
+  if not FileExists(PreviousInstallLocation + '\config\.env') then Exit;
+
+  ExistingCashierConfigFound := True;
+
+  ExtractedOk := True;
+  try
+    ExtractTemporaryFile('read-cashier-status.ps1');
+  except
+    ExtractedOk := False;
+  end;
+  if not ExtractedOk then Exit;
+
+  ScriptPath := ExpandConstant('{tmp}') + '\read-cashier-status.ps1';
+  TempOut := ExpandConstant('{tmp}') + '\sg-cashier-status.txt';
+  CmdParams := '/C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath +
+    '" -InstallPath "' + PreviousInstallLocation + '" > "' + TempOut + '" 2>&1';
+
+  if Exec('cmd.exe', CmdParams, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then begin
+    if FileExists(TempOut) and LoadStringsFromFile(TempOut, Lines) then begin
+      for I := 0 to GetArrayLength(Lines) - 1 do begin
+        EqPos := Pos('=', Lines[I]);
+        if EqPos = 0 then Continue;
+        Key := Copy(Lines[I], 1, EqPos - 1);
+        Value := Copy(Lines[I], EqPos + 1, Length(Lines[I]) - EqPos);
+        if Key = 'AUTOSTART' then
+          ExistingCashierAutostartEnabled := (Lowercase(Value) = 'true');
+      end;
+    end;
+  end;
+end;
+
 function InitializeSetup: Boolean;
 begin
   Result := True;
   DetectExistingClientConfig;
+  DetectExistingCashierState;
 
   if ExistingConfigStatus = 'Ok' then begin
     SelectedRole := 'client';
     ConfigModeValue := 'Preserve';
   end else begin
     ConfigModeValue := 'Fresh';
+    if ExistingCashierConfigFound then
+      SelectedRole := 'cashier';
   end;
 
   if ExistingConfigStatus = 'Invalid' then begin
@@ -361,6 +412,17 @@ begin
   RolePage.Add('Customer Computer - connects to the cashier and receives sessions and commands.');
   RolePage.Values[0] := ExistingConfigStatus <> 'Ok';
   RolePage.Values[1] := ExistingConfigStatus = 'Ok';
+
+  CashierOptionsPage := CreateInputOptionPage(
+    RolePage.ID,
+    'Cashier Computer Options',
+    'Choose startup options.',
+    'Secret Grounds can start automatically so the shop opens without extra steps.',
+    False,
+    False
+  );
+  CashierOptionsPage.Add('Start Secret Grounds automatically when this computer signs in.');
+  CashierOptionsPage.Values[0] := (not ExistingCashierConfigFound) or ExistingCashierAutostartEnabled;
 
   if ExistingConfigStatus = 'Ok' then
     ClientPage := CreateInputQueryPage(
@@ -411,6 +473,8 @@ begin
   Result := False;
   if (PageID = ClientPage.ID) or (PageID = ClientOptionsPage.ID) then
     Result := SelectedRole <> 'client';
+  if PageID = CashierOptionsPage.ID then
+    Result := SelectedRole <> 'cashier';
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -459,6 +523,89 @@ begin
     end;
     Result := ValidateClientOnline(ClientPage.Values[2], ClientPage.Values[3], ClientPage.Values[0]);
   end;
+end;
+
+function CashierServicesAreHealthy: Boolean;
+begin
+  Result := CashierServicesHealthy;
+end;
+
+function RunCashierScript(ScriptName: String; Arguments: String): Boolean;
+var
+  ResultCode: Integer;
+  ScriptPath: String;
+begin
+  ScriptPath := ExpandConstant('{app}\scripts\' + ScriptName);
+  Result := Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath + '" ' + Arguments,
+    ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+function CashierLogPathsMessage: String;
+begin
+  Result := 'Check:' + #13#10 +
+    ExpandConstant('{app}\logs\server.log') + #13#10 +
+    ExpandConstant('{app}\logs\dashboard.log');
+end;
+
+function CashierAutostartArgValue: String;
+begin
+  // install-cashier-role.ps1 takes a plain presence/absence [switch], not a
+  // boolean value: an externally-invoked "powershell.exe -File ... -Param:$true"
+  // does not reliably bind boolean-valued parameters across the process
+  // boundary (the literal text arrives unparsed and fails type conversion).
+  if CashierOptionsPage.Values[0] then
+    Result := ''
+  else
+    Result := '-DisableAutostart';
+end;
+
+procedure RunCashierPostInstall;
+var
+  Retry: Boolean;
+begin
+  if SelectedRole <> 'cashier' then Exit;
+
+  CashierServicesHealthy := False;
+
+  if not RunCashierScript('initialize-cashier-config.ps1', '-BackendPort 18001 -DashboardPort 3001') then begin
+    MsgBox('Secret Grounds could not create the cashier configuration.' + #13#10#13#10 +
+      CashierLogPathsMessage, mbError, MB_OK);
+    Exit;
+  end;
+
+  if not RunCashierScript('install-backend-firewall-rule.ps1', '') then begin
+    MsgBox('Secret Grounds could not install the Private-network firewall rule for the backend.' + #13#10#13#10 +
+      CashierLogPathsMessage, mbError, MB_OK);
+    Exit;
+  end;
+
+  if not RunCashierScript('install-cashier-role.ps1', CashierAutostartArgValue) then begin
+    MsgBox('Secret Grounds could not configure the cashier startup role.' + #13#10#13#10 +
+      CashierLogPathsMessage, mbError, MB_OK);
+    Exit;
+  end;
+
+  Retry := True;
+  while Retry do begin
+    Retry := False;
+    if RunCashierScript('restart-secret-grounds.ps1', '') then begin
+      CashierServicesHealthy := True;
+    end else begin
+      if MsgBox(
+        'Secret Grounds was installed, but the backend could not start.' + #13#10#13#10 +
+        CashierLogPathsMessage + #13#10#13#10 +
+        'Would you like to try starting Secret Grounds again?',
+        mbError, MB_RETRYCANCEL) = IDRETRY then
+        Retry := True;
+    end;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    RunCashierPostInstall;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

@@ -67,7 +67,13 @@ def test_installer_does_not_expand_app_before_it_is_initialized() -> None:
     # (that crashed the wizard before it could even open). Detection must use the
     # previous install location from the registry instead.
     source = read("installer/SecretGroundsSetup.iss")
-    assert "ExpandConstant('{app}')" not in source
+    # Scoped to the functions that run during InitializeSetup, before {app} is
+    # resolved -- CurStepChanged(ssPostInstall) runs after files are installed
+    # and legitimately uses ExpandConstant('{app}') there.
+    early_init_block = source[
+        source.index("function GetPreviousInstallLocation"):source.index("procedure InitializeWizard")
+    ]
+    assert "ExpandConstant('{app}')" not in early_init_block
     assert "function GetPreviousInstallLocation" in source
     assert "RegQueryStringValue(HKLM" in source
     assert "PreviousInstallLocation := GetPreviousInstallLocation" in source
@@ -111,6 +117,14 @@ def test_cashier_config_generator_uses_secure_secret_and_production_ports() -> N
     assert "BackendPort = 18001" in source
     assert "DashboardPort = 3001" in source
     assert "Existing cashier config preserved" in source
+    # RandomNumberGenerator.Fill(Span<byte>) is a .NET 6+ static method that
+    # does not exist under Windows PowerShell 5.1 (.NET Framework), which is
+    # what ships on a clean Windows PC. Create()+GetBytes()+Dispose() is the
+    # PS 5.1-compatible equivalent.
+    assert "RandomNumberGenerator]::Fill(" not in source
+    assert "RandomNumberGenerator]::Create()" in source
+    assert ".GetBytes($secretBytes)" in source
+    assert ".Dispose()" in source
 
 
 def test_client_launcher_prefers_packaged_executable() -> None:
@@ -118,6 +132,97 @@ def test_client_launcher_prefers_packaged_executable() -> None:
     assert "SecretGroundsClient.exe" in source
     assert "packagedClientExe" in source
     assert "-m\", \"client.client" in source
+
+
+def test_installer_automates_cashier_initialization_and_startup() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    assert "procedure RunCashierPostInstall" in source
+    assert "if SelectedRole <> 'cashier' then Exit" in source
+    assert "RunCashierScript('initialize-cashier-config.ps1'" in source
+    assert "RunCashierScript('install-backend-firewall-rule.ps1'" in source
+    assert "RunCashierScript('install-cashier-role.ps1'" in source
+    assert "RunCashierScript('restart-secret-grounds.ps1'" in source
+    assert "procedure CurStepChanged" in source
+    assert "if CurStep = ssPostInstall then" in source
+    # Friendly, non-technical failure text (raw PowerShell output must not
+    # be what a clean-PC user sees).
+    assert "Secret Grounds could not create the cashier configuration." in source
+    assert "Secret Grounds could not install the Private-network firewall rule" in source
+    assert "Secret Grounds could not configure the cashier startup role." in source
+    assert "Secret Grounds was installed, but the backend could not start." in source
+    assert "logs\\server.log" in source
+    assert "logs\\dashboard.log" in source
+
+
+def test_installer_offers_bounded_retry_on_startup_failure() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    assert "MB_RETRYCANCEL" in source
+    assert "IDRETRY" in source
+    # The retry loop must only continue on an explicit user click, never spin
+    # on its own -- there is exactly one automatic attempt per Retry click.
+    assert "Retry := True;\n  while Retry do begin\n    Retry := False;" in source
+
+
+def test_installer_opens_dashboard_only_after_health_succeeds() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    assert "function CashierServicesAreHealthy" in source
+    assert 'Description: "Open Secret Grounds Dashboard"' in source
+    assert "Flags: postinstall shellexec skipifsilent" in source
+    assert "Check: CashierServicesAreHealthy" in source
+    # CashierServicesHealthy only ever becomes True after restart-secret-grounds.ps1
+    # (which itself waits for backend AND dashboard readiness) succeeds.
+    assert "CashierServicesHealthy := False;" in source
+    assert "CashierServicesHealthy := True;" in source
+
+
+def test_installer_cashier_autostart_checkbox_defaults_and_preserves_choice() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    assert "Start Secret Grounds automatically when this computer signs in." in source
+    assert "CashierOptionsPage.Values[0] := (not ExistingCashierConfigFound) or ExistingCashierAutostartEnabled;" in source
+    assert "procedure DetectExistingCashierState" in source
+    assert "read-cashier-status.ps1" in source
+    assert "ExistingCashierAutostartEnabled" in source
+
+
+def test_installer_does_not_pass_boolean_literals_to_external_powershell() -> None:
+    # A new "powershell.exe -File ... -Param:$true" process does not reliably
+    # bind [bool]/[switch] parameters -- the literal text "$true"/"$false"
+    # arrives unparsed and fails type conversion at the receiving script. Any
+    # Pascal string literal built from these would silently break every
+    # cashier install. install-cashier-role.ps1 must instead be driven with a
+    # plain presence/absence switch.
+    iss_source = read("installer/SecretGroundsSetup.iss")
+    assert "'$true'" not in iss_source
+    assert "'$false'" not in iss_source
+    assert "-DisableAutostart" in iss_source
+
+    role_source = read("scripts/install-cashier-role.ps1")
+    assert "[switch]$DisableAutostart" in role_source
+    assert "[bool]$EnableAutostart" not in role_source
+
+
+def test_installer_dashboard_shortcuts_ensure_services_running() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    assert 'Filename: "http://127.0.0.1:3001"; Check: IsCashier' not in source
+    assert "open-dashboard.ps1" in source
+    open_dashboard = read("scripts/open-dashboard.ps1")
+    assert "Test-SgHealthOnce" in open_dashboard
+    assert "start-secret-grounds.ps1" in open_dashboard
+    assert "Wait-SgHttpReady" in open_dashboard
+    assert "Start-Process $dashboardUrl" in open_dashboard
+
+
+def test_installer_cashier_role_safety() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    # Cashier automation must never launch or configure the customer client.
+    run_cashier_block = source[source.index("procedure RunCashierPostInstall"):source.index("procedure CurStepChanged")]
+    assert "SecretGroundsClient.exe" not in run_cashier_block
+    assert "install-client-autostart" not in run_cashier_block
+    assert "configure-client.ps1" not in run_cashier_block
+
+    role_source = read("scripts/install-cashier-role.ps1")
+    assert "remove-client-autostart.ps1" in role_source
+    assert "remove-client-startup-folder-shortcut.ps1" in role_source
 
 
 def main() -> None:
@@ -134,6 +239,13 @@ def main() -> None:
         test_release_candidate_is_rc2_and_rc1_flagged_obsolete,
         test_cashier_config_generator_uses_secure_secret_and_production_ports,
         test_client_launcher_prefers_packaged_executable,
+        test_installer_automates_cashier_initialization_and_startup,
+        test_installer_offers_bounded_retry_on_startup_failure,
+        test_installer_opens_dashboard_only_after_health_succeeds,
+        test_installer_cashier_autostart_checkbox_defaults_and_preserves_choice,
+        test_installer_does_not_pass_boolean_literals_to_external_powershell,
+        test_installer_dashboard_shortcuts_ensure_services_running,
+        test_installer_cashier_role_safety,
     ]
     for test in tests:
         test()
