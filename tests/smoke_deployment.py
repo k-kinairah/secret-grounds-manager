@@ -93,6 +93,45 @@ def test_autostart_task_names_are_stable() -> None:
     assert "MultipleInstances IgnoreNew" in client
 
 
+def test_cashier_autostart_task_runs_elevated_as_interactive_user() -> None:
+    # Registering a scheduled task without an explicit -Principal defaults to
+    # RunLevel Limited, which cannot write to {app}\data or {app}\logs under
+    # C:\Program Files\Secret Grounds\ -- the task reports LastTaskResult 1
+    # and both services stay stopped, even though the action, working
+    # directory, and trigger are all otherwise correct. Confirmed fixed on a
+    # clean cashier PC: registering with RunLevel Highest let the stack start
+    # both on manual Start-ScheduledTask and after a full reboot.
+    cashier = read("scripts/install-cashier-autostart.ps1")
+    assert "New-ScheduledTaskPrincipal" in cashier
+    assert "-LogonType Interactive" in cashier
+    assert "-RunLevel Highest" in cashier
+    assert "[System.Security.Principal.WindowsIdentity]::GetCurrent().Name" in cashier
+    assert "-Principal $principal" in cashier
+
+    # Upgrades must replace a stale Limited-level task, never leave a
+    # duplicate registered alongside the corrected one.
+    assert "Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue" in cashier
+    assert "Unregister-ScheduledTask -TaskName $taskName -Confirm:$false" in cashier
+    unregister_index = cashier.index("Unregister-ScheduledTask -TaskName $taskName -Confirm:$false")
+    register_index = cashier.index("Register-ScheduledTask -TaskName $taskName")
+    assert unregister_index < register_index
+
+    # At most one automatic restart beyond the initial attempt, and a hard
+    # cap so a stuck instance cannot run indefinitely.
+    assert "-RestartCount 2" in cashier
+    assert "-ExecutionTimeLimit (New-TimeSpan -Minutes 10)" in cashier
+
+    # The action itself (hidden PowerShell, -NoBrowser, start-secret-grounds.ps1)
+    # must be unchanged by the principal/settings fix.
+    assert '-WindowStyle Hidden -File `"$scriptPath`" -NoBrowser' in cashier
+
+    # Customer Computer autostart is a separate task and must not gain the
+    # cashier's elevation requirement.
+    client = read("scripts/install-client-autostart.ps1")
+    assert "RunLevel" not in client
+    assert "New-ScheduledTaskPrincipal" not in client
+
+
 def test_config_examples_are_secret_safe() -> None:
     env_example = read("config/.env.example")
     client_example = json.loads(read("client/config.example.json"))
