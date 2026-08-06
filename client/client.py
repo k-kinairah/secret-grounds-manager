@@ -144,6 +144,7 @@ class SecretGroundsClient:
                             session_type=self.human_session_mode(self.active_session.session_mode),
                             customer_name=display_name,
                             is_elapsed=False,
+                            is_new_session=False,
                         )
             return None
         except requests.ConnectionError:
@@ -433,6 +434,7 @@ class SecretGroundsClient:
                         session_type=self.human_session_mode(session_mode),
                         customer_name=customer_name or self.active_session.customer_name,
                         is_elapsed=session_mode == "open_time",
+                        is_new_session=False,
                     )
                     print(f"Local session {session_id} is already active.")
                     return True

@@ -370,6 +370,101 @@ def test_dashboard_builds_self_contained_standalone_output() -> None:
     assert ".next\\static" in build_script
 
 
+def test_client_spec_bundles_logo_asset() -> None:
+    # The lock screen loads client/assets/secret-grounds-logo.png at runtime
+    # (client/utils.py get_logo_path()); if the .spec doesn't list it as a
+    # PyInstaller data file, the packaged exe silently falls back to the "SG"
+    # text mark with no build-time signal that the real logo went missing.
+    spec = read("SecretGroundsClient.spec")
+    assert "secret-grounds-logo.png" in spec
+    assert "'assets'" in spec
+
+    logo_path = PROJECT_ROOT / "client" / "assets" / "secret-grounds-logo.png"
+    assert logo_path.is_file(), f"Logo asset is missing from the repo: {logo_path}"
+    assert logo_path.stat().st_size > 0
+
+
+def test_uninstall_stops_all_processes_before_removing_files() -> None:
+    # A clean uninstall test found SecretGroundsClient.exe and node.exe still
+    # running afterward, the client still connected, and {app} left behind
+    # because Windows can't delete a file a running process still has open.
+    # The root cause: [UninstallRun] only ever stopped the cashier
+    # backend/dashboard (stop-secret-grounds.ps1) -- nothing ever stopped the
+    # client, and nothing verified beyond the PID-tracking JSON file (which
+    # can go stale) that everything had actually exited.
+    iss_source = read("installer/SecretGroundsSetup.iss")
+    assert "stop-all-for-uninstall.ps1" in iss_source
+
+    stop_script = read("scripts/stop-all-for-uninstall.ps1")
+    assert 'Stop-SgStartedProcess "client"' in stop_script
+    assert 'Stop-SgStartedProcess "dashboard"' in stop_script
+    assert 'Stop-SgStartedProcess "backend"' in stop_script
+    # Must not rely solely on the PID-tracking file: verify by executable
+    # path so a stale/missing record can't leave a process behind.
+    assert "SecretGroundsClient.exe" in stop_script
+    assert "runtime\\python\\python.exe" in stop_script
+    assert "runtime\\node\\node.exe" in stop_script
+    assert "$TimeoutSeconds = 10" in stop_script
+    assert "-Force" in stop_script
+    assert "throw" in stop_script
+
+
+def test_uninstall_gate_runs_before_any_file_removal() -> None:
+    # InitializeUninstall runs before the uninstall wizard/confirmation even
+    # appears, and can abort the whole uninstall (Result := False) -- unlike
+    # [UninstallRun] entries, which cannot stop Inno from proceeding to
+    # delete files even if the script inside them fails.
+    iss_source = read("installer/SecretGroundsSetup.iss")
+    assert "function InitializeUninstall: Boolean;" in iss_source
+    init_uninstall_block = iss_source[
+        iss_source.index("function InitializeUninstall"):iss_source.index(
+            "procedure CurUninstallStepChanged"
+        )
+    ]
+    assert "stop-all-for-uninstall.ps1" in init_uninstall_block
+    assert "Result := False" in init_uninstall_block
+    assert "ewWaitUntilTerminated" in init_uninstall_block
+    # A blocked stop must be reported to the person running the uninstaller,
+    # not fail silently.
+    assert "MsgBox(" in init_uninstall_block
+    assert "could not stop all running processes" in init_uninstall_block.lower()
+
+    # InitializeUninstall must come before CurUninstallStepChanged (and
+    # therefore before file removal, which Inno performs after both) in the
+    # script's own execution order.
+    assert iss_source.index("function InitializeUninstall") < iss_source.index(
+        "procedure CurUninstallStepChanged"
+    )
+
+
+def test_uninstall_still_removes_both_scheduled_tasks() -> None:
+    iss_source = read("installer/SecretGroundsSetup.iss")
+    uninstall_run_block = iss_source[
+        iss_source.index("[UninstallRun]"):iss_source.index("[Code]")
+    ]
+    assert "remove-cashier-autostart.ps1" in uninstall_run_block
+    assert "remove-client-autostart.ps1" in uninstall_run_block
+    # The old cashier-only stop script is superseded by the comprehensive
+    # one that also covers the client -- it must not still be wired in here,
+    # or the original bug (client left running) reappears for client-role
+    # installs, which stop-secret-grounds.ps1 never touched.
+    assert "stop-secret-grounds.ps1" not in uninstall_run_block
+    assert "stop-all-for-uninstall.ps1" in uninstall_run_block
+
+
+def test_uninstall_stop_script_is_shipped_for_both_roles() -> None:
+    # Both the cashier and the client role need to be able to stop
+    # themselves cleanly at uninstall time, so this file must not be gated
+    # behind Check: IsCashier / Check: IsClient like most other scripts are.
+    iss_source = read("installer/SecretGroundsSetup.iss")
+    files_block = iss_source[iss_source.index("[Files]"):iss_source.index("[Icons]")]
+    line = next(
+        line for line in files_block.splitlines() if "stop-all-for-uninstall.ps1" in line
+    )
+    assert "Check: IsCashier" not in line
+    assert "Check: IsClient" not in line
+
+
 def main() -> None:
     tests = [
         test_inno_installer_has_role_selection,
@@ -401,6 +496,11 @@ def main() -> None:
         test_installer_ships_bundled_node_runtime_not_system_node,
         test_dashboard_scripts_never_shell_out_to_system_node,
         test_dashboard_builds_self_contained_standalone_output,
+        test_client_spec_bundles_logo_asset,
+        test_uninstall_stops_all_processes_before_removing_files,
+        test_uninstall_gate_runs_before_any_file_removal,
+        test_uninstall_still_removes_both_scheduled_tasks,
+        test_uninstall_stop_script_is_shipped_for_both_roles,
     ]
     for test in tests:
         test()

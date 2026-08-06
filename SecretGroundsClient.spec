@@ -25,6 +25,7 @@ def collect_tree(source, target):
 datas = [
     ('VERSION', '.'),
     ('client\\config.example.json', '.'),
+    ('client\\assets\\secret-grounds-logo.png', 'assets'),
 ]
 datas += collect_tree(python_root / 'tcl' / 'tcl8.6', '_tcl_data')
 datas += collect_tree(python_root / 'tcl' / 'tk8.6', '_tk_data')
@@ -62,20 +63,27 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX-packed unsigned PyInstaller executables are one of the most common
+    # Windows Defender / AV false-positive triggers (packed entropy reads the
+    # same to ML heuristics whether the packer is hiding malware or just
+    # shrinking a legitimate app). UPX buys a smaller file at the cost of a
+    # much higher false-positive rate, and this codebase has no code-signing
+    # certificate to offset that risk yet -- keep it off.
+    upx=False,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version='client\\version_info.txt',
 )
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='SecretGroundsClient',
 )

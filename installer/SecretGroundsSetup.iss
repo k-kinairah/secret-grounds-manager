@@ -22,6 +22,10 @@ PrivilegesRequired=admin
 WizardStyle=modern
 UninstallDisplayIcon={app}\VERSION
 SetupLogging=yes
+VersionInfoVersion=1.0.0.0
+VersionInfoTextVersion={#AppVersion}
+VersionInfoDescription=Secret Grounds Setup
+VersionInfoCopyright=Secret Grounds
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -43,6 +47,7 @@ Source: "..\runtime\node\*"; DestDir: "{app}\runtime\node"; Flags: ignoreversion
 Source: "..\dashboard\.next\standalone\*"; DestDir: "{app}\dashboard\.next\standalone"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsCashier
 Source: "..\operator-shortcuts\*"; DestDir: "{app}\operator-shortcuts"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsCashier
 Source: "..\scripts\secret-grounds-common.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\stop-all-for-uninstall.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\start-secret-grounds.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\start-backend.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\start-dashboard.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
@@ -90,7 +95,12 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Fil
 Filename: "http://127.0.0.1:3001"; Description: "Open Secret Grounds Dashboard"; Flags: postinstall shellexec skipifsilent; Check: CashierServicesAreHealthy
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop-secret-grounds.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
+; Belt-and-suspenders re-run of the same stop-everything check that
+; InitializeUninstall already gated on: the "Keep shop data?" confirmation
+; dialog between InitializeUninstall and here can sit open indefinitely, long
+; enough in principle for a Task Scheduler trigger to relaunch something.
+; Removing the scheduled tasks right after this closes that window for good.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop-all-for-uninstall.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\remove-cashier-autostart.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\remove-client-autostart.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
 
@@ -611,6 +621,34 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
     RunCashierPostInstall;
+end;
+
+function InitializeUninstall: Boolean;
+var
+  ResultCode: Integer;
+  StoppedCleanly: Boolean;
+begin
+  // Runs before any uninstall UI appears. Stops the client, backend, and
+  // dashboard (whichever this install actually has running) and verifies
+  // -- by executable path, not just PID-tracking that can go stale -- that
+  // nothing is left running, with a bounded 10-second wait
+  // (scripts\stop-all-for-uninstall.ps1). A clean uninstall depends on this:
+  // Windows cannot delete a file a running process still has open, which is
+  // exactly why {app} used to survive uninstall with the client/dashboard
+  // still connected. If processes can't be stopped in time, abort here
+  // rather than silently leaving a partially-deleted install directory.
+  StoppedCleanly := Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\stop-all-for-uninstall.ps1') + '"',
+    ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+
+  Result := True;
+  if not StoppedCleanly then begin
+    MsgBox('Secret Grounds could not stop all running processes (client, backend, or dashboard) within 10 seconds.' + #13#10#13#10 +
+      'Please close them manually (Task Manager), then run Uninstall again.' + #13#10#13#10 +
+      'Check: ' + ExpandConstant('{app}\logs\server.log'),
+      mbError, MB_OK);
+    Result := False;
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

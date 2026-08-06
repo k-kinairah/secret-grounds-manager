@@ -125,11 +125,42 @@ def test_cashier_autostart_task_runs_elevated_as_interactive_user() -> None:
     # must be unchanged by the principal/settings fix.
     assert '-WindowStyle Hidden -File `"$scriptPath`" -NoBrowser' in cashier
 
-    # Customer Computer autostart is a separate task and must not gain the
-    # cashier's elevation requirement.
+
+def test_client_autostart_task_runs_elevated_as_interactive_user() -> None:
+    # Same root cause and fix as the cashier task above: a customer PC's
+    # scheduled task registered without an explicit -Principal defaults to
+    # RunLevel Limited, which cannot reliably start the client process --
+    # LastTaskResult 1, no client process remains. Confirmed fixed on a clean
+    # customer PC by registering with RunLevel Highest.
     client = read("scripts/install-client-autostart.ps1")
-    assert "RunLevel" not in client
-    assert "New-ScheduledTaskPrincipal" not in client
+    assert "New-ScheduledTaskPrincipal" in client
+    assert "-LogonType Interactive" in client
+    assert "-RunLevel Highest" in client
+    assert "[System.Security.Principal.WindowsIdentity]::GetCurrent().Name" in client
+    assert "-Principal $principal" in client
+
+    # Upgrades must replace a stale Limited-level task, never leave a
+    # duplicate registered alongside the corrected one.
+    assert "Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue" in client
+    assert "Unregister-ScheduledTask -TaskName $taskName -Confirm:$false" in client
+    unregister_index = client.index("Unregister-ScheduledTask -TaskName $taskName -Confirm:$false")
+    register_index = client.index("Register-ScheduledTask -TaskName $taskName")
+    assert unregister_index < register_index
+
+    # At most one automatic restart beyond the initial attempt, and a hard
+    # cap so a stuck instance cannot run indefinitely.
+    assert "-RestartCount 2" in client
+    assert "-ExecutionTimeLimit (New-TimeSpan -Minutes 10)" in client
+
+    # The action itself (hidden PowerShell, start-client.ps1) must be
+    # unchanged by the principal/settings fix.
+    assert '-WindowStyle Hidden -File `"$scriptPath`"' in client
+
+    # Cashier autostart is a separate task and must keep its own independent
+    # principal wiring -- this fix must not merge the two task registrations.
+    cashier = read("scripts/install-cashier-autostart.ps1")
+    assert 'taskName = "Secret Grounds Cashier Stack"' in cashier
+    assert 'taskName = "Secret Grounds Client"' in client
 
 
 def test_config_examples_are_secret_safe() -> None:
@@ -210,6 +241,8 @@ def main() -> None:
         test_required_deployment_scripts_exist,
         test_cashier_scripts_use_production_startup_and_pid_identity,
         test_autostart_task_names_are_stable,
+        test_cashier_autostart_task_runs_elevated_as_interactive_user,
+        test_client_autostart_task_runs_elevated_as_interactive_user,
         test_config_examples_are_secret_safe,
         test_development_and_production_urls_are_separate,
         lambda: test_deployment_paths_are_outside_source_defaults(

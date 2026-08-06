@@ -291,6 +291,136 @@ def test_reconnect_restores_open_time_elapsed_state() -> None:
             client.stop()
 
 
+def test_open_time_elapsed_ticks_schedule_gui_refresh() -> None:
+    # Root cause of the frozen "Elapsed Time" overlay: update_time() used to
+    # return early for is_elapsed sessions *before* reaching
+    # schedule_gui_refresh(), so the background open-time timer thread kept
+    # self.state.seconds_value correct every second (build_view_model() below
+    # always looked fine) while the live Tk widget was never told to repaint.
+    # This directly regressions the scheduling call the countdown path always
+    # had and the elapsed path was missing.
+    overlay = CustomerOverlayController("PC-09", enable_gui=False)
+    overlay.show_session("Open Time", is_elapsed=True)
+    refresh_calls: list[int] = []
+    overlay.schedule_gui_refresh = lambda: refresh_calls.append(1)
+    overlay.update_time(60)
+    overlay.update_time(61)
+    overlay.update_time(62)
+    assert len(refresh_calls) == 3
+    assert overlay.build_view_model().timer_value == overlay.format_timer(62)
+
+
+def test_timed_session_ticks_schedule_gui_refresh() -> None:
+    overlay = CustomerOverlayController("PC-10", enable_gui=False)
+    overlay.show_session("Prepaid", is_elapsed=False)
+    refresh_calls: list[int] = []
+    overlay.schedule_gui_refresh = lambda: refresh_calls.append(1)
+    overlay.update_time(120)
+    overlay.update_time(119)
+    assert len(refresh_calls) == 2
+    assert overlay.build_view_model().timer_value == "1:59"
+
+
+def test_reinitializing_active_open_time_session_does_not_spawn_second_timer() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
+        client = create_client(temp_directory)
+        started_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+        try:
+            assert client.initialize_local_session(
+                session_id="open-time-dup",
+                duration_seconds=None,
+                scheduled_end_at=started_at.isoformat(),
+                session_mode="open_time",
+            )
+            first_thread = client.active_session.timer_thread
+            assert first_thread is not None
+            assert client.initialize_local_session(
+                session_id="open-time-dup",
+                duration_seconds=None,
+                scheduled_end_at=started_at.isoformat(),
+                session_mode="open_time",
+            )
+            assert client.active_session.timer_thread is first_thread
+            assert first_thread.is_alive()
+        finally:
+            client.end_local_session(
+                {
+                    "command_id": "end-open-time-dup",
+                    "type": "end_session",
+                    "payload": {"session_id": "open-time-dup"},
+                }
+            )
+            client.stop()
+
+
+def test_end_session_hides_customer_overlay() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
+        client = create_client(temp_directory)
+        websocket = CapturingWebSocket()
+        try:
+            client.set_current_websocket(websocket)
+            client.start_local_session(
+                start_command("session-hide-overlay", 30),
+                websocket,  # type: ignore[arg-type]
+            )
+            assert client.customer_overlay.state.is_visible
+            client.end_local_session(
+                {
+                    "command_id": "end-session-hide-overlay",
+                    "type": "end_session",
+                    "payload": {"session_id": "session-hide-overlay"},
+                }
+            )
+            assert not client.customer_overlay.state.is_visible
+            assert client.lock_screen.is_locked()
+        finally:
+            client.stop()
+
+
+def test_resync_preserves_collapsed_state_but_new_session_expands() -> None:
+    # A reconnect/resync refresh (member login updating the display name, or
+    # re-adopting an already-active session) must not yank a deliberately
+    # minimized overlay back open. A genuinely new session should, so the
+    # customer notices it started.
+    overlay = CustomerOverlayController("PC-11", enable_gui=False)
+    overlay.show_session("Prepaid", is_new_session=True)
+    overlay.state.is_collapsed = True
+    overlay.show_session("Prepaid", customer_name="Renamed", is_new_session=False)
+    assert overlay.state.is_collapsed is True
+    overlay.show_session("Prepaid", is_new_session=True)
+    assert overlay.state.is_collapsed is False
+
+
+def test_collapsed_overlay_still_receives_timer_updates() -> None:
+    # Heartbeat/timer/command handling must keep running while the overlay
+    # is collapsed -- collapse is a pure display flag on the controller, not
+    # something the session/network layer checks.
+    overlay = CustomerOverlayController("PC-12", enable_gui=False)
+    overlay.show_session("Open Time", is_elapsed=True)
+    overlay.state.is_collapsed = True
+    overlay.update_time(10)
+    overlay.update_time(11)
+    assert overlay.state.seconds_value == 11
+    assert overlay.build_view_model().timer_value == overlay.format_timer(11)
+
+
+def test_lock_screen_remains_non_bypassable() -> None:
+    # The active-session overlay was deliberately redesigned to be a normal,
+    # minimizable window (native title bar, taskbar entry). The lock screen
+    # must never gain any of that -- it stays fullscreen, always-on-top,
+    # borderless, and closable only via the gated development escape.
+    source = (PROJECT_ROOT / "client" / "lock_screen.py").read_text(encoding="utf-8")
+    assert 'self.root.attributes("-fullscreen", True)' in source
+    assert 'self.root.attributes("-topmost", True)' in source
+    assert "self.root.overrideredirect(True)" in source
+    assert 'self.root.protocol("WM_DELETE_WINDOW", self._prevent_close)' in source
+    assert "def _prevent_close(self) -> None:" in source
+    assert '"<Control-Shift-F12>"' in source
+    # The close handler must re-show the lock screen, never let it close.
+    prevent_close = source[source.index("def _prevent_close"):source.index("def _ensure_visible")]
+    assert "_ensure_visible" in prevent_close
+
+
 def test_power_executor_guard_is_enabled_for_tests() -> None:
     from client.remote_controls import default_power_executor
 
@@ -317,6 +447,13 @@ def main() -> None:
     test_shutdown_transition_and_failure_are_customer_safe()
     test_session_start_notification_clears_old_session_data()
     test_reconnect_restores_open_time_elapsed_state()
+    test_open_time_elapsed_ticks_schedule_gui_refresh()
+    test_timed_session_ticks_schedule_gui_refresh()
+    test_reinitializing_active_open_time_session_does_not_spawn_second_timer()
+    test_end_session_hides_customer_overlay()
+    test_resync_preserves_collapsed_state_but_new_session_expands()
+    test_collapsed_overlay_still_receives_timer_updates()
+    test_lock_screen_remains_non_bypassable()
     test_power_executor_guard_is_enabled_for_tests()
     print("Customer UI smoke tests passed.")
 

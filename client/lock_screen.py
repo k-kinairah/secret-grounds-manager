@@ -10,6 +10,7 @@ from client.tk_runtime import (
     log_tk_startup_error,
     show_native_startup_error,
 )
+from client.utils import get_logo_path
 
 
 GuiAction = Callable[[], None]
@@ -87,6 +88,12 @@ class LockScreenController:
         self.gui_ready_event = Event()
         self.gui_error: BaseException | None = None
         self.pump_after_id = None
+        # Tk drops a PhotoImage as soon as nothing references it from Python,
+        # even while it is still assigned to a Label -- keep this reference
+        # alive for as long as the controller exists so the logo doesn't
+        # vanish shortly after being displayed.
+        self.logo_image = None
+        self._font_size: Callable[[int], int] | None = None
 
     def start(self) -> None:
         if self.enable_dev_escape:
@@ -291,8 +298,20 @@ class LockScreenController:
         self.root.overrideredirect(True)
         self.root.protocol("WM_DELETE_WINDOW", self._prevent_close)
         self.root.bind("<Unmap>", lambda _: self._ensure_visible())
-        self.root.bind("<FocusOut>", lambda _: self._ensure_visible())
+        self.root.bind("<FocusOut>", lambda _: self._handle_focus_out())
         self.root.bind("<Control-Shift-F12>", lambda _: self.use_development_escape())
+
+        # Scale text/target sizes off the real screen height so the lock
+        # screen reads correctly on a 1366x768 laptop panel, a 1920x1080
+        # monitor, and an ultrawide alike, instead of one fixed point size
+        # that only looks right at 1080p.
+        screen_height = self.root.winfo_screenheight()
+        scale = max(0.8, min(1.4, screen_height / 1080))
+
+        def font_size(base: int) -> int:
+            return max(9, round(base * scale))
+
+        self._font_size = font_size
 
         container = tk.Frame(self.root, background="#05070D")
         container.pack(expand=True, fill="both")
@@ -315,21 +334,12 @@ class LockScreenController:
             menu_button.configure(menu=menu)
             menu_button.place(relx=1.0, x=-18, y=18, anchor="ne")
 
-        mark = tk.Label(
-            container,
-            text="SG",
-            font=("Segoe UI", 34, "bold"),
-            foreground="#020617",
-            background="#22D3EE",
-            padx=26,
-            pady=12,
-        )
-        mark.pack(pady=(84, 22))
+        self._build_brand_mark(tk, container, scale).pack(pady=(round(84 * scale), 22))
 
         title = tk.Label(
             container,
             text="Secret Grounds",
-            font=("Segoe UI", 52, "bold"),
+            font=("Segoe UI", font_size(52), "bold"),
             foreground="#E0FAFF",
             background="#05070D",
         )
@@ -339,7 +349,7 @@ class LockScreenController:
         unavailable = tk.Label(
             container,
             text="This computer is currently unavailable",
-            font=("Segoe UI", 28, "bold"),
+            font=("Segoe UI", font_size(28), "bold"),
             foreground="#F9FAFB",
             background="#05070D",
         )
@@ -349,7 +359,7 @@ class LockScreenController:
         cashier = tk.Label(
             container,
             text="Please ask the cashier to start a session",
-            font=("Segoe UI", 18),
+            font=("Segoe UI", font_size(18)),
             foreground="#A7B8D4",
             background="#05070D",
             justify="center",
@@ -371,55 +381,63 @@ class LockScreenController:
             login_title = tk.Label(
                 login_frame,
                 text="Member Login",
-                font=("Segoe UI", 15, "bold"),
+                font=("Segoe UI", font_size(16), "bold"),
                 foreground="#F9FAFB",
                 background="#0B1220",
             )
-            login_title.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+            login_title.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
 
             username_label = tk.Label(
                 login_frame,
                 text="Username",
-                font=("Segoe UI", 10, "bold"),
+                font=("Segoe UI", font_size(11), "bold"),
                 foreground="#CBD5E1",
                 background="#0B1220",
             )
             username_label.grid(row=1, column=0, sticky="w")
             self.username_entry = tk.Entry(
                 login_frame,
-                width=24,
-                font=("Segoe UI", 13),
+                width=26,
+                font=("Segoe UI", font_size(16)),
                 foreground="#F8FAFC",
                 background="#111827",
                 insertbackground="#F8FAFC",
                 relief="flat",
+                highlightthickness=2,
+                highlightbackground="#1F2937",
+                highlightcolor="#22D3EE",
             )
-            self.username_entry.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(4, 10))
+            self.username_entry.grid(
+                row=2, column=0, columnspan=3, sticky="ew", pady=(6, 14), ipady=6
+            )
 
             pin_label = tk.Label(
                 login_frame,
                 text="PIN",
-                font=("Segoe UI", 10, "bold"),
+                font=("Segoe UI", font_size(11), "bold"),
                 foreground="#CBD5E1",
                 background="#0B1220",
             )
             pin_label.grid(row=3, column=0, sticky="w")
             self.pin_entry = tk.Entry(
                 login_frame,
-                width=14,
-                font=("Segoe UI", 13),
+                width=15,
+                font=("Segoe UI", font_size(16)),
                 foreground="#F8FAFC",
                 background="#111827",
                 insertbackground="#F8FAFC",
                 relief="flat",
                 show="*",
+                highlightthickness=2,
+                highlightbackground="#1F2937",
+                highlightcolor="#22D3EE",
             )
-            self.pin_entry.grid(row=4, column=0, sticky="ew", pady=(4, 10))
+            self.pin_entry.grid(row=4, column=0, sticky="ew", pady=(6, 14), ipady=6)
             self.pin_toggle_button = tk.Button(
                 login_frame,
                 text="Show PIN",
                 command=self._toggle_pin_visibility,
-                font=("Segoe UI", 9, "bold"),
+                font=("Segoe UI", font_size(10), "bold"),
                 foreground="#E0FAFF",
                 background="#164E63",
                 activeforeground="#FFFFFF",
@@ -427,12 +445,12 @@ class LockScreenController:
                 relief="flat",
                 padx=10,
             )
-            self.pin_toggle_button.grid(row=4, column=1, sticky="ew", padx=(8, 0), pady=(4, 10))
+            self.pin_toggle_button.grid(row=4, column=1, sticky="ew", padx=(8, 0), pady=(6, 14))
             self.login_button = tk.Button(
                 login_frame,
                 text="Log in",
                 command=self._submit_member_login,
-                font=("Segoe UI", 10, "bold"),
+                font=("Segoe UI", font_size(11), "bold"),
                 foreground="#020617",
                 background="#22D3EE",
                 activeforeground="#020617",
@@ -440,14 +458,14 @@ class LockScreenController:
                 relief="flat",
                 padx=14,
             )
-            self.login_button.grid(row=4, column=2, sticky="ew", padx=(8, 0), pady=(4, 10))
+            self.login_button.grid(row=4, column=2, sticky="ew", padx=(8, 0), pady=(6, 14))
             self.login_message_label = tk.Label(
                 login_frame,
                 text="",
-                font=("Segoe UI", 10),
+                font=("Segoe UI", font_size(11)),
                 foreground="#FBBF24",
                 background="#0B1220",
-                wraplength=360,
+                wraplength=420,
                 justify="left",
             )
             self.login_message_label.grid(row=5, column=0, columnspan=3, sticky="w")
@@ -457,10 +475,25 @@ class LockScreenController:
             if self.pin_entry is not None:
                 self.pin_entry.bind("<Return>", lambda _: self._submit_member_login())
 
+            # Tk's default focus indication on a flat-relief Entry is easy to
+            # miss on a projector-lit shop monitor. Swap the highlight ring
+            # color explicitly so a focused field is unambiguous.
+            for entry in (self.username_entry, self.pin_entry):
+                if entry is None:
+                    continue
+                entry.bind(
+                    "<FocusIn>",
+                    lambda _, widget=entry: widget.configure(highlightbackground="#22D3EE"),
+                )
+                entry.bind(
+                    "<FocusOut>",
+                    lambda _, widget=entry: widget.configure(highlightbackground="#1F2937"),
+                )
+
         self.countdown_label = tk.Label(
             container,
             text="",
-            font=("Consolas", 72, "bold"),
+            font=("Consolas", font_size(72), "bold"),
             foreground="#22D3EE",
             background="#05070D",
         )
@@ -469,7 +502,7 @@ class LockScreenController:
         pc_label = tk.Label(
             container,
             text=f"PC name: {self.pc_name}",
-            font=("Segoe UI", 18, "bold"),
+            font=("Segoe UI", font_size(18), "bold"),
             foreground="#67E8F9",
             background="#05070D",
         )
@@ -478,7 +511,7 @@ class LockScreenController:
         self.connection_label = tk.Label(
             container,
             text="Connection status: Offline",
-            font=("Segoe UI", 16),
+            font=("Segoe UI", font_size(16)),
             foreground="#FCA5A5",
             background="#05070D",
         )
@@ -489,6 +522,35 @@ class LockScreenController:
         self.gui_ready_event.set()
         self._pump_actions()
         self.root.mainloop()
+
+    def _build_brand_mark(self, tk, container, scale: float = 1.0):
+        """Return a Label showing the real logo, or a safe text fallback."""
+        logo_path = get_logo_path()
+        if logo_path is not None:
+            try:
+                image = tk.PhotoImage(file=str(logo_path))
+                target_height = round(120 * scale)
+                if image.height() > target_height:
+                    factor = max(1, round(image.height() / target_height))
+                    image = image.subsample(factor, factor)
+                self.logo_image = image
+                return tk.Label(
+                    container,
+                    image=self.logo_image,
+                    background="#05070D",
+                )
+            except Exception as error:
+                log_tk_startup_error("Lock screen logo image failed to load", error)
+
+        return tk.Label(
+            container,
+            text="SG",
+            font=("Segoe UI", 34, "bold"),
+            foreground="#020617",
+            background="#22D3EE",
+            padx=26,
+            pady=12,
+        )
 
     def _pump_actions(self) -> None:
         if self.root is None:
@@ -512,7 +574,34 @@ class LockScreenController:
         self.root.deiconify()
         self.root.attributes("-topmost", True)
         self.root.lift()
-        self.root.focus_force()
+        # Only steal focus back to the toplevel if nothing in our own window
+        # currently holds it. Unconditionally calling focus_force() here was
+        # the root cause of unusable Member Login fields: every FocusOut
+        # (including the completely normal one that fires when a user clicks
+        # from the toplevel into username_entry) re-ran this method, which
+        # yanked keyboard focus back to the root window away from the entry
+        # the user just clicked into -- so typed characters never reached it.
+        if self.root.focus_get() is None:
+            self.root.focus_force()
+
+    def _handle_focus_out(self) -> None:
+        if self.root is None:
+            return
+        # Defer the check: FocusOut on the toplevel fires for BOTH "focus left
+        # this application entirely" and "focus moved to one of our own child
+        # widgets" (e.g. clicking into username_entry). By the time this runs
+        # on the next event-loop pass, focus_get() reflects where focus
+        # actually landed -- non-None means it's still somewhere in our own
+        # window (a child widget got FocusIn), so there is nothing to
+        # reassert. None means focus truly left the app (e.g. Alt+Tab), which
+        # is the only case the lock screen needs to reclaim visibility for.
+        self.root.after(50, self._reassert_if_focus_left_app)
+
+    def _reassert_if_focus_left_app(self) -> None:
+        if self.root is None:
+            return
+        if self.root.focus_get() is None:
+            self._ensure_visible()
 
     def _hide_window(self) -> None:
         if self.root is not None:
@@ -530,6 +619,15 @@ class LockScreenController:
             self.root = None
             root.quit()
             root.destroy()
+            # Drop the PhotoImage reference synchronously, in the same
+            # thread and before interpreter teardown, rather than letting
+            # Python's GC collect it at some unpredictable later point --
+            # PhotoImage.__del__ tries to call back into Tcl, which raises a
+            # harmless but noisy "main thread is not in main loop" error if
+            # that happens after mainloop has already exited (most visible
+            # when a second Tk() root is created later in the same process,
+            # e.g. back-to-back packaged GUI smoke checks).
+            self.logo_image = None
 
     def _prevent_close(self) -> None:
         self._ensure_visible()
@@ -675,7 +773,56 @@ def run_lock_screen_gui_smoke(timeout_seconds: float = 6.0) -> None:
                 if any(widget is None for widget in required_widgets):
                     raise AssertionError("Member login widgets were not created.")
 
+                if controller.logo_image is None:
+                    raise AssertionError(
+                        "Lock screen fell back to the text mark instead of "
+                        "loading the packaged Secret Grounds logo."
+                    )
+
+                # Responsive scaling: font sizes must move with screen size
+                # (within sane bounds), not stay a single fixed point size
+                # regardless of the monitor.
+                if controller._font_size is None:
+                    raise AssertionError("Font scaling helper was not set up.")
+                scaled_title = controller._font_size(52)
+                if not (9 <= scaled_title <= round(52 * 1.4)):
+                    raise AssertionError(f"Title font size out of expected range: {scaled_title}")
+
+                if controller.username_entry.cget("highlightthickness") < 1:
+                    raise AssertionError("Login fields have no visible focus ring configured.")
+
+                # Mouse click focuses the field: focus_set() is the
+                # programmatic equivalent of the click-to-focus Tk already
+                # gives Entry widgets for free once nothing is stealing focus
+                # back out from under it.
+                controller.username_entry.focus_set()
+                controller.root.update_idletasks()
+                controller.root.update()
+                if controller.root.focus_get() is not controller.username_entry:
+                    raise AssertionError("Clicking the username field did not focus it.")
+
+                # Regression check for the actual reported bug: re-showing the
+                # lock screen (what every <Unmap>/<FocusOut> re-assertion used
+                # to do unconditionally) must not steal focus away from a
+                # field the user is actively using.
+                controller._show_window()
+                controller.root.update_idletasks()
+                controller.root.update()
+                if controller.root.focus_get() is not controller.username_entry:
+                    raise AssertionError(
+                        "Re-showing the lock screen stole keyboard focus away "
+                        "from the focused username field."
+                    )
+
+                # Tab moves between controls in the expected order.
+                if controller.username_entry.tk_focusNext() is not controller.pin_entry:
+                    raise AssertionError("Tab does not move from username to PIN.")
+                if controller.pin_entry.tk_focusNext() is not controller.pin_toggle_button:
+                    raise AssertionError("Tab does not move from PIN to the Show PIN button.")
+
+                controller.username_entry.delete(0, "end")
                 controller.username_entry.insert(0, "test_member")
+                controller.pin_entry.delete(0, "end")
                 controller.pin_entry.insert(0, "1234")
                 if controller.pin_entry.cget("show") != "*":
                     raise AssertionError("PIN entry is not masked by default.")
@@ -686,7 +833,11 @@ def run_lock_screen_gui_smoke(timeout_seconds: float = 6.0) -> None:
                 if controller.pin_entry.cget("show") != "*":
                     raise AssertionError("PIN hide toggle did not mask the PIN.")
 
-                controller._submit_member_login()
+                # Enter submits from either field, and a second submission
+                # attempt while the first is still processing must be a no-op
+                # (the processing guard finish_login_widget_checks verifies
+                # below via login_calls).
+                controller.pin_entry.event_generate("<Return>")
                 controller._submit_member_login()
                 controller.root.after(200, finish_login_widget_checks)
             except Exception as error:
@@ -701,10 +852,29 @@ def run_lock_screen_gui_smoke(timeout_seconds: float = 6.0) -> None:
                 if len(login_calls) != 1:
                     raise AssertionError("Processing guard allowed duplicate login submission.")
                 login_release.set()
-                controller.root.after(300, finish_smoke)
+                controller.root.after(300, verify_friendly_error_shown)
             except Exception as error:
                 errors.append(str(error))
                 login_release.set()
+                finish_smoke()
+
+        def verify_friendly_error_shown() -> None:
+            try:
+                expected = "That username or PIN did not match. Please try again."
+                if controller.state.login_message != expected:
+                    raise AssertionError(
+                        "Invalid login did not show the friendly error message: "
+                        f"got {controller.state.login_message!r}."
+                    )
+                if controller.login_message_label is not None:
+                    displayed = controller.login_message_label.cget("text")
+                    if displayed != expected:
+                        raise AssertionError(
+                            f"Login message label did not render the error: got {displayed!r}."
+                        )
+                finish_smoke()
+            except Exception as error:
+                errors.append(str(error))
                 finish_smoke()
 
         def finish_smoke() -> None:
