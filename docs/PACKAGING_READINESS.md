@@ -12,8 +12,9 @@ Role:
 
 Included files:
 - `server/`
-- `dashboard/.next/` production build
-- `dashboard/package.json` plus production runtime dependencies, or a bundled Node runtime with a prepared standalone dashboard output
+- `dashboard/.next/standalone/` — the Next.js standalone production build
+  (`output: "standalone"` in `dashboard/next.config.ts`), including its own
+  traced/pruned `node_modules`, `public/`, and `.next/static/`
 - `scripts/` cashier/server deployment scripts
 - `operator-shortcuts/`
 - `VERSION`
@@ -22,16 +23,19 @@ Included files:
 
 Excluded development files:
 - `.git/`, `.agents/`, `.codex/`
-- `dashboard/src/` when shipping a standalone dashboard build
-- `dashboard/node_modules/` dev-only packages when using a pruned production runtime
+- `dashboard/src/`, `dashboard/package.json`, `dashboard/node_modules/` — none of
+  these are shipped; the standalone build under `dashboard/.next/standalone/` is
+  fully self-contained
 - Python caches, test databases, test logs, source maps if not needed for support, local `config/.env`, local `client/config.json`
 - VS Code settings, development dashboards, and dev server launchers
 
 Required runtimes:
 - `runtime\python\` — a private Python runtime built from the official embeddable
-  distribution by `scripts\prepare-backend-runtime.ps1` (see below), plus a pruned
-  dashboard runtime copied by the installer.
-- Not required on the cashier PC after install: VS Code, Git, source checkout workflow, or manual npm commands.
+  distribution by `scripts\prepare-backend-runtime.ps1` (see below).
+- `runtime\node\` — a private `node.exe` built by `scripts\prepare-dashboard-runtime.ps1`
+  from the official Node.js Windows binary, used only to run the standalone
+  `server.js` (no npm, no global Node.js install).
+- Not required on the cashier PC after install: VS Code, Git, Node.js, npm, source checkout workflow.
 
 `runtime\python\` must never be a raw `.venv`. A `venv`'s `Scripts\python.exe` is a
 stub that reads `pyvenv.cfg` to find its "home" interpreter, which hardcodes the
@@ -39,6 +43,11 @@ absolute path of whichever machine created it (an AppData\Local\Python path unde
 the developer's own user profile). Shipping that folder verbatim breaks on any
 other PC. The embeddable distribution has no such external reference, so it is
 what gets copied into `{app}\runtime\python` by the installer.
+
+`runtime\node\` exists for the same reason `runtime\python\` does: the dashboard
+must never assume Node.js/npm are already on the cashier PC. `scripts\start-dashboard.ps1`
+launches `runtime\node\node.exe` directly against `dashboard\.next\standalone\server.js`
+-- it never shells out to a system `node`, `npm`, or the `next` CLI.
 
 Startup behavior:
 - Default startup entry: `Secret Grounds Cashier Stack`.
@@ -173,9 +182,10 @@ FastAPI backend:
   executable if startup and dynamic imports are verified.
 
 Next.js dashboard:
-- Ship a production build, not development sources.
-- Prefer Next.js standalone output with a bundled private Node runtime.
-- Never require `npm run dev` on an installed cashier PC.
+- Shipped as a production standalone build (`dashboard/.next/standalone/`), not
+  development sources, run via a bundled private Node runtime (`runtime\node\`).
+- Never requires `npm run dev`, `next start`, or any global Node.js/npm install
+  on an installed cashier PC.
 
 SQLite database:
 - Installer creates `data/` and `backups/`.
@@ -191,4 +201,3 @@ PowerShell deployment scripts:
 - Administrator/UAC path is needed to install the Private-profile inbound firewall rule for TCP 18001.
 - Task Scheduler registration was denied in the current non-admin context; installer must run elevated or use the current-user Startup fallback.
 - PyInstaller availability and executable behavior must be verified before committing to standalone client packaging.
-- Next.js standalone packaging should be enabled and verified before final cashier installer build.

@@ -14,7 +14,12 @@ This prototype uses Inno Setup and builds a single role-selecting installer:
   `scripts\prepare-backend-runtime.ps1` (downloads the official Python
   embeddable distribution and installs `server\requirements.txt` into it — this
   is not a `.venv` and carries no developer-machine paths).
-- `dashboard\node_modules` and a production `.next` build.
+- Prepared dashboard runtime at `runtime\node\node.exe`, built by running
+  `scripts\prepare-dashboard-runtime.ps1` (downloads the official Node.js
+  Windows binary; only `node.exe` is kept, no npm).
+- Dashboard standalone production build at `dashboard\.next\standalone\server.js`,
+  built by `scripts\build-dashboard.ps1` (requires `dashboard\next.config.ts` to
+  set `output: "standalone"`).
 - PyInstaller client bundle at `dist\SecretGroundsClient\SecretGroundsClient.exe`.
 
 Build command:
@@ -73,9 +78,9 @@ Cashier includes:
 
 - `server\*.py`
 - `runtime\python\` (bundled backend runtime, not a `.venv`)
-- `dashboard\.next\`
-- `dashboard\node_modules\`
-- `dashboard\.next\dev` and `dashboard\.next\cache`
+- `runtime\node\` (bundled `node.exe` only, no npm)
+- `dashboard\.next\standalone\` (self-contained: its own pruned `node_modules`,
+  `public\`, and `.next\static\` are already inside this folder)
 - selected production scripts
 - `operator-shortcuts\`
 - `VERSION`
@@ -99,7 +104,6 @@ Excluded:
 
 ## Known Prototype Limitations
 
-- The cashier role currently ships `dashboard\node_modules` as a runtime folder. A later installer should use a slimmer packaged Node runtime (e.g. Next.js standalone output).
 - Inno Setup must be installed on the build machine.
 - Firewall and Task Scheduler setup request elevation through the installer.
 - Clean two-PC field validation is still required.

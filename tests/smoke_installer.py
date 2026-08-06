@@ -32,7 +32,7 @@ def test_inno_installer_has_role_selection() -> None:
 def test_installer_separates_cashier_and_client_payloads() -> None:
     source = read("installer/SecretGroundsSetup.iss")
     assert 'Source: "..\\server\\*.py"' in source
-    assert 'Source: "..\\dashboard\\.next\\*"' in source
+    assert 'Source: "..\\dashboard\\.next\\standalone\\*"' in source
     assert 'Source: "..\\dist\\SecretGroundsClient\\*"' in source
     assert "Check: IsCashier" in source
     assert "Check: IsClient" in source
@@ -328,6 +328,48 @@ def test_write_sg_failure_diagnostics_tolerates_locked_log() -> None:
     assert "FallbackLogPath" in source
 
 
+def test_installer_ships_bundled_node_runtime_not_system_node() -> None:
+    # A cashier PC must never be required to have Node.js/npm installed. The
+    # dashboard's Next.js standalone build (output: "standalone" in
+    # dashboard/next.config.ts) is fully self-contained -- it must ship with
+    # its own bundled node.exe (scripts/prepare-dashboard-runtime.ps1) rather
+    # than the full dashboard\node_modules tree plus a system/PATH node.
+    source = read("installer/SecretGroundsSetup.iss")
+    assert 'Source: "..\\runtime\\node\\*"; DestDir: "{app}\\runtime\\node"' in source
+    assert 'Source: "..\\dashboard\\.next\\standalone\\*"' in source
+    assert "..\\dashboard\\node_modules" not in source
+    assert "..\\dashboard\\package.json" not in source
+
+
+def test_dashboard_scripts_never_shell_out_to_system_node() -> None:
+    for relative_path in [
+        "scripts/start-dashboard.ps1",
+        "scripts/build-windows-installer.ps1",
+        "scripts/check-deployment.ps1",
+    ]:
+        source = read(relative_path)
+        assert "runtime\\node\\node.exe" in source
+        assert "Resolve-SgNodePath" not in source
+        assert "next\\dist\\bin\\next" not in source
+
+    common = read("scripts/secret-grounds-common.ps1")
+    assert "Resolve-SgNodePath" not in common
+    assert "Get-SgCommandSource" not in common
+
+
+def test_dashboard_builds_self_contained_standalone_output() -> None:
+    config = read("dashboard/next.config.ts")
+    assert 'output: "standalone"' in config
+
+    build_script = read("scripts/build-dashboard.ps1")
+    assert ".next\\standalone" in build_script
+    assert "server.js" in build_script
+    # public/ and .next/static are not copied into .next/standalone by `next
+    # build` itself -- the build script must do it, or the shipped payload
+    # would be missing static assets on a clean install.
+    assert ".next\\static" in build_script
+
+
 def main() -> None:
     tests = [
         test_inno_installer_has_role_selection,
@@ -356,6 +398,9 @@ def main() -> None:
         test_start_backend_logs_command_line_and_failure_diagnostics,
         test_start_secret_grounds_treats_browser_open_as_non_fatal,
         test_write_sg_failure_diagnostics_tolerates_locked_log,
+        test_installer_ships_bundled_node_runtime_not_system_node,
+        test_dashboard_scripts_never_shell_out_to_system_node,
+        test_dashboard_builds_self_contained_standalone_output,
     ]
     for test in tests:
         test()

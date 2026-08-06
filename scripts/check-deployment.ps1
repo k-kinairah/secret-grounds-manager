@@ -17,8 +17,8 @@ if (Test-Path $pythonExe) {
     if ($LASTEXITCODE -ne 0) { Add-Error "Python dependencies missing from the bundled backend runtime." }
 }
 
-if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "dashboard\node_modules"))) { Add-Error "Dashboard node_modules missing. Run scripts\install-dependencies.ps1." }
-if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "dashboard\.next\BUILD_ID"))) { Add-Error "Dashboard production build missing. Run scripts\build-dashboard.ps1." }
+if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "runtime\node\node.exe"))) { Add-Error "Dashboard Node.js runtime missing. Run scripts\prepare-dashboard-runtime.ps1." }
+if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "dashboard\.next\standalone\server.js"))) { Add-Error "Dashboard production build missing. Run scripts\build-dashboard.ps1." }
 
 $secret = Get-SgEnv "SECRET_GROUNDS_DEPLOYMENT_SECRET" ""
 if (Test-SgPlaceholderValue $secret) { Add-Error "SECRET_GROUNDS_DEPLOYMENT_SECRET is missing or still an example value." }

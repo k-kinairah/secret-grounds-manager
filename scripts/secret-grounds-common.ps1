@@ -103,43 +103,6 @@ function Normalize-SgPathEnvironment {
     }
 }
 
-function Get-SgCommandSource {
-    param([string]$Name)
-    $command = Get-Command $Name -ErrorAction SilentlyContinue
-    if ($null -eq $command) {
-        return ""
-    }
-    return [string]$command.Source
-}
-
-function Resolve-SgNodePath {
-    Normalize-SgPathEnvironment
-
-    $nodePath = Get-SgCommandSource "node"
-    if ([string]::IsNullOrWhiteSpace($nodePath)) {
-        $nodePath = Get-SgCommandSource "node.exe"
-    }
-
-    $npmPath = Get-SgCommandSource "npm.cmd"
-    if ([string]::IsNullOrWhiteSpace($nodePath) -and ![string]::IsNullOrWhiteSpace($npmPath)) {
-        $candidate = Join-Path (Split-Path $npmPath) "node.exe"
-        if (Test-Path $candidate) {
-            $nodePath = $candidate
-        }
-    }
-
-    if (![string]::IsNullOrWhiteSpace($nodePath) -and (Test-Path $nodePath)) {
-        return $nodePath
-    }
-
-    $pathValue = [Environment]::GetEnvironmentVariable("Path", "Process")
-    if ([string]::IsNullOrWhiteSpace($pathValue)) {
-        $pathValue = [Environment]::GetEnvironmentVariable("PATH", "Process")
-    }
-    $resolvedNode = if ([string]::IsNullOrWhiteSpace($nodePath)) { "<not found>" } else { $nodePath }
-    $resolvedNpm = if ([string]::IsNullOrWhiteSpace($npmPath)) { "<not found>" } else { $npmPath }
-    throw "Node.js could not be resolved for dashboard startup.`nPATH: $pathValue`nresolved Node location: $resolvedNode`nresolved npm location: $resolvedNpm"
-}
 
 function Get-SgBool {
     param([string]$Name, [bool]$Default = $false)

@@ -39,11 +39,8 @@ Source: "..\ARCHITECTURE.md"; DestDir: "{app}"; Flags: ignoreversion; Check: IsC
 Source: "..\config\.env.example"; DestDir: "{app}\config"; Flags: ignoreversion; Check: IsCashier
 Source: "..\server\*.py"; DestDir: "{app}\server"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsCashier
 Source: "..\runtime\python\*"; DestDir: "{app}\runtime\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"; Check: IsCashier
-Source: "..\dashboard\package.json"; DestDir: "{app}\dashboard"; Flags: ignoreversion; Check: IsCashier
-Source: "..\dashboard\package-lock.json"; DestDir: "{app}\dashboard"; Flags: ignoreversion; Check: IsCashier
-Source: "..\dashboard\next.config.ts"; DestDir: "{app}\dashboard"; Flags: ignoreversion; Check: IsCashier
-Source: "..\dashboard\.next\*"; DestDir: "{app}\dashboard\.next"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "dev\*,cache\*"; Check: IsCashier
-Source: "..\dashboard\node_modules\*"; DestDir: "{app}\dashboard\node_modules"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsCashier
+Source: "..\runtime\node\*"; DestDir: "{app}\runtime\node"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsCashier
+Source: "..\dashboard\.next\standalone\*"; DestDir: "{app}\dashboard\.next\standalone"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsCashier
 Source: "..\operator-shortcuts\*"; DestDir: "{app}\operator-shortcuts"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsCashier
 Source: "..\scripts\secret-grounds-common.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\start-secret-grounds.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier

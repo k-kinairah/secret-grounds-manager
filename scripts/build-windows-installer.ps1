@@ -28,14 +28,14 @@ $clientExe = Join-Path $Script:SecretGroundsRoot "dist\SecretGroundsClient\Secre
 if (!(Test-Path $clientExe)) {
     throw "Packaged client is missing: $clientExe. Run scripts\build-client-executable.ps1 first."
 }
-if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "dashboard\.next\BUILD_ID"))) {
-    throw "Dashboard production build is missing. Run scripts\build-dashboard.ps1 first."
-}
-if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "dashboard\node_modules"))) {
-    throw "Dashboard runtime dependencies are missing. Run scripts\install-dependencies.ps1 first."
+if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "dashboard\.next\standalone\server.js"))) {
+    throw "Dashboard standalone production build is missing. Run scripts\build-dashboard.ps1 first."
 }
 if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "runtime\python\python.exe"))) {
     throw "Cashier Python runtime is missing. Run scripts\prepare-backend-runtime.ps1 before building the installer."
+}
+if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "runtime\node\node.exe"))) {
+    throw "Cashier Node.js runtime is missing. Run scripts\prepare-dashboard-runtime.ps1 before building the installer."
 }
 
 $installerScript = Join-Path $Script:SecretGroundsRoot "installer\SecretGroundsSetup.iss"

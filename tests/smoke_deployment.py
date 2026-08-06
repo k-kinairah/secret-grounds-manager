@@ -61,10 +61,16 @@ def test_cashier_scripts_use_production_startup_and_pid_identity() -> None:
     assert "uvicorn" in backend
     assert "Wait-SgHttpReady" in backend
     assert "healthz" in backend
-    assert "Resolve-SgNodePath" in dashboard
-    assert "next\\dist\\bin\\next" in dashboard
-    assert '"start"' in dashboard
+    # The dashboard must run from a bundled private Node.js runtime, never a
+    # system/PATH-resolved node, npm, or the `next` CLI -- a cashier PC is not
+    # guaranteed to have Node.js installed at all.
+    assert "runtime\\node\\node.exe" in dashboard
+    assert ".next\\standalone\\server.js" in dashboard
+    assert "Resolve-SgNodePath" not in dashboard
+    assert "npm.cmd" not in dashboard
+    assert "next\\dist\\bin\\next" not in dashboard
     assert "next dev" not in dashboard.lower()
+    assert "Resolve-SgNodePath" not in common
     assert "secret-grounds-pids.json" in common
     assert "CommandLine" in common
     assert "Start-Process" in common
@@ -136,7 +142,7 @@ def test_check_deployment_covers_requested_safety_checks() -> None:
     for expected in [
         "SECRET_GROUNDS_DEPLOYMENT_SECRET",
         "SECRET_GROUNDS_TEST_MODE",
-        "dashboard\\.next\\BUILD_ID",
+        "dashboard\\.next\\standalone\\server.js",
         "PRAGMA integrity_check",
         "legacy database",
         "Test-SgPortAvailable",
