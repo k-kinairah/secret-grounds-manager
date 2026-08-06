@@ -27,16 +27,27 @@ $probe = Join-Path (Split-Path $databasePath) ".write-test"
 Remove-Item -LiteralPath $probe
 
 try {
+    Write-SgLine "start-secret-grounds.ps1 invoked (NoBrowser=$NoBrowser, AllowTestMode=$AllowTestMode) with working directory $Script:SecretGroundsRoot." "INFO" $serverLog
     & "$PSScriptRoot\start-backend.ps1" -AllowTestMode:$AllowTestMode
     & "$PSScriptRoot\start-dashboard.ps1"
 
     $openBrowser = (Get-SgBool "SECRET_GROUNDS_OPEN_BROWSER" $true) -and !$NoBrowser
     if ($openBrowser) {
-        Start-Process "http://127.0.0.1:3001"
+        # Opening the browser is a convenience, not a startup requirement: the
+        # backend and dashboard are already confirmed healthy at this point.
+        # A failure here (e.g. no default browser handler reachable from the
+        # calling process) must not be treated as a startup failure and tear
+        # the stack back down.
+        try {
+            Start-Process "http://127.0.0.1:3001"
+        } catch {
+            Write-SgLine "Could not open the dashboard browser window: $($_.Exception.Message)" "WARN" $serverLog
+        }
     }
     Write-SgLine "Secret Grounds cashier stack is running. Backend PID $((Get-SgProcessRecord "backend").Pid), dashboard PID $((Get-SgProcessRecord "dashboard").Pid)." "INFO" $serverLog
 } catch {
     Write-SgLine "Startup failed: $($_.Exception.Message)" "ERROR" $serverLog
+    Write-SgFailureDiagnostics -ErrorLogPath (Get-SgEnv "SECRET_GROUNDS_SERVER_ERROR_LOG" ".\logs\server-error.log") -Role "Cashier stack" -Reason $_.Exception.Message -WorkingDirectory $Script:SecretGroundsRoot
     Stop-SgStartedProcess "dashboard"
     Stop-SgStartedProcess "backend"
     throw

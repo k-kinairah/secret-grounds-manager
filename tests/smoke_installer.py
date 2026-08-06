@@ -286,6 +286,48 @@ def test_backend_scripts_use_bundled_runtime_not_dev_venv() -> None:
         assert ".venv\\Scripts\\python.exe" not in source
 
 
+def test_installer_restart_call_does_not_open_browser_mid_install() -> None:
+    # Passing no -NoBrowser here meant start-secret-grounds.ps1 tried to open
+    # a browser from inside a hidden (SW_HIDE), elevated Exec() call before
+    # the wizard had even finished. If that Start-Process call threw (e.g. no
+    # default browser handler reachable from that context), the exception
+    # tore down an already-healthy backend/dashboard and the installer
+    # reported a misleading "backend could not start". The dashboard is
+    # opened for real, once, by the postinstall [Run] entry below.
+    source = read("installer/SecretGroundsSetup.iss")
+    assert "RunCashierScript('restart-secret-grounds.ps1', '-NoBrowser')" in source
+
+
+def test_start_backend_logs_command_line_and_failure_diagnostics() -> None:
+    source = read("scripts/start-backend.ps1")
+    assert "$commandLine" in source
+    assert "Backend command line:" in source
+    assert "Write-SgFailureDiagnostics" in source
+    assert "-ExitCode $capturedExitCode" in source
+    assert "-FallbackLogPath $serverLog" in source
+
+
+def test_start_secret_grounds_treats_browser_open_as_non_fatal() -> None:
+    # A failed browser launch must never be treated the same as a failed
+    # backend/dashboard start -- the stack is already confirmed healthy by
+    # the time the browser is opened.
+    source = read("scripts/start-secret-grounds.ps1")
+    assert "Could not open the dashboard browser window" in source
+    browser_block = source[source.index("if ($openBrowser)"):source.index("Write-SgLine \"Secret Grounds cashier stack is running")]
+    assert "try {" in browser_block
+    assert "catch {" in browser_block
+
+
+def test_write_sg_failure_diagnostics_tolerates_locked_log() -> None:
+    # The target error log can still be held open by a live process's ">>"
+    # redirect. The diagnostics writer must use a share-mode that does not
+    # collide with that handle, and must never silently drop the diagnostic
+    # if writing still fails after retrying.
+    source = read("scripts/secret-grounds-common.ps1")
+    assert "[System.IO.FileShare]::ReadWrite" in source
+    assert "FallbackLogPath" in source
+
+
 def main() -> None:
     tests = [
         test_inno_installer_has_role_selection,
@@ -310,6 +352,10 @@ def main() -> None:
         test_no_developer_specific_absolute_paths_are_tracked,
         test_installer_ships_bundled_runtime_not_dev_venv,
         test_backend_scripts_use_bundled_runtime_not_dev_venv,
+        test_installer_restart_call_does_not_open_browser_mid_install,
+        test_start_backend_logs_command_line_and_failure_diagnostics,
+        test_start_secret_grounds_treats_browser_open_as_non_fatal,
+        test_write_sg_failure_diagnostics_tolerates_locked_log,
     ]
     for test in tests:
         test()

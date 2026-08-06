@@ -589,7 +589,15 @@ begin
   Retry := True;
   while Retry do begin
     Retry := False;
-    if RunCashierScript('restart-secret-grounds.ps1', '') then begin
+    // -NoBrowser: this runs hidden (SW_HIDE) under the installer's own elevated
+    // token, before the wizard has even finished. Launching a browser from that
+    // context is pointless (the user cannot see the wizard yet) and risks
+    // Start-Process throwing under an elevated/non-interactive shell process,
+    // which would tear down an already-healthy backend/dashboard and report a
+    // false "backend could not start". The dashboard is opened for real once,
+    // on the user's own desktop, by the [Run] postinstall entry below, gated on
+    // CashierServicesAreHealthy.
+    if RunCashierScript('restart-secret-grounds.ps1', '-NoBrowser') then begin
       CashierServicesHealthy := True;
     end else begin
       if MsgBox(

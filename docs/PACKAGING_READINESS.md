@@ -35,10 +35,10 @@ Required runtimes:
 
 `runtime\python\` must never be a raw `.venv`. A `venv`'s `Scripts\python.exe` is a
 stub that reads `pyvenv.cfg` to find its "home" interpreter, which hardcodes the
-absolute path of whichever machine created it (e.g.
-`C:\Users\<developer>\AppData\Local\Python\...`). Shipping that folder verbatim
-breaks on any other PC. The embeddable distribution has no such external
-reference, so it is what gets copied into `{app}\runtime\python` by the installer.
+absolute path of whichever machine created it (an AppData\Local\Python path under
+the developer's own user profile). Shipping that folder verbatim breaks on any
+other PC. The embeddable distribution has no such external reference, so it is
+what gets copied into `{app}\runtime\python` by the installer.
 
 Startup behavior:
 - Default startup entry: `Secret Grounds Cashier Stack`.

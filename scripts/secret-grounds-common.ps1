@@ -260,6 +260,83 @@ function Remove-SgProcessRecord {
     Save-SgPidState ([pscustomobject]$hash)
 }
 
+function Get-SgPortOwnerDescription {
+    param([int]$Port)
+    try {
+        $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop
+        $descriptions = foreach ($connection in $connections) {
+            $process = Get-Process -Id $connection.OwningProcess -ErrorAction SilentlyContinue
+            if ($process) {
+                "PID $($connection.OwningProcess) ($($process.ProcessName))"
+            } else {
+                "PID $($connection.OwningProcess)"
+            }
+        }
+        if ($descriptions) {
+            return ($descriptions -join ", ")
+        }
+        return "unknown process"
+    } catch {
+        return "unknown process"
+    }
+}
+
+function Write-SgFailureDiagnostics {
+    param(
+        [string]$ErrorLogPath,
+        [string]$Role,
+        [string]$Reason,
+        [string]$CommandLine = "",
+        [string]$WorkingDirectory = "",
+        [object]$ExitCode = $null,
+        [string]$FallbackLogPath = ""
+    )
+    $resolvedLog = Resolve-SgPath $ErrorLogPath
+    New-Item -ItemType Directory -Force -Path (Split-Path $resolvedLog) | Out-Null
+    $lines = @(
+        ""
+        "---- $Role startup failure: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ----"
+        "Reason: $Reason"
+    )
+    if ($CommandLine) { $lines += "Command line: $CommandLine" }
+    if ($WorkingDirectory) { $lines += "Working directory: $WorkingDirectory" }
+    if ($null -ne $ExitCode) { $lines += "Exit code: $ExitCode" }
+    $text = ($lines -join "`r`n") + "`r`n"
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+
+    # Add-Content's default share mode collides with the target log still
+    # being held open for append by a launch wrapper's ">>" redirect (the
+    # process being diagnosed may still be alive, or its handle may not have
+    # closed yet). Open with FileShare.ReadWrite explicitly so writing a
+    # diagnostic block never races with, or gets blocked by, that handle.
+    $maxAttempts = 5
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            $stream = [System.IO.FileStream]::new($resolvedLog, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+            try {
+                $stream.Write($bytes, 0, $bytes.Length)
+            } finally {
+                $stream.Dispose()
+            }
+            return
+        } catch [System.IO.IOException] {
+            if ($attempt -eq $maxAttempts) {
+                # The log is still locked (e.g. another still-running process holds it
+                # exclusively) after retrying. Never let the diagnostics vanish silently
+                # under a hidden/elevated installer Exec() call: fall back to a log file
+                # that is not held by that redirect.
+                if ($FallbackLogPath) {
+                    Write-SgLine "Could not write to $resolvedLog ($($_.Exception.Message)). Diagnostics: $($lines -join ' | ')" "ERROR" $FallbackLogPath
+                } else {
+                    Write-Host "Could not write failure diagnostics to $resolvedLog`: $($_.Exception.Message)"
+                }
+                return
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+}
+
 function Test-SgPortAvailable {
     param([int]$Port, [string]$HostName = "127.0.0.1")
     try {
