@@ -26,9 +26,9 @@ $env:SECRET_GROUNDS_SERVER_LOG = Resolve-SgPath $serverLog
 $env:SECRET_GROUNDS_PORT = $port.ToString()
 $env:SECRET_GROUNDS_BIND_HOST = $hostName
 
-$pythonExe = Join-Path $Script:SecretGroundsRoot ".venv\Scripts\python.exe"
+$pythonExe = Join-Path $Script:SecretGroundsRoot "runtime\python\python.exe"
 if (!(Test-Path $pythonExe)) {
-    throw "Python virtual environment is missing: $pythonExe"
+    throw "Backend Python runtime is missing: $pythonExe. Run scripts\prepare-backend-runtime.ps1."
 }
 
 Write-SgLine "Starting Secret Grounds backend $(Get-SgVersion) on $hostName`:$port with database $databasePath." "INFO" $serverLog

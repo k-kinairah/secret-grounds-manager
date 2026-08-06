@@ -34,8 +34,8 @@ if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "dashboard\.next\BUILD_ID")
 if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "dashboard\node_modules"))) {
     throw "Dashboard runtime dependencies are missing. Run scripts\install-dependencies.ps1 first."
 }
-if (!(Test-Path (Join-Path $Script:SecretGroundsRoot ".venv\Scripts\python.exe"))) {
-    throw "Cashier Python runtime is missing. Prepare .venv before building the installer prototype."
+if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "runtime\python\python.exe"))) {
+    throw "Cashier Python runtime is missing. Run scripts\prepare-backend-runtime.ps1 before building the installer."
 }
 
 $installerScript = Join-Path $Script:SecretGroundsRoot "installer\SecretGroundsSetup.iss"

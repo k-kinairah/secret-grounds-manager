@@ -1,3 +1,5 @@
+import re
+import subprocess
 from pathlib import Path
 
 
@@ -6,6 +8,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def read(relative_path: str) -> str:
     return (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _tracked_files() -> list[str]:
+    output = subprocess.run(
+        ["git", "-C", str(PROJECT_ROOT), "ls-files"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return [line for line in output.splitlines() if line]
 
 
 def test_inno_installer_has_role_selection() -> None:
@@ -225,6 +237,55 @@ def test_installer_cashier_role_safety() -> None:
     assert "remove-client-startup-folder-shortcut.ps1" in role_source
 
 
+def test_no_developer_specific_absolute_paths_are_tracked() -> None:
+    # A raw `python -m venv` was once shipped straight into the installer: its
+    # pyvenv.cfg hardcodes the absolute path of whoever created it (e.g.
+    # C:\Users\Kin\AppData\Local\Python\pythoncore-3.14-64\python.exe), which
+    # made the installed backend try to launch a Python that only exists on
+    # the developer's machine and fail with exit code 103 on a clean PC. The
+    # fix replaced that with a self-contained embeddable runtime (see
+    # scripts/prepare-backend-runtime.ps1), but nothing stops a future change
+    # from reintroducing a machine-specific path some other way. Fail the
+    # build if any tracked file contains one.
+    dev_path_pattern = re.compile(r"[Cc]:\\Users\\[^\\\s\"']+\\")
+    pythoncore_pattern = re.compile(r"pythoncore", re.IGNORECASE)
+    self_path = "tests/smoke_installer.py"
+
+    offenders = []
+    for relative_path in _tracked_files():
+        if relative_path == self_path:
+            continue
+        try:
+            text = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if dev_path_pattern.search(text) or pythoncore_pattern.search(text):
+            offenders.append(relative_path)
+
+    assert not offenders, (
+        "Developer-machine absolute paths must never be committed. Found in: "
+        + ", ".join(offenders)
+    )
+
+
+def test_installer_ships_bundled_runtime_not_dev_venv() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    assert 'Source: "..\\runtime\\python\\*"; DestDir: "{app}\\runtime\\python"' in source
+    assert "..\\.venv" not in source
+
+
+def test_backend_scripts_use_bundled_runtime_not_dev_venv() -> None:
+    for relative_path in [
+        "scripts/start-backend.ps1",
+        "scripts/check-deployment.ps1",
+        "scripts/install-backend-firewall-rule.ps1",
+        "scripts/build-windows-installer.ps1",
+    ]:
+        source = read(relative_path)
+        assert "runtime\\python\\python.exe" in source
+        assert ".venv\\Scripts\\python.exe" not in source
+
+
 def main() -> None:
     tests = [
         test_inno_installer_has_role_selection,
@@ -246,6 +307,9 @@ def main() -> None:
         test_installer_does_not_pass_boolean_literals_to_external_powershell,
         test_installer_dashboard_shortcuts_ensure_services_running,
         test_installer_cashier_role_safety,
+        test_no_developer_specific_absolute_paths_are_tracked,
+        test_installer_ships_bundled_runtime_not_dev_venv,
+        test_backend_scripts_use_bundled_runtime_not_dev_venv,
     ]
     for test in tests:
         test()

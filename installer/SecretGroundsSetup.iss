@@ -38,7 +38,7 @@ Source: "..\VERSION"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\ARCHITECTURE.md"; DestDir: "{app}"; Flags: ignoreversion; Check: IsCashier
 Source: "..\config\.env.example"; DestDir: "{app}\config"; Flags: ignoreversion; Check: IsCashier
 Source: "..\server\*.py"; DestDir: "{app}\server"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsCashier
-Source: "..\.venv\*"; DestDir: "{app}\.venv"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"; Check: IsCashier
+Source: "..\runtime\python\*"; DestDir: "{app}\runtime\python"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"; Check: IsCashier
 Source: "..\dashboard\package.json"; DestDir: "{app}\dashboard"; Flags: ignoreversion; Check: IsCashier
 Source: "..\dashboard\package-lock.json"; DestDir: "{app}\dashboard"; Flags: ignoreversion; Check: IsCashier
 Source: "..\dashboard\next.config.ts"; DestDir: "{app}\dashboard"; Flags: ignoreversion; Check: IsCashier

@@ -9,12 +9,12 @@ $warnings = New-Object System.Collections.Generic.List[string]
 function Add-Error([string]$Message) { $errors.Add($Message) | Out-Null }
 function Add-Warning([string]$Message) { $warnings.Add($Message) | Out-Null }
 
-$pythonExe = Join-Path $Script:SecretGroundsRoot ".venv\Scripts\python.exe"
+$pythonExe = Join-Path $Script:SecretGroundsRoot "runtime\python\python.exe"
 if (!(Test-Path $pythonExe)) { Add-Error "Python runtime missing: $pythonExe" }
 
 if (Test-Path $pythonExe) {
-    & $pythonExe -c "import fastapi, uvicorn, requests, sqlite3" 2>$null
-    if ($LASTEXITCODE -ne 0) { Add-Error "Python dependencies missing from .venv." }
+    & $pythonExe -c "import fastapi, uvicorn, sqlite3" 2>$null
+    if ($LASTEXITCODE -ne 0) { Add-Error "Python dependencies missing from the bundled backend runtime." }
 }
 
 if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "dashboard\node_modules"))) { Add-Error "Dashboard node_modules missing. Run scripts\install-dependencies.ps1." }

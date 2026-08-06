@@ -10,7 +10,10 @@ This prototype uses Inno Setup and builds a single role-selecting installer:
 
 - Windows x64.
 - Inno Setup 6 with `ISCC.exe`.
-- Prepared cashier `.venv` with backend dependencies.
+- Prepared backend runtime at `runtime\python\python.exe`, built by running
+  `scripts\prepare-backend-runtime.ps1` (downloads the official Python
+  embeddable distribution and installs `server\requirements.txt` into it — this
+  is not a `.venv` and carries no developer-machine paths).
 - `dashboard\node_modules` and a production `.next` build.
 - PyInstaller client bundle at `dist\SecretGroundsClient\SecretGroundsClient.exe`.
 
@@ -69,7 +72,7 @@ The uninstaller defaults to retaining those folders. It prompts before permanent
 Cashier includes:
 
 - `server\*.py`
-- `.venv\`
+- `runtime\python\` (bundled backend runtime, not a `.venv`)
 - `dashboard\.next\`
 - `dashboard\node_modules\`
 - `dashboard\.next\dev` and `dashboard\.next\cache`
@@ -96,7 +99,7 @@ Excluded:
 
 ## Known Prototype Limitations
 
-- The cashier role currently ships `.venv` and `dashboard\node_modules` as runtime folders. A later installer should use slimmer packaged runtimes.
+- The cashier role currently ships `dashboard\node_modules` as a runtime folder. A later installer should use a slimmer packaged Node runtime (e.g. Next.js standalone output).
 - Inno Setup must be installed on the build machine.
 - Firewall and Task Scheduler setup request elevation through the installer.
 - Clean two-PC field validation is still required.

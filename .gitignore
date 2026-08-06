@@ -1,4 +1,5 @@
 .venv/
+runtime/
 __pycache__/
 *.pyc
 .vscode/
@@ -13,6 +14,7 @@ config/.env
 logs/*.log
 logs/*.json
 logs/*.pid
+logs/*.cmd
 logs/launch-wrappers/
 data/*.db
 data/*.sqlite3

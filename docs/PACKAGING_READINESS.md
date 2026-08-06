@@ -28,9 +28,17 @@ Excluded development files:
 - VS Code settings, development dashboards, and dev server launchers
 
 Required runtimes:
-- Recommended: private bundled Python runtime or PyInstaller/Nuitka-built backend executable, plus private bundled Node runtime or Next.js standalone output.
-- Acceptable interim: portable `.venv` and pruned dashboard runtime copied by the installer.
+- `runtime\python\` — a private Python runtime built from the official embeddable
+  distribution by `scripts\prepare-backend-runtime.ps1` (see below), plus a pruned
+  dashboard runtime copied by the installer.
 - Not required on the cashier PC after install: VS Code, Git, source checkout workflow, or manual npm commands.
+
+`runtime\python\` must never be a raw `.venv`. A `venv`'s `Scripts\python.exe` is a
+stub that reads `pyvenv.cfg` to find its "home" interpreter, which hardcodes the
+absolute path of whichever machine created it (e.g.
+`C:\Users\<developer>\AppData\Local\Python\...`). Shipping that folder verbatim
+breaks on any other PC. The embeddable distribution has no such external
+reference, so it is what gets copied into `{app}\runtime\python` by the installer.
 
 Startup behavior:
 - Default startup entry: `Secret Grounds Cashier Stack`.
@@ -159,7 +167,10 @@ Recommended approach:
 - For the client-only installer, Inno Setup is sufficient if the package is a standalone executable plus config wizard.
 
 FastAPI backend:
-- Package as a private Python runtime plus app files for the first installer milestone, or later as a built executable if startup and dynamic imports are verified.
+- Packaged as a private Python runtime (`runtime\python\`, built by
+  `scripts\prepare-backend-runtime.ps1` from the official embeddable
+  distribution) plus app files. A later milestone may move to a built
+  executable if startup and dynamic imports are verified.
 
 Next.js dashboard:
 - Ship a production build, not development sources.

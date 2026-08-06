@@ -20,7 +20,7 @@ New-NetFirewallRule `
     -Protocol TCP `
     -LocalPort $backendPort `
     -Profile Private `
-    -Program (Join-Path $Script:SecretGroundsRoot ".venv\Scripts\python.exe") `
+    -Program (Join-Path $Script:SecretGroundsRoot "runtime\python\python.exe") `
     -Description "Allows Secret Grounds customer clients to reach the production backend on private networks only." |
     Out-Null
 
