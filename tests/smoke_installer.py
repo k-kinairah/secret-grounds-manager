@@ -465,6 +465,74 @@ def test_uninstall_stop_script_is_shipped_for_both_roles() -> None:
     assert "Check: IsClient" not in line
 
 
+def test_installer_starts_client_immediately_after_online_install() -> None:
+    # Root cause: the installer registered the "Secret Grounds Client"
+    # scheduled task (when "Start automatically with Windows" was checked)
+    # but never triggered it -- the task's only trigger is AtLogOn, so on a
+    # fresh install nothing actually started the client until the next
+    # reboot or sign-in. The task and its action were themselves healthy the
+    # whole time: `Start-ScheduledTask -TaskName "Secret Grounds Client"`
+    # immediately showed the lock screen and brought the station online when
+    # run manually. RunClientPostInstall closes that gap by using the same
+    # task as the launch mechanism right after install.
+    iss_source = read("installer/SecretGroundsSetup.iss")
+    assert "procedure RunClientPostInstall;" in iss_source
+    assert "if SelectedRole <> 'client' then Exit;" in iss_source
+
+    client_post_install_block = iss_source[
+        iss_source.index("procedure RunClientPostInstall"):iss_source.index("procedure CurStepChanged")
+    ]
+    assert "start-client-after-install.ps1" in client_post_install_block
+    # Offline preparation must never trigger a live connection attempt.
+    assert "if not (IsClientOnline or IsClientPreserve) then Exit;" in client_post_install_block
+    assert "could not be started automatically" in client_post_install_block.lower()
+    assert "ClientLogPathMessage" in client_post_install_block
+    assert "function ClientLogPathMessage: String;" in iss_source
+    assert "{app}\\logs\\client.log" in iss_source
+
+    assert "RunClientPostInstall;" in iss_source[iss_source.index("procedure CurStepChanged"):]
+
+    # -KeepAutostart must be a plain presence/absence switch (same
+    # documented reasoning as CashierAutostartArgValue), not a boolean
+    # literal that a new external process cannot reliably parse.
+    assert "function ClientAutostartKeepArgValue: String;" in iss_source
+    assert "'-KeepAutostart'" in iss_source
+    assert "'$true'" not in iss_source
+    assert "'$false'" not in iss_source
+
+    files_block = iss_source[iss_source.index("[Files]"):iss_source.index("[Icons]")]
+    assert "start-client-after-install.ps1" in files_block
+
+
+def test_client_post_install_script_uses_scheduled_task_as_launch_mechanism() -> None:
+    script = read("scripts/start-client-after-install.ps1")
+    # Preferred launch path per the fix: the already-installed scheduled
+    # task, not a second/duplicate way of starting the client.
+    assert 'Start-ScheduledTask -TaskName $taskName' in script
+    assert 'taskName = "Secret Grounds Client"' in script
+    # start-client.ps1 is only mentioned in an explanatory comment (the
+    # scheduled task's own action already runs it) -- this script itself
+    # must never invoke it directly as a second way of starting the client.
+    assert '& "$PSScriptRoot\\start-client.ps1"' not in script
+
+    # Must not create a second process if one is already running.
+    assert "Get-SgRunningClientProcess" in script
+    already_running_block = script[
+        script.index("$alreadyRunning = "):script.index("# The checkbox-gated")
+    ]
+    assert "exit 0" in already_running_block
+    assert "Start-ScheduledTask" not in already_running_block
+
+    # Bounded wait-and-verify, not a fire-and-forget launch.
+    assert "$TimeoutSeconds = 10" in script
+    assert "Get-SgRunningClientProcess" in script[script.index("Start-ScheduledTask -TaskName $taskName"):]
+    assert "exit 1" in script
+
+    # KeepAutostart controls whether the task is left registered afterward.
+    assert "[switch]$KeepAutostart" in script
+    assert "remove-client-autostart.ps1" in script
+
+
 def main() -> None:
     tests = [
         test_inno_installer_has_role_selection,
@@ -501,6 +569,8 @@ def main() -> None:
         test_uninstall_gate_runs_before_any_file_removal,
         test_uninstall_still_removes_both_scheduled_tasks,
         test_uninstall_stop_script_is_shipped_for_both_roles,
+        test_installer_starts_client_immediately_after_online_install,
+        test_client_post_install_script_uses_scheduled_task_as_launch_mechanism,
     ]
     for test in tests:
         test()

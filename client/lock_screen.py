@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from threading import Event, Lock, Thread
 from typing import Callable
 
+from client import theme
 from client.tk_runtime import (
     create_tk_root,
     log_tk_startup_error,
@@ -15,6 +16,7 @@ from client.utils import get_logo_path
 
 GuiAction = Callable[[], None]
 MemberLoginAction = Callable[[str, str], str | None]
+PresentationRefresh = Callable[[], None]
 
 
 @dataclass
@@ -25,8 +27,8 @@ class LockScreenState:
     shop_display_name: str = "Secret Grounds"
     customer_branding_text: str = "Ask the cashier to add more time to continue."
     mode: str = "available"
-    headline: str = "This computer is currently unavailable"
-    instruction: str = "Please ask the cashier to start a session"
+    headline: str = "Available soon."
+    instruction: str = "Please ask the cashier to begin your session."
     countdown: str | None = None
     is_final_warning: bool = False
     login_message: str | None = None
@@ -45,6 +47,10 @@ class LockScreenViewModel:
     connection_online: bool
     is_final_warning: bool
     accent: str
+    is_locked: bool = True
+    dev_escape_active: bool = False
+    login_message: str | None = None
+    is_login_processing: bool = False
 
 
 class LockScreenController:
@@ -60,14 +66,16 @@ class LockScreenController:
         pc_name: str,
         enable_gui: bool,
         enable_dev_escape: bool,
-        open_setup_wizard: Callable[[], None] | None = None,
+        open_setup_wizard: Callable[[], object] | None = None,
         member_login_action: MemberLoginAction | None = None,
+        presentation_refresh: PresentationRefresh | None = None,
     ) -> None:
         self.pc_name = pc_name
         self.enable_gui = enable_gui
         self.enable_dev_escape = enable_dev_escape
         self.open_setup_wizard = open_setup_wizard
         self.member_login_action = member_login_action
+        self.presentation_refresh = presentation_refresh
         self.state = LockScreenState()
         self.state_lock = Lock()
         self.stop_event = Event()
@@ -79,12 +87,15 @@ class LockScreenController:
         self.instruction_label = None
         self.countdown_label = None
         self.title_label = None
+        self.pc_label = None
         self.username_entry = None
         self.pin_entry = None
         self.login_button = None
         self.pin_toggle_button = None
         self.login_message_label = None
         self.pin_visible = False
+        self._username_field = None
+        self._pin_field = None
         self.gui_ready_event = Event()
         self.gui_error: BaseException | None = None
         self.pump_after_id = None
@@ -93,6 +104,9 @@ class LockScreenController:
         # alive for as long as the controller exists so the logo doesn't
         # vanish shortly after being displayed.
         self.logo_image = None
+        # Kept alive for the same reason as logo_image above -- PhotoImage
+        # is dropped as soon as nothing references it from Python.
+        self.watermark_image = None
         self._font_size: Callable[[int], int] | None = None
 
     def start(self) -> None:
@@ -104,6 +118,7 @@ class LockScreenController:
 
         if not self.enable_gui:
             print("Lock screen shown.")
+            self._notify_presentation()
             return
 
         self.gui_thread = Thread(target=self._run_gui, daemon=True)
@@ -120,8 +135,8 @@ class LockScreenController:
             self.state.is_locked = True
             self.state.dev_escape_active = False
             self.state.mode = "available"
-            self.state.headline = "This computer is currently unavailable"
-            self.state.instruction = "Please ask the cashier to start a session"
+            self.state.headline = "Available soon."
+            self.state.instruction = "Please ask the cashier to begin your session."
             self.state.countdown = None
             self.state.is_final_warning = False
             self.state.login_message = None
@@ -130,6 +145,7 @@ class LockScreenController:
         if reason:
             print(reason)
         print("Lock screen shown.")
+        self._notify_presentation()
 
         if self.enable_gui:
             self._schedule(self._show_window)
@@ -158,6 +174,7 @@ class LockScreenController:
             "Expiration grace screen shown: "
             f"shutdown in {minutes}:{seconds:02d}."
         )
+        self._notify_presentation()
 
         if self.enable_gui:
             self._schedule(self._show_window)
@@ -175,6 +192,7 @@ class LockScreenController:
             self.state.countdown = None
             self.state.is_final_warning = False
         print("Shutdown transition screen shown.")
+        self._notify_presentation()
         if self.enable_gui:
             self._schedule(self._show_window)
 
@@ -191,6 +209,7 @@ class LockScreenController:
             self.state.countdown = None
             self.state.is_final_warning = True
         print("Shutdown failure screen shown.")
+        self._notify_presentation()
         if self.enable_gui:
             self._schedule(self._show_window)
 
@@ -202,6 +221,7 @@ class LockScreenController:
             self.state.is_login_processing = False
 
         print("Lock screen hidden.")
+        self._notify_presentation()
 
         if self.enable_gui:
             self._schedule(self._hide_window)
@@ -216,6 +236,7 @@ class LockScreenController:
                 self.state.shop_display_name = shop_display_name
             if customer_branding_text:
                 self.state.customer_branding_text = customer_branding_text
+        self._notify_presentation()
         if self.enable_gui:
             self._schedule(self._update_lock_text)
 
@@ -227,6 +248,7 @@ class LockScreenController:
 
         label = "Online" if is_online else "Offline"
         print(f"WebSocket {label.lower()} state.")
+        self._notify_presentation()
 
         if self.enable_gui:
             self._schedule(self._update_connection_label)
@@ -248,6 +270,10 @@ class LockScreenController:
             instruction = self.state.instruction
             countdown = self.state.countdown
             brand = self.state.shop_display_name
+            is_locked = self.state.is_locked
+            dev_escape_active = self.state.dev_escape_active
+            login_message = self.state.login_message
+            is_login_processing = self.state.is_login_processing
         if is_final_warning:
             accent = "#F87171"
         elif mode == "grace":
@@ -265,6 +291,10 @@ class LockScreenController:
             connection_online=connection_online,
             is_final_warning=is_final_warning,
             accent=accent,
+            is_locked=is_locked,
+            dev_escape_active=dev_escape_active,
+            login_message=login_message,
+            is_login_processing=is_login_processing,
         )
 
     def use_development_escape(self) -> None:
@@ -275,9 +305,57 @@ class LockScreenController:
             self.state.dev_escape_active = True
 
         print("Development escape used.")
+        self._notify_presentation()
 
         if self.enable_gui:
             self._schedule(self._hide_window)
+
+    def set_presentation_refresh(self, refresh: PresentationRefresh | None) -> None:
+        self.presentation_refresh = refresh
+
+    def set_pin_visible(self, is_visible: bool) -> None:
+        self.pin_visible = bool(is_visible)
+
+    def submit_member_login(self, username: str, pin: str) -> None:
+        if self.member_login_action is None:
+            return
+        with self.state_lock:
+            if self.state.is_login_processing:
+                return
+            self.state.login_message = None
+
+        username = username.strip()
+        pin = pin.strip()
+        if not username:
+            self._set_login_message("Enter your username.")
+            return
+        if not pin:
+            self._set_login_message("Enter your PIN.")
+            return
+
+        with self.state_lock:
+            self.state.is_login_processing = True
+            self.state.login_message = "Checking your account..."
+        self._update_login_state()
+        self._notify_presentation()
+
+        def run_login() -> None:
+            message = self.member_login_action(username, pin)
+            if self.enable_gui:
+                self._schedule(lambda: self._finish_member_login(message))
+            else:
+                self._finish_member_login(message)
+
+        Thread(target=run_login, daemon=True).start()
+
+    def _notify_presentation(self) -> None:
+        refresh = self.presentation_refresh
+        if refresh is None:
+            return
+        try:
+            refresh()
+        except Exception as error:
+            print(f"Lock screen presentation refresh failed: {error}")
 
     def _schedule(self, action: GuiAction) -> None:
         self.action_queue.put(action)
@@ -292,7 +370,7 @@ class LockScreenController:
             show_native_startup_error("Lock screen Tk root creation failed", error)
             return
         self.root.title("Secret Grounds")
-        self.root.configure(background="#05070D")
+        self.root.configure(background=theme.BG_DEEP)
         self.root.attributes("-fullscreen", True)
         self.root.attributes("-topmost", True)
         self.root.overrideredirect(True)
@@ -305,6 +383,7 @@ class LockScreenController:
         # screen reads correctly on a 1366x768 laptop panel, a 1920x1080
         # monitor, and an ultrawide alike, instead of one fixed point size
         # that only looks right at 1080p.
+        screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         scale = max(0.8, min(1.4, screen_height / 1080))
 
@@ -313,209 +392,333 @@ class LockScreenController:
 
         self._font_size = font_size
 
-        container = tk.Frame(self.root, background="#05070D")
-        container.pack(expand=True, fill="both")
+        # Branded background: an "environment", not a wallpaper -- layered
+        # per the approved browser-preview reference (docs/ui-preview):
+        # gradient base -> corner ambient glows ("fog"/"volumetric light"
+        # stand-in) -> two curved flowing streaks -> a bloom behind the
+        # branding cluster -> the real logo as a faded watermark -> a
+        # particle scatter -> a vignette darkening the edges. Tk cannot do
+        # blur, alpha compositing, SVG paths, or blend modes, so every layer
+        # here is the closest pure-Tk equivalent (stippled dithering for
+        # "faint", a real spline for "curved", corner patches for
+        # "vignette") -- see the porting-limitations note in the project
+        # notes for what still can't be reproduced.
+        background_canvas = tk.Canvas(
+            self.root, width=screen_width, height=screen_height, highlightthickness=0, bd=0
+        )
+        background_canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        theme.draw_vertical_gradient(background_canvas, screen_width, screen_height // 2, theme.BG_DEEP, theme.BG_MID)
+        theme.draw_vertical_gradient(
+            background_canvas,
+            screen_width,
+            screen_height - screen_height // 2,
+            theme.BG_MID,
+            theme.BG_DEEP,
+            y_offset=screen_height // 2,
+        )
+        # Fog: two soft, asymmetrically-placed ambient glows standing in for
+        # the reference's volumetric light/fog layers. Deliberately small
+        # and restrained -- an earlier pass sized these at 0.28-0.3x screen
+        # height, which read as large solid cyan/blue corner shapes rather
+        # than ambient texture.
+        theme.draw_soft_glow(
+            background_canvas,
+            round(screen_width * 0.12),
+            round(screen_height * 0.82),
+            round(screen_height * 0.13),
+            theme.ACCENT_PRIMARY,
+        )
+        theme.draw_soft_glow(
+            background_canvas,
+            round(screen_width * 0.88),
+            round(screen_height * 0.18),
+            round(screen_height * 0.12),
+            theme.ACCENT_CYAN,
+        )
+        # Two flowing streaks, routed through the outer thirds so their
+        # brightest stretch stays away from the login card's footprint.
+        theme.draw_flowing_streak(
+            background_canvas,
+            [
+                (-screen_width * 0.08, screen_height * 0.14),
+                (screen_width * 0.14, screen_height * 0.07),
+                (screen_width * 0.27, screen_height * 0.30),
+                (screen_width * 0.34, screen_height * 0.42),
+                (screen_width * 0.44, screen_height * 0.55),
+            ],
+            glow_color=theme.ACCENT_CYAN,
+            core_color="#E0FBFF",
+        )
+        theme.draw_flowing_streak(
+            background_canvas,
+            [
+                (screen_width * 1.08, screen_height * 0.90),
+                (screen_width * 0.86, screen_height * 0.80),
+                (screen_width * 0.74, screen_height * 0.62),
+                (screen_width * 0.66, screen_height * 0.50),
+                (screen_width * 0.56, screen_height * 0.36),
+            ],
+            glow_color=theme.ACCENT_PRIMARY,
+            core_color="#DCEBFF",
+        )
+        # Branding bloom: a soft halo specifically behind the logo/title
+        # cluster (roughly the top-center third), separate from the corner
+        # fog glows, so the branding reads as the visual focal point.
+        # Sized down alongside the fog glows above for the same reason.
+        theme.draw_soft_glow(
+            background_canvas,
+            round(screen_width * 0.5),
+            round(screen_height * 0.27),
+            round(screen_height * 0.2),
+            theme.ACCENT_CYAN,
+        )
+        # Watermark: the real logo shape (not a plain diamond), oversized,
+        # faded via stippled overlay, and pushed mostly off the right edge
+        # so it reads as a premium brand mark, not competing artwork.
+        self._draw_lock_watermark(tk, background_canvas, screen_width, screen_height)
+        theme.draw_particles(background_canvas, screen_width, screen_height, count=70, color="#CDEEFF")
+        theme.draw_vignette(background_canvas, screen_width, screen_height)
+
+        container = tk.Frame(self.root, background=theme.BG_DEEP)
+        container.place(relx=0.5, rely=0.5, anchor="center")
 
         if self.open_setup_wizard is not None:
+            # Deliberately a quiet, icon-only affordance in the corner --
+            # not a labeled "Client Menu" button -- so the lock screen reads
+            # as a customer-facing surface, not an admin console. The Setup
+            # wizard itself is unchanged; only its entry point is de-emphasized.
             menu_button = tk.Menubutton(
                 self.root,
-                text="Client Menu",
-                font=("Segoe UI", 10),
-                foreground="#CBD5E1",
-                background="#111827",
-                activeforeground="#F9FAFB",
-                activebackground="#1F2937",
                 relief="flat",
-                padx=12,
+                bd=0,
+                background=theme.BG_DEEP,
+                activebackground=theme.BG_DEEP,
+                highlightthickness=1,
+                highlightbackground=theme.LINE,
+                cursor="hand2",
+                padx=6,
                 pady=6,
             )
+            gear = theme.Icon(menu_button, tk, "gear", size=15, color=theme.TEXT_MUTED, bg=theme.BG_DEEP)
+            gear.canvas.pack()
             menu = tk.Menu(menu_button, tearoff=False)
             menu.add_command(label="Setup...", command=self.open_setup_wizard)
             menu_button.configure(menu=menu)
             menu_button.place(relx=1.0, x=-18, y=18, anchor="ne")
 
-        self._build_brand_mark(tk, container, scale).pack(pady=(round(84 * scale), 22))
+        # Vertical rhythm is deliberately asymmetric, matching the approved
+        # preview: logo/title/headline/instruction form one tight "branding
+        # moment" (small gaps), then one large deliberate gap before the
+        # login card, which sits lower as a secondary, supporting element.
+        self._build_brand_mark(tk, container, scale).pack(pady=(round(36 * scale), round(22 * scale)))
 
-        title = tk.Label(
+        # The hero element of the screen: GlowText gives it a multi-layer
+        # bloom and a faux-heavier weight that a plain tk.Label cannot
+        # produce (Tk has no text-shadow and only a binary bold flag) --
+        # see theme.GlowText's docstring for the exact technique.
+        title = theme.GlowText(
             container,
-            text="Secret Grounds",
+            tk,
+            text=theme.letter_spaced("SECRET GROUNDS"),
             font=("Segoe UI", font_size(52), "bold"),
-            foreground="#E0FAFF",
-            background="#05070D",
+            fill="#FFFFFF",
+            glow_color=theme.ACCENT_CYAN,
+            halo_color=theme.ACCENT_PRIMARY,
+            bg=theme.BG_DEEP,
         )
-        title.pack(pady=(0, 22))
+        title.pack(pady=(0, round(14 * scale)))
         self.title_label = title
 
         unavailable = tk.Label(
             container,
-            text="This computer is currently unavailable",
-            font=("Segoe UI", font_size(28), "bold"),
-            foreground="#F9FAFB",
-            background="#05070D",
+            text="Available soon.",
+            font=("Segoe UI", font_size(16), "bold"),
+            foreground=theme.TEXT_PRIMARY,
+            background=theme.BG_DEEP,
         )
-        unavailable.pack(pady=8)
+        unavailable.pack(pady=(0, 6))
         self.headline_label = unavailable
 
+        # The big deliberate gap: everything above is "the brand", the card
+        # below is "the task".
         cashier = tk.Label(
             container,
-            text="Please ask the cashier to start a session",
-            font=("Segoe UI", font_size(18)),
-            foreground="#A7B8D4",
-            background="#05070D",
+            text="Please ask the cashier to begin your session.",
+            font=("Segoe UI", font_size(11)),
+            foreground=theme.TEXT_MUTED,
+            background=theme.BG_DEEP,
             justify="center",
         )
-        cashier.pack(pady=8)
+        cashier.pack(pady=(0, round(54 * scale)))
         self.instruction_label = cashier
 
         if self.member_login_action is not None:
-            login_frame = tk.Frame(
-                container,
-                background="#0B1220",
-                highlightthickness=1,
-                highlightbackground="#1F2937",
-                padx=18,
-                pady=16,
+            # A glass-like rounded card: real rounded corners require an OS
+            # window region, which only applies to top-level windows, not a
+            # child Frame -- so the card is a Canvas with a rounded-rect
+            # polygon background, and the actual interactive widgets are a
+            # normal Frame embedded on top via create_window. The card is
+            # sized in two passes: build the content first at its natural
+            # size, then size/draw the canvas to match.
+            card_canvas = tk.Canvas(container, highlightthickness=0, bd=0, background=theme.BG_DEEP)
+            field_width = round(300 * scale)
+            field_height = round(40 * scale)
+            # Slightly darker than the shared PANEL token (used verbatim by
+            # the overlay elsewhere) and a larger, softer corner radius --
+            # local to this card only, not a change to the shared theme.
+            login_card_bg = "#0A101D"
+            login_card_radius = theme.RADIUS_CARD + 6
+
+            inner = tk.Frame(
+                card_canvas,
+                background=login_card_bg,
+                padx=round(32 * scale),
+                pady=round(24 * scale),
             )
-            login_frame.pack(pady=(22, 4))
 
             login_title = tk.Label(
-                login_frame,
-                text="Member Login",
-                font=("Segoe UI", font_size(16), "bold"),
-                foreground="#F9FAFB",
-                background="#0B1220",
+                inner,
+                text="MEMBER LOGIN",
+                font=("Segoe UI", font_size(12), "bold"),
+                foreground=theme.ACCENT_PRIMARY,
+                background=login_card_bg,
             )
-            login_title.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
+            login_title.pack(pady=(0, round(16 * scale)))
 
             username_label = tk.Label(
-                login_frame,
-                text="Username",
-                font=("Segoe UI", font_size(11), "bold"),
-                foreground="#CBD5E1",
-                background="#0B1220",
+                inner,
+                text="username",
+                font=("Segoe UI", font_size(9), "bold"),
+                foreground=theme.TEXT_MUTED,
+                background=login_card_bg,
+                anchor="w",
             )
-            username_label.grid(row=1, column=0, sticky="w")
-            self.username_entry = tk.Entry(
-                login_frame,
-                width=26,
-                font=("Segoe UI", font_size(16)),
-                foreground="#F8FAFC",
-                background="#111827",
-                insertbackground="#F8FAFC",
-                relief="flat",
-                highlightthickness=2,
-                highlightbackground="#1F2937",
-                highlightcolor="#22D3EE",
+            username_label.pack(fill="x", pady=(0, 4))
+            username_field = theme.IconField(
+                inner,
+                tk,
+                icon="user",
+                placeholder="enter username",
+                width=field_width,
+                height=field_height,
+                font=("Segoe UI", font_size(10)),
+                bg=login_card_bg,
             )
-            self.username_entry.grid(
-                row=2, column=0, columnspan=3, sticky="ew", pady=(6, 14), ipady=6
-            )
+            username_field.pack(pady=(0, round(12 * scale)))
+            self.username_entry = username_field.entry
+            self._username_field = username_field
 
             pin_label = tk.Label(
-                login_frame,
-                text="PIN",
-                font=("Segoe UI", font_size(11), "bold"),
-                foreground="#CBD5E1",
-                background="#0B1220",
+                inner,
+                text="pin",
+                font=("Segoe UI", font_size(9), "bold"),
+                foreground=theme.TEXT_MUTED,
+                background=login_card_bg,
+                anchor="w",
             )
-            pin_label.grid(row=3, column=0, sticky="w")
-            self.pin_entry = tk.Entry(
-                login_frame,
-                width=15,
-                font=("Segoe UI", font_size(16)),
-                foreground="#F8FAFC",
-                background="#111827",
-                insertbackground="#F8FAFC",
-                relief="flat",
+            pin_label.pack(fill="x", pady=(0, 4))
+            pin_field = theme.IconField(
+                inner,
+                tk,
+                icon="lock",
+                placeholder="enter pin",
+                width=field_width,
+                height=field_height,
                 show="*",
-                highlightthickness=2,
-                highlightbackground="#1F2937",
-                highlightcolor="#22D3EE",
+                trailing_icon="eye",
+                trailing_command=self._toggle_pin_visibility,
+                font=("Segoe UI", font_size(10)),
+                bg=login_card_bg,
             )
-            self.pin_entry.grid(row=4, column=0, sticky="ew", pady=(6, 14), ipady=6)
-            self.pin_toggle_button = tk.Button(
-                login_frame,
-                text="Show PIN",
-                command=self._toggle_pin_visibility,
-                font=("Segoe UI", font_size(10), "bold"),
-                foreground="#E0FAFF",
-                background="#164E63",
-                activeforeground="#FFFFFF",
-                activebackground="#155E75",
-                relief="flat",
-                padx=10,
-            )
-            self.pin_toggle_button.grid(row=4, column=1, sticky="ew", padx=(8, 0), pady=(6, 14))
-            self.login_button = tk.Button(
-                login_frame,
-                text="Log in",
-                command=self._submit_member_login,
-                font=("Segoe UI", font_size(11), "bold"),
-                foreground="#020617",
-                background="#22D3EE",
-                activeforeground="#020617",
-                activebackground="#67E8F9",
-                relief="flat",
-                padx=14,
-            )
-            self.login_button.grid(row=4, column=2, sticky="ew", padx=(8, 0), pady=(6, 14))
+            pin_field.pack(pady=(0, round(10 * scale)))
+            self.pin_entry = pin_field.entry
+            # Kept as a plain attribute (not the IconField wrapper) so
+            # existing callers that toggle its color and click state can
+            # keep treating it as a single object, same as before.
+            self.pin_toggle_button = pin_field.trailing_icon
+            self._pin_field = pin_field
+
             self.login_message_label = tk.Label(
-                login_frame,
+                inner,
                 text="",
-                font=("Segoe UI", font_size(11)),
-                foreground="#FBBF24",
-                background="#0B1220",
-                wraplength=420,
+                font=("Segoe UI", font_size(10)),
+                foreground=theme.WARNING,
+                background=login_card_bg,
+                wraplength=field_width,
                 justify="left",
             )
-            self.login_message_label.grid(row=5, column=0, columnspan=3, sticky="w")
-            login_frame.columnconfigure(0, weight=1)
+            self.login_message_label.pack(anchor="w", pady=(0, 14))
+
+            # Full-width gradient LOG IN button with a hover glow (built
+            # into GradientButton) -- the card's single call to action.
+            self.login_button = theme.GradientButton(
+                inner,
+                tk,
+                text="LOG IN",
+                command=self._submit_member_login,
+                width=field_width,
+                height=round(42 * scale),
+                font=("Segoe UI", font_size(10), "bold"),
+                bg=login_card_bg,
+            )
+            self.login_button.pack()
+
+            inner.update_idletasks()
+            content_width = inner.winfo_reqwidth()
+            content_height = inner.winfo_reqheight()
+            card_canvas.configure(width=content_width, height=content_height)
+            # Softer border than the plain LINE token -- refined, not
+            # redesigned, per the approved preview's "more glass" note.
+            # True translucency/backdrop-blur has no Tk equivalent (see
+            # porting-limitations note); a dimmer solid border/no extra
+            # glow is the closest approximation.
+            theme.draw_rounded_rect(
+                card_canvas, 0, 0, content_width, content_height, login_card_radius,
+                fill=login_card_bg, outline="#26314A", width=1,
+            )
+            card_canvas.create_window(0, 0, window=inner, anchor="nw")
+            # Top gap is now carried by the instruction label's own large
+            # bottom margin above -- this only needs a small bottom margin.
+            card_canvas.pack(pady=(0, 4))
+
             if self.username_entry is not None:
                 self.username_entry.bind("<Return>", lambda _: self._submit_member_login())
             if self.pin_entry is not None:
                 self.pin_entry.bind("<Return>", lambda _: self._submit_member_login())
 
-            # Tk's default focus indication on a flat-relief Entry is easy to
-            # miss on a projector-lit shop monitor. Swap the highlight ring
-            # color explicitly so a focused field is unambiguous.
-            for entry in (self.username_entry, self.pin_entry):
-                if entry is None:
-                    continue
-                entry.bind(
-                    "<FocusIn>",
-                    lambda _, widget=entry: widget.configure(highlightbackground="#22D3EE"),
-                )
-                entry.bind(
-                    "<FocusOut>",
-                    lambda _, widget=entry: widget.configure(highlightbackground="#1F2937"),
-                )
-
         self.countdown_label = tk.Label(
             container,
             text="",
             font=("Consolas", font_size(72), "bold"),
-            foreground="#22D3EE",
-            background="#05070D",
+            foreground=theme.ACCENT_CYAN,
+            background=theme.BG_DEEP,
         )
         self.countdown_label.pack(pady=(20, 8))
 
-        pc_label = tk.Label(
-            container,
-            text=f"PC name: {self.pc_name}",
-            font=("Segoe UI", font_size(18), "bold"),
-            foreground="#67E8F9",
-            background="#05070D",
-        )
-        pc_label.pack(pady=(36, 8))
-
+        # Connection status only earns screen space when there is actually a
+        # problem connecting to the cashier -- not shown at all otherwise.
         self.connection_label = tk.Label(
             container,
-            text="Connection status: Offline",
-            font=("Segoe UI", font_size(16)),
-            foreground="#FCA5A5",
-            background="#05070D",
+            text="Reconnecting...",
+            font=("Segoe UI", font_size(13), "bold"),
+            foreground=theme.WARNING,
+            background=theme.BG_DEEP,
         )
-        self.connection_label.pack(pady=8)
+
+        pc_row = tk.Frame(container, background=theme.BG_DEEP)
+        pc_row.pack(pady=(round(34 * scale), 4))
+        theme.Icon(pc_row, tk, "computer", size=11, color=theme.TEXT_MUTED, bg=theme.BG_DEEP).pack(
+            side="left", padx=(0, 6)
+        )
+        pc_label = tk.Label(
+            pc_row,
+            text=self.pc_name,
+            font=("Segoe UI", font_size(10)),
+            foreground=theme.TEXT_MUTED,
+            background=theme.BG_DEEP,
+        )
+        pc_label.pack(side="left")
+        self.pc_label = pc_label
 
         self._update_connection_label()
         self._show_window()
@@ -523,21 +726,55 @@ class LockScreenController:
         self._pump_actions()
         self.root.mainloop()
 
+    def _draw_lock_watermark(self, tk, canvas, screen_width: int, screen_height: int) -> None:
+        """Draw the real logo, oversized and faded, pushed off the right
+        edge as a background watermark -- see draw_faded_watermark()'s
+        docstring for why this is a stippled overlay rather than true
+        opacity (Tk PhotoImage has no alpha control without PIL)."""
+        logo_path = get_logo_path()
+        if logo_path is None:
+            return
+        try:
+            image = tk.PhotoImage(file=str(logo_path))
+            target_height = round(screen_height * 0.62)
+            if image.height() < target_height:
+                factor = max(1, round(target_height / image.height()))
+                image = image.zoom(factor, factor)
+            elif image.height() > target_height:
+                factor = max(1, round(image.height() / target_height))
+                image = image.subsample(factor, factor)
+            self.watermark_image = image
+            theme.draw_faded_watermark(
+                canvas,
+                image,
+                cx=round(screen_width * 0.86),
+                cy=round(screen_height * 0.5),
+                bg_color=theme.BG_MID,
+            )
+        except Exception as error:
+            log_tk_startup_error("Lock screen watermark image failed to load", error)
+
     def _build_brand_mark(self, tk, container, scale: float = 1.0):
         """Return a Label showing the real logo, or a safe text fallback."""
         logo_path = get_logo_path()
         if logo_path is not None:
             try:
                 image = tk.PhotoImage(file=str(logo_path))
-                target_height = round(120 * scale)
+                target_height = round(104 * scale)
                 if image.height() > target_height:
                     factor = max(1, round(image.height() / target_height))
                     image = image.subsample(factor, factor)
                 self.logo_image = image
+                # Must match container's own background exactly -- a PNG's
+                # transparent pixels composite against whatever color this
+                # Label fills its rectangle with, so any mismatch (this was
+                # a stale hardcoded near-black, not the real BG_DEEP the
+                # container actually uses) shows up as a visible square
+                # around the logo.
                 return tk.Label(
                     container,
                     image=self.logo_image,
-                    background="#05070D",
+                    background=theme.BG_DEEP,
                 )
             except Exception as error:
                 log_tk_startup_error("Lock screen logo image failed to load", error)
@@ -571,7 +808,14 @@ class LockScreenController:
             return
 
         self._update_lock_text()
+        # Only fade in on a genuine hidden -> shown transition, not every
+        # refocus reassertion (_ensure_visible() calls this on every
+        # <Unmap>/<FocusOut>, which would otherwise re-fade on every
+        # alt-tab back to the app).
+        was_hidden = self.root.state() == "withdrawn"
         self.root.deiconify()
+        if was_hidden:
+            theme.fade_in(self.root)
         self.root.attributes("-topmost", True)
         self.root.lift()
         # Only steal focus back to the toplevel if nothing in our own window
@@ -628,6 +872,7 @@ class LockScreenController:
             # when a second Tk() root is created later in the same process,
             # e.g. back-to-back packaged GUI smoke checks).
             self.logo_image = None
+            self.watermark_image = None
 
     def _prevent_close(self) -> None:
         self._ensure_visible()
@@ -644,11 +889,13 @@ class LockScreenController:
             return
 
         model = self.build_view_model()
-        color = "#86EFAC" if model.connection_online else "#FCA5A5"
-        self.connection_label.configure(
-            text=f"Connection status: {model.connection_label}",
-            foreground=color,
-        )
+        if model.connection_online:
+            # Customers do not need to know the connection is fine -- only
+            # surfaced when there is an actual problem.
+            self.connection_label.pack_forget()
+        else:
+            self.connection_label.configure(text="Waiting for cashier connection...")
+            self.connection_label.pack(pady=(8, 0))
 
     def _update_lock_text(self) -> None:
         model = self.build_view_model()
@@ -661,7 +908,7 @@ class LockScreenController:
         if self.instruction_label is not None:
             self.instruction_label.configure(text=model.instruction)
         if self.title_label is not None:
-            self.title_label.configure(text=model.brand)
+            self.title_label.configure(text=theme.letter_spaced(model.brand.upper()))
         if self.countdown_label is not None:
             self.countdown_label.configure(
                 text=model.countdown or "",
@@ -671,51 +918,37 @@ class LockScreenController:
         self._update_connection_label()
 
     def _submit_member_login(self) -> None:
-        if self.member_login_action is None:
-            return
-        with self.state_lock:
-            if self.state.is_login_processing:
-                return
-            self.state.login_message = None
-
-        username = self.username_entry.get().strip() if self.username_entry is not None else ""
-        pin = self.pin_entry.get().strip() if self.pin_entry is not None else ""
-        if not username:
-            self._set_login_message("Enter your username.")
-            return
-        if not pin:
-            self._set_login_message("Enter your PIN.")
-            return
-
-        with self.state_lock:
-            self.state.is_login_processing = True
-            self.state.login_message = "Checking your account..."
-        self._update_login_state()
-
-        def run_login() -> None:
-            message = self.member_login_action(username, pin)
-            self._schedule(lambda: self._finish_member_login(message))
-
-        Thread(target=run_login, daemon=True).start()
+        # Read through the IconField wrapper, not the raw Entry: an
+        # unfocused field still holds its placeholder text as literal
+        # widget content ("Username"/"PIN"), which get_value() knows to
+        # treat as empty.
+        username = self._username_field.get_value().strip() if self._username_field is not None else ""
+        pin = self._pin_field.get_value().strip() if self._pin_field is not None else ""
+        self.submit_member_login(username, pin)
 
     def _finish_member_login(self, message: str | None) -> None:
         with self.state_lock:
             self.state.is_login_processing = False
             self.state.login_message = message
         self._update_login_state()
+        self._notify_presentation()
 
     def _set_login_message(self, message: str) -> None:
         with self.state_lock:
             self.state.login_message = message
             self.state.is_login_processing = False
         self._update_login_state()
+        self._notify_presentation()
 
     def _toggle_pin_visibility(self) -> None:
         self.pin_visible = not self.pin_visible
         if self.pin_entry is not None:
             self.pin_entry.configure(show="" if self.pin_visible else "*")
         if self.pin_toggle_button is not None:
-            self.pin_toggle_button.configure(text="Hide PIN" if self.pin_visible else "Show PIN")
+            # Same eye icon either way (exactly like a modern login form's
+            # single toggle icon) -- only its color signals state, matching
+            # the accent used for a focused field.
+            self.pin_toggle_button.set_color(theme.ACCENT_PRIMARY if self.pin_visible else theme.TEXT_MUTED)
 
     def _update_login_state(self) -> None:
         with self.state_lock:
@@ -726,14 +959,17 @@ class LockScreenController:
         if self.login_button is not None:
             self.login_button.configure(
                 state=state,
-                text="Logging in..." if is_processing else "Log in",
+                text="LOGGING IN..." if is_processing else "LOG IN",
             )
         if self.username_entry is not None:
             self.username_entry.configure(state=state)
         if self.pin_entry is not None:
             self.pin_entry.configure(state=state)
         if self.pin_toggle_button is not None:
-            self.pin_toggle_button.configure(state="disabled" if is_processing else "normal")
+            if is_processing:
+                self.pin_toggle_button.set_color(theme.LINE)
+            else:
+                self.pin_toggle_button.set_color(theme.ACCENT_PRIMARY if self.pin_visible else theme.TEXT_MUTED)
         if self.login_message_label is not None:
             self.login_message_label.configure(text=message or "")
 
@@ -779,6 +1015,42 @@ def run_lock_screen_gui_smoke(timeout_seconds: float = 6.0) -> None:
                         "loading the packaged Secret Grounds logo."
                     )
 
+                expected_title = theme.letter_spaced("SECRET GROUNDS")
+                if controller.title_label.cget("text") != expected_title:
+                    raise AssertionError(
+                        f"Branding must be ALL CAPS with letter spacing: got {controller.title_label.cget('text')!r}."
+                    )
+                if controller.pc_label.cget("text") != controller.pc_name:
+                    raise AssertionError(
+                        "PC label must show just the station name, no 'PC name:' prefix: "
+                        f"got {controller.pc_label.cget('text')!r}."
+                    )
+
+                # set_connection_online() only enqueues the label update for
+                # the next _pump_actions() tick; this code is itself running
+                # from inside that same pump's call stack, so waiting on a
+                # future tick here is unreliable. Call the render step
+                # directly (what the pump would eventually do anyway) for a
+                # deterministic check, since it is the actual widget logic
+                # under test, not the scheduling plumbing around it.
+                controller.set_connection_online(True)
+                controller._update_connection_label()
+                controller.root.update_idletasks()
+                if controller.connection_label.winfo_ismapped():
+                    raise AssertionError("Connection status must be hidden while online.")
+
+                controller.set_connection_online(False)
+                controller._update_connection_label()
+                controller.root.update_idletasks()
+                if not controller.connection_label.winfo_ismapped():
+                    raise AssertionError("Connection warning did not appear when offline.")
+
+                controller.set_connection_online(True)
+                controller._update_connection_label()
+                controller.root.update_idletasks()
+                if controller.connection_label.winfo_ismapped():
+                    raise AssertionError("Connection warning did not clear once back online.")
+
                 # Responsive scaling: font sizes must move with screen size
                 # (within sane bounds), not stay a single fixed point size
                 # regardless of the monitor.
@@ -788,18 +1060,32 @@ def run_lock_screen_gui_smoke(timeout_seconds: float = 6.0) -> None:
                 if not (9 <= scaled_title <= round(52 * 1.4)):
                     raise AssertionError(f"Title font size out of expected range: {scaled_title}")
 
-                if controller.username_entry.cget("highlightthickness") < 1:
-                    raise AssertionError("Login fields have no visible focus ring configured.")
-
                 # Mouse click focuses the field: focus_set() is the
                 # programmatic equivalent of the click-to-focus Tk already
                 # gives Entry widgets for free once nothing is stealing focus
-                # back out from under it.
+                # back out from under it. Focusing also clears the fake
+                # placeholder text (IconField's own FocusIn handler).
                 controller.username_entry.focus_set()
                 controller.root.update_idletasks()
                 controller.root.update()
                 if controller.root.focus_get() is not controller.username_entry:
                     raise AssertionError("Clicking the username field did not focus it.")
+                if controller._username_field.get_value() != "":
+                    raise AssertionError("Focusing an empty field must clear its placeholder text.")
+                if controller.username_entry.cget("fg") != theme.TEXT_PRIMARY:
+                    raise AssertionError("Focused field text color did not switch away from the placeholder color.")
+
+                # Leaving a field empty must restore its placeholder rather
+                # than submitting the placeholder text as real input.
+                controller.pin_entry.focus_set()
+                controller.root.update_idletasks()
+                controller.root.update()
+                if controller._username_field.get_value() != "":
+                    raise AssertionError("Blurring an empty field must restore its placeholder, not real input.")
+
+                controller.username_entry.focus_set()
+                controller.root.update_idletasks()
+                controller.root.update()
 
                 # Regression check for the actual reported bug: re-showing the
                 # lock screen (what every <Unmap>/<FocusOut> re-assertion used
@@ -814,24 +1100,23 @@ def run_lock_screen_gui_smoke(timeout_seconds: float = 6.0) -> None:
                         "from the focused username field."
                     )
 
-                # Tab moves between controls in the expected order.
-                if controller.username_entry.tk_focusNext() is not controller.pin_entry:
-                    raise AssertionError("Tab does not move from username to PIN.")
-                if controller.pin_entry.tk_focusNext() is not controller.pin_toggle_button:
-                    raise AssertionError("Tab does not move from PIN to the Show PIN button.")
-
-                controller.username_entry.delete(0, "end")
                 controller.username_entry.insert(0, "test_member")
-                controller.pin_entry.delete(0, "end")
+                controller.pin_entry.focus_set()
+                controller.root.update_idletasks()
+                controller.root.update()
                 controller.pin_entry.insert(0, "1234")
                 if controller.pin_entry.cget("show") != "*":
-                    raise AssertionError("PIN entry is not masked by default.")
+                    raise AssertionError("PIN entry is not masked once real text is entered.")
                 controller._toggle_pin_visibility()
                 if controller.pin_entry.cget("show") != "":
                     raise AssertionError("PIN show toggle did not reveal the PIN.")
                 controller._toggle_pin_visibility()
                 if controller.pin_entry.cget("show") != "*":
                     raise AssertionError("PIN hide toggle did not mask the PIN.")
+                if controller._username_field.get_value() != "test_member":
+                    raise AssertionError("Username field did not retain the typed value.")
+                if controller._pin_field.get_value() != "1234":
+                    raise AssertionError("PIN field did not retain the typed value.")
 
                 # Enter submits from either field, and a second submission
                 # attempt while the first is still processing must be a no-op

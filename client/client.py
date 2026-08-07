@@ -1426,7 +1426,7 @@ class SecretGroundsClient:
         return "Package"
 
 
-def open_setup_wizard_async() -> None:
+def open_setup_wizard_async() -> Thread:
     def run_wizard() -> None:
         try:
             saved_config = show_setup_wizard(
@@ -1442,7 +1442,116 @@ def open_setup_wizard_async() -> None:
         except ClientConfigError as error:
             print(f"Could not open setup wizard: {error}")
 
-    Thread(target=run_wizard, daemon=True).start()
+    thread = Thread(target=run_wizard, daemon=True)
+    thread.start()
+    return thread
+
+
+def run_client_with_production_ui(
+    client: SecretGroundsClient,
+    *,
+    enable_lock_screen: bool,
+    enable_customer_overlay: bool,
+    webview_host_factory: Callable[..., Any] | None = None,
+) -> None:
+    """Run WebView2 on the main thread and retain Tk as startup fallback."""
+    if not enable_lock_screen and not enable_customer_overlay:
+        client.run_forever()
+        return
+
+    host = None
+    client_thread: Thread | None = None
+    client_thread_lock = Lock()
+    fallback_active = Event()
+    fallback_lock = Lock()
+
+    def run_client_worker() -> None:
+        try:
+            client.run_forever()
+        except Exception as error:
+            print(f"Secret Grounds client worker stopped unexpectedly: {error}")
+            print(traceback.format_exc())
+            client.stop()
+            if host is not None:
+                host.shutdown()
+
+    def start_client_worker() -> None:
+        nonlocal client_thread
+        with client_thread_lock:
+            if client_thread is not None:
+                return
+            client_thread = Thread(
+                target=run_client_worker,
+                name="secret-grounds-client",
+                daemon=True,
+            )
+            client_thread.start()
+
+    def activate_tk_fallback(reason: object) -> None:
+        with fallback_lock:
+            if fallback_active.is_set():
+                return
+            fallback_active.set()
+            if host is not None:
+                host.detach_controllers()
+            print(f"WebView2 customer UI unavailable: {reason}")
+            print("Falling back to the existing Tkinter customer UI.")
+            client.lock_screen.enable_gui = enable_lock_screen
+            client.customer_overlay.set_external_presentation_active(False)
+            client.customer_overlay.enable_gui = enable_customer_overlay
+            if enable_lock_screen:
+                client.lock_screen.start()
+            if (
+                enable_customer_overlay
+                and client.customer_overlay.build_view_model().is_visible
+            ):
+                client.customer_overlay.ensure_gui()
+                client.customer_overlay.schedule_gui_refresh()
+            start_client_worker()
+
+    try:
+        if webview_host_factory is None:
+            from client.webview_ui import SecretGroundsWebViewHost
+
+            webview_host_factory = SecretGroundsWebViewHost
+        host = webview_host_factory(
+            pc_name=client.pc_name,
+            lock_controller=client.lock_screen,
+            overlay_controller=client.customer_overlay,
+            enable_lock_window=enable_lock_screen,
+            enable_overlay_window=enable_customer_overlay,
+        )
+
+        def watch_webview_startup() -> None:
+            ready_event = getattr(host, "ready", getattr(host, "started", None))
+            if ready_event is None or ready_event.wait(10):
+                return
+            activate_tk_fallback("WebView2 did not become ready within 10 seconds.")
+            started_event = getattr(host, "started", None)
+            if started_event is not None and started_event.is_set():
+                host.shutdown()
+
+        Thread(
+            target=watch_webview_startup,
+            name="secret-grounds-webview-watchdog",
+            daemon=True,
+        ).start()
+        print("Starting production customer UI with WebView2.")
+        host.start(start_callback=start_client_worker)
+        if fallback_active.is_set():
+            if client_thread is not None:
+                while client_thread.is_alive() and not client.stop_event.is_set():
+                    client_thread.join(timeout=0.5)
+            return
+        if not client.stop_event.is_set():
+            raise RuntimeError("WebView2 event loop exited while the client was still running.")
+        return
+    except Exception as error:
+        activate_tk_fallback(error)
+
+    if client_thread is not None:
+        while client_thread.is_alive() and not client.stop_event.is_set():
+            client_thread.join(timeout=0.5)
 
 
 def load_runtime_config() -> ClientConfig:
@@ -1486,13 +1595,18 @@ def main() -> None:
         display_name=runtime_config.display_name,
         heartbeat_interval=runtime_config.reconnect_interval_seconds,
         request_timeout=runtime_config.request_timeout_seconds,
-        enable_lock_screen=ENABLE_LOCK_SCREEN,
+        enable_lock_screen=False,
         enable_dev_escape=ENABLE_DEV_ESCAPE,
+        enable_customer_overlay=False,
         open_setup_wizard=open_setup_wizard_async,
     )
 
     try:
-        client.run_forever()
+        run_client_with_production_ui(
+            client,
+            enable_lock_screen=ENABLE_LOCK_SCREEN,
+            enable_customer_overlay=ENABLE_CUSTOMER_OVERLAY,
+        )
     except KeyboardInterrupt:
         client.stop()
         print("Secret Grounds client stopped.")

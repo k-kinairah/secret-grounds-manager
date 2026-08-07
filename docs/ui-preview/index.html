@@ -1,0 +1,1155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Secret Grounds — Client UI Preview</title>
+<style>
+/* ============================================================
+   TOKENS -- exact values from the approved client UI spec.
+   Change a value here and every state updates. This block is
+   the thing to point at when giving spacing/color feedback.
+   ============================================================ */
+:root {
+  --bg-primary: #0B1220;
+  --bg-secondary: #0F172A;
+  --card-bg: #0F172A;
+  --card-border: #334155;
+  --input-bg: #1E293B;
+  --input-border: #334155;
+  --text-primary: #E5E7EB;
+  --text-secondary: #94A3B8;
+  --accent-blue: #3B82F6;
+  --accent-cyan: #22D3EE;
+  --success: #10B981;
+  --accent-orange: #F59E0B;
+  --danger: #F43F5E;
+  --focus-glow: #3B82F6;
+
+  --radius-card: 18px;
+  --radius-control: 14px;
+  --radius-pill: 999px;
+
+  --font-ui: "Segoe UI", Inter, "SF Pro Text", system-ui, -apple-system, sans-serif;
+  --font-mono: Consolas, "SF Mono", "Cascadia Mono", monospace;
+
+  /* Studio-chrome tokens (the preview harness itself, not the client UI) */
+  --studio-bg: #05070c;
+  --studio-panel: #0c1220;
+  --studio-line: #1c2536;
+  --studio-text: #cbd5e1;
+  --studio-text-dim: #64748b;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--studio-bg);
+  color: var(--studio-text);
+  font-family: var(--font-ui);
+  height: 100%;
+}
+button { font-family: inherit; }
+
+/* ============================================================
+   STUDIO CHROME -- the preview harness UI (sidebar + toolbar).
+   Deliberately distinct from the client palette so it never
+   gets mistaken for part of the thing being previewed.
+   ============================================================ */
+.app {
+  display: grid;
+  grid-template-columns: 248px 1fr;
+  height: 100vh;
+}
+
+.sidebar {
+  background: var(--studio-panel);
+  border-right: 1px solid var(--studio-line);
+  padding: 20px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px;
+}
+.sidebar-brand img { width: 26px; height: 26px; object-fit: contain; }
+.sidebar-brand-text {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--studio-text);
+}
+.sidebar-brand-sub {
+  font-size: 10.5px;
+  color: var(--studio-text-dim);
+  letter-spacing: 0.04em;
+}
+
+.sidebar-group-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--studio-text-dim);
+  padding: 0 4px;
+  margin-bottom: 8px;
+}
+
+.state-list { display: flex; flex-direction: column; gap: 4px; }
+.state-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--studio-text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.state-btn:hover { background: #10192b; color: var(--studio-text); }
+.state-btn.active {
+  background: #12213a;
+  border-color: #1e3a5f;
+  color: #bfe4ff;
+}
+.state-btn .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--studio-text-dim);
+  flex-shrink: 0;
+}
+.state-btn.active .dot { background: var(--accent-cyan); box-shadow: 0 0 6px var(--accent-cyan); }
+.state-btn .num {
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  color: var(--studio-text-dim);
+  width: 14px;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 10px 4px 0;
+  border-top: 1px solid var(--studio-line);
+  font-size: 10.5px;
+  color: var(--studio-text-dim);
+  line-height: 1.5;
+}
+.sidebar-footer code {
+  color: #8fb8d9;
+  background: #0f1626;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--studio-line);
+  background: var(--studio-panel);
+  flex-wrap: wrap;
+}
+.toolbar-group { display: flex; align-items: center; gap: 8px; }
+.toolbar-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--studio-text-dim);
+}
+.res-btn {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--studio-line);
+  background: #0f1626;
+  color: var(--studio-text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.res-btn:hover { color: var(--studio-text); }
+.res-btn.active {
+  border-color: var(--accent-blue);
+  color: #bfe4ff;
+  background: #12213a;
+}
+.zoom-readout {
+  font-size: 11.5px;
+  color: var(--studio-text-dim);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
+.viewport {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 20% 15%, #0a1220 0%, transparent 45%),
+    var(--studio-bg);
+  background-size: 100% 100%;
+  position: relative;
+}
+.viewport::before {
+  /* faint grid so scale/size is easy to judge at a glance */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(#101a2c 1px, transparent 1px),
+    linear-gradient(90deg, #101a2c 1px, transparent 1px);
+  background-size: 40px 40px;
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.frame-shell {
+  position: relative;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.6), 0 0 0 1px #1c2536;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+/* The shell is sized to the SCALED (on-screen) dimensions and clips;
+   .screen inside it keeps its true unscaled resolution and is scaled
+   down with a top-left transform-origin, so the shell's layout box
+   never balloons to the full simulated resolution. */
+.screen { transform-origin: top left; }
+.frame-label {
+  position: absolute;
+  top: -26px;
+  left: 0;
+  font-size: 11px;
+  color: var(--studio-text-dim);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* ============================================================
+   SCREEN -- the simulated monitor. Everything inside .screen
+   is the actual client UI, styled exactly per the approved spec.
+   ============================================================ */
+.screen {
+  position: relative;
+  background: var(--bg-primary);
+  overflow: hidden;
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+}
+/* Layered depth base for the lock screen (not the overlay states):
+   a soft off-center radial wash rather than one flat color, so the
+   streaks/vignette on top have something with dimension to sit in. */
+.screen:not(.desktop-backdrop) {
+  background:
+    radial-gradient(ellipse 90% 70% at 50% 28%, #0d1728 0%, transparent 60%),
+    radial-gradient(ellipse 70% 60% at 50% 100%, #0a1220 0%, transparent 55%),
+    var(--bg-primary);
+}
+
+/* Idle desktop backdrop used behind the overlay states, so the
+   bottom-right position/scale reads in context rather than in
+   isolation. Not part of the client UI itself. */
+.screen.desktop-backdrop {
+  background:
+    radial-gradient(circle at 30% 20%, #101c30 0%, transparent 55%),
+    linear-gradient(160deg, #0a1120 0%, #060a12 100%);
+}
+.screen.desktop-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(#0e1727 1px, transparent 1px), linear-gradient(90deg, #0e1727 1px, transparent 1px);
+  background-size: 64px 64px;
+  opacity: 0.35;
+}
+.desktop-hint {
+  position: absolute;
+  top: 24px;
+  left: 28px;
+  font-size: 13px;
+  color: #3a4a66;
+  letter-spacing: 0.02em;
+}
+
+/* ============================================================
+   LOCK SCREEN BACKGROUND -- an environment, not a wallpaper.
+   Paint order (back to front): fog -> volumetric light shafts ->
+   flowing streaks -> branding bloom -> watermark -> particles ->
+   vignette. The bloom sits specifically behind the logo/title so
+   the branding has its own halo, distinct from the corner streaks;
+   the vignette keeps the card's patch calm no matter how busy the
+   edges get.
+   ============================================================ */
+.lock-flow {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.lock-fog {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 42% 30% at 14% 78%, rgba(30,50,80,0.35) 0%, transparent 70%),
+    radial-gradient(ellipse 38% 26% at 88% 20%, rgba(24,60,90,0.3) 0%, transparent 70%);
+  filter: blur(6px);
+}
+.lock-rays {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  mix-blend-mode: screen;
+}
+.lock-branding-bloom {
+  position: absolute;
+  left: 50%;
+  top: 27%;
+  width: 46%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(34,211,238,0.16) 0%, rgba(59,130,246,0.08) 45%, transparent 72%);
+  filter: blur(4px);
+  pointer-events: none;
+}
+.lock-watermark {
+  position: absolute;
+  right: -20%;
+  top: 46%;
+  transform: translateY(-50%);
+  width: 58%;
+  aspect-ratio: 662 / 560;
+  opacity: 0.05;
+  pointer-events: none;
+  filter: saturate(0.75) blur(4px);
+}
+.lock-watermark img { width: 100%; height: 100%; object-fit: contain; }
+.lock-particles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.lock-particles i {
+  position: absolute;
+  border-radius: 50%;
+  background: #cdeeff;
+}
+.lock-vignette {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 64% 58% at 50% 40%, transparent 30%, rgba(2,5,12,0.72) 100%),
+    linear-gradient(rgba(2,5,12,0.3), transparent 16%, transparent 84%, rgba(2,5,12,0.4));
+  pointer-events: none;
+}
+
+.lock-gear {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--card-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  cursor: default;
+}
+.lock-gear svg { width: 15px; height: 15px; }
+
+/* Vertical rhythm is deliberately asymmetric, not evenly spaced:
+   logo/title/tagline/instruction form one tight "branding moment"
+   (small gaps between them), then a large deliberate gap before the
+   login card, which sits lower and reads as a secondary, supporting
+   element -- something you focus on once you're at the PC, not from
+   across the room. */
+.lock-content {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 40px 24px;
+}
+.lock-logo { width: 152px; height: auto; margin-bottom: 26px; filter: drop-shadow(0 0 40px rgba(34,211,238,0.6)) drop-shadow(0 0 90px rgba(59,130,246,0.32)); }
+/* The hero element of the screen: heaviest weight CSS offers, the
+   brightest color on the page, and a multi-layer glow (tight bright
+   core -> mid cyan bloom -> wide soft blue halo) so it's the first
+   thing a customer's eye lands on, matching Riot/Battle.net-style
+   title treatment. Visibly larger footprint than the logo above it. */
+.lock-title {
+  font-size: 62px;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  color: #FFFFFF;
+  margin: 0 0 20px;
+  text-wrap: balance;
+  text-align: center;
+  text-shadow:
+    0 0 22px rgba(255,255,255,0.6),
+    0 0 56px rgba(34,211,238,0.65),
+    0 0 130px rgba(59,130,246,0.45),
+    0 4px 4px rgba(0,0,0,0.55);
+}
+.lock-headline {
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 6px;
+}
+/* The big deliberate gap: everything above is "the brand", the card
+   below is "the task" -- this is the breathing room that separates
+   the two, not just a spacing tweak. */
+.lock-instruction {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  margin: 0 0 64px;
+  text-align: center;
+}
+
+/* Refined, not redesigned: same layout/padding/fields as before.
+   Slightly more translucent and with no glow of its own now that
+   the branding above carries its own bloom -- the card should
+   support, not compete. */
+.login-card {
+  width: 366px;
+  max-width: 90%;
+  background: rgba(15,23,42,0.78);
+  border: 1px solid rgba(148,163,184,0.14);
+  border-radius: var(--radius-card);
+  padding: 28px 32px 30px;
+  box-shadow: 0 24px 70px rgba(0,0,0,0.42), 0 0 0 1px rgba(255,255,255,0.03) inset;
+  backdrop-filter: blur(16px);
+}
+.login-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent-blue);
+  text-align: center;
+  letter-spacing: 0.02em;
+  margin: 0 0 18px;
+}
+.field-group { margin-bottom: 14px; }
+.field-label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 5px;
+}
+.field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  padding: 0 14px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-control);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.field:focus-within {
+  border-color: var(--focus-glow);
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.16);
+}
+.field svg { width: 16px; height: 16px; color: var(--text-secondary); flex-shrink: 0; }
+.field input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13.5px;
+  font-family: var(--font-ui);
+}
+.field input::placeholder { color: #5b6b85; }
+.field .eye-toggle { cursor: pointer; color: var(--text-secondary); display: flex; }
+.field .eye-toggle:hover { color: var(--accent-blue); }
+.field .eye-toggle.revealed { color: var(--accent-blue); }
+
+.btn-gradient {
+  width: 100%;
+  height: 48px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));
+  color: #04101F;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  margin-top: 6px;
+  transition: filter 0.15s ease, transform 0.06s ease;
+}
+.btn-gradient:hover { filter: brightness(1.08); box-shadow: 0 0 20px rgba(34,211,238,0.35); }
+.btn-gradient:active { transform: translateY(1px); }
+
+.lock-pc-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 38px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.lock-pc-row svg { width: 13px; height: 13px; }
+
+.lock-connection-warning {
+  position: relative;
+  margin-top: 14px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #FB923C;
+  display: none;
+  align-items: center;
+  gap: 6px;
+}
+.lock-connection-warning::before {
+  content: "";
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #FB923C;
+  box-shadow: 0 0 6px #FB923C;
+}
+.screen[data-connection="offline"] .lock-connection-warning { display: flex; }
+
+/* ============================================================
+   ACTIVE SESSION OVERLAY (bottom-right card)
+   ============================================================ */
+.overlay-anchor {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+}
+.overlay-card {
+  width: 276px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  padding: 15px 17px 16px;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.5), 0 0 24px rgba(59,130,246,0.06);
+}
+.overlay-header { display: flex; align-items: center; gap: 8px; }
+.overlay-header img { width: 20px; height: 20px; object-fit: contain; }
+.overlay-eyebrow {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent-cyan);
+  flex: 1;
+}
+.overlay-icon-btn {
+  width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.overlay-icon-btn:hover { color: var(--text-primary); }
+.overlay-icon-btn svg { width: 13px; height: 13px; }
+
+/* Timer: the one thing on this card allowed to dominate --
+   everything else on the card is deliberately quieter than it. */
+.overlay-timer {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--accent-cyan);
+  margin-top: 11px;
+  line-height: 1;
+}
+.screen[data-accent="orange"] .overlay-timer { color: var(--accent-orange); text-shadow: 0 0 22px rgba(245,158,11,0.22); }
+.overlay-timer-caption {
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  opacity: 0.8;
+  margin-top: 5px;
+}
+
+.overlay-divider { height: 1px; background: var(--card-border); margin: 13px 0 11px; }
+
+.overlay-stat-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 11px;
+}
+.overlay-stat-row:first-of-type { margin-top: 0; }
+.overlay-stat-row svg { width: 13px; height: 13px; color: var(--text-secondary); margin-top: 2px; flex-shrink: 0; }
+.overlay-stat-caption { font-size: 8px; font-weight: 700; color: var(--text-secondary); opacity: 0.8; }
+.overlay-stat-value { font-size: 11px; font-weight: 700; color: var(--text-primary); margin-top: 2px; }
+
+/* Identity: the member's own name is the second most important
+   thing on the card, and gets real room to breathe rather than
+   being squeezed between the two dividers around it. */
+.overlay-stat-row.identity { margin-top: 14px; align-items: center; }
+.overlay-identity-name { font-size: 15px; font-weight: 700; color: var(--text-primary); line-height: 1.3; }
+.overlay-identity-name.guest { color: var(--text-secondary); font-size: 12px; }
+.overlay-identity-caption { font-size: 9px; color: var(--text-secondary); margin-top: 2px; opacity: 0.85; }
+
+/* PC row: useful, not important -- the quietest line on the card. */
+.overlay-pc-row { display: flex; align-items: center; gap: 5px; margin-top: 12px; opacity: 0.75; }
+.overlay-pc-row svg { width: 11px; height: 11px; color: var(--text-secondary); }
+.overlay-pc-row span { font-size: 8.5px; font-weight: 600; color: var(--text-secondary); }
+
+.overlay-connection-warning {
+  margin-top: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #FB923C;
+}
+
+.overlay-footer-divider { height: 1px; background: var(--card-border); margin: 12px 0 10px; }
+.overlay-actions { display: flex; justify-content: center; }
+.btn-outline {
+  height: 32px;
+  padding: 0 20px;
+  border-radius: var(--radius-control);
+  background: transparent;
+  border: 1px solid var(--accent-cyan);
+  color: var(--accent-cyan);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.btn-outline:hover { box-shadow: 0 0 14px rgba(34,211,238,0.3); }
+.screen[data-accent="orange"] .btn-outline { border-color: var(--accent-orange); color: var(--accent-orange); }
+.screen[data-accent="orange"] .btn-outline:hover { box-shadow: 0 0 14px rgba(245,158,11,0.28); }
+
+/* Collapsed pill -- logo + brand text only, nothing else. */
+.overlay-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 14px;
+  background: var(--input-bg);
+  border: 1px solid rgba(34,211,238,0.35);
+  border-radius: var(--radius-pill);
+  box-shadow: 0 10px 26px rgba(0,0,0,0.5), 0 0 16px rgba(34,211,238,0.12);
+  cursor: pointer;
+  width: fit-content;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.overlay-pill:hover { border-color: rgba(34,211,238,0.6); box-shadow: 0 10px 26px rgba(0,0,0,0.5), 0 0 20px rgba(34,211,238,0.22); }
+.overlay-pill img { width: 17px; height: 17px; object-fit: contain; }
+.overlay-pill span { font-size: 10px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-primary); }
+
+.hidden { display: none !important; }
+
+/* ============================================================
+   Responsive: preview harness itself narrows below ~900px --
+   the SIMULATED screens stay pixel-accurate regardless (that's
+   the point), this only affects the sidebar/toolbar chrome.
+   ============================================================ */
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .sidebar { flex-direction: row; overflow-x: auto; align-items: center; }
+  .sidebar-footer { display: none; }
+  .state-list { flex-direction: row; }
+}
+</style>
+</head>
+<body>
+
+<div id="icon-defs" hidden>
+  <svg width="0" height="0" style="position:absolute">
+    <symbol id="icon-user" viewBox="0 0 24 24"><circle cx="12" cy="8.2" r="3.2" stroke="currentColor" fill="none" stroke-width="1.6"/><path d="M5 20c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" fill="none" stroke-width="1.6"/><path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" fill="none" stroke-width="1.6"/><circle cx="12" cy="15.3" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z" stroke="currentColor" fill="none" stroke-width="1.6"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></symbol>
+    <symbol id="icon-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 10.7a2.5 2.5 0 0 0 3.6 3.5M6.4 6.7C3.9 8.4 2 12 2 12s3.6 6.5 10 6.5c1.8 0 3.3-.4 4.6-1.1M9.8 5.7A10.7 10.7 0 0 1 12 5.5c6.4 0 10 6.5 10 6.5s-.9 1.7-2.5 3.3" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4" stroke="currentColor" fill="none" stroke-width="1.6"/><path d="M12 7.6V12l3 2" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="icon-computer" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="1.6" stroke="currentColor" fill="none" stroke-width="1.6"/><path d="M8.2 20h7.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke="currentColor" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-dots" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="18" cy="12" r="1.4" fill="currentColor"/></symbol>
+    <symbol id="icon-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" fill="none" stroke-width="1.6"/><path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="icon-diamond-mark" viewBox="0 0 24 24"><path d="M12 2 22 12 12 22 2 12Z" stroke="currentColor" fill="none" stroke-width="1"/></symbol>
+  </svg>
+</div>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <img src="./assets/secret-grounds-logo.png" alt="" />
+      <div>
+        <div class="sidebar-brand-text">SECRET GROUNDS</div>
+        <div class="sidebar-brand-sub">UI Preview</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="sidebar-group-label">Customer-Facing States</div>
+      <div class="state-list" id="state-list">
+        <button class="state-btn active" data-state="lock"><span class="num">1</span><span class="dot"></span>Lock Screen</button>
+        <button class="state-btn" data-state="open-time"><span class="num">2</span><span class="dot"></span>Guest / Open Time</button>
+        <button class="state-btn" data-state="package"><span class="num">3</span><span class="dot"></span>Package Session</button>
+        <button class="state-btn" data-state="member"><span class="num">4</span><span class="dot"></span>Member Session</button>
+        <button class="state-btn" data-state="collapsed"><span class="num">5</span><span class="dot"></span>Collapsed Overlay</button>
+        <button class="state-btn" data-state="connection-lost"><span class="num">6</span><span class="dot"></span>Connection Lost</button>
+        <button class="state-btn" data-state="reconnecting"><span class="num">7</span><span class="dot"></span>Reconnecting</button>
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      Tokens live in <code>:root</code> at the top of this file.<br/>
+      No backend, no websocket, no installer — presentation only.<br/>
+      Once approved, port 1:1 into <code>theme.py</code>, <code>lock_screen.py</code>, <code>customer_overlay.py</code>.
+    </div>
+  </aside>
+
+  <div class="stage">
+    <div class="toolbar">
+      <div class="toolbar-group">
+        <span class="toolbar-label">Resolution</span>
+        <button class="res-btn active" data-res="1920x1080">1920 × 1080</button>
+        <button class="res-btn" data-res="1366x768">1366 × 768</button>
+        <button class="res-btn" data-res="3440x1440">3440 × 1440 (ultrawide)</button>
+      </div>
+      <div class="zoom-readout" id="zoom-readout">100%</div>
+    </div>
+
+    <div class="viewport" id="viewport">
+      <div class="frame-shell" id="frame-shell">
+        <span class="frame-label" id="frame-label">1920 × 1080 @ 100%</span>
+        <div class="screen" id="screen"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   FAKE DATA -- edit freely, nothing here reads from a network
+   or a real session. Every field a state can show lives here.
+   ============================================================ */
+const DATA = {
+  pcName: "PC-01",
+  memberName: "kinairah",
+  member: { remaining: "05:59:34", used: "25 min 16 sec" },
+  package: { remaining: "00:44:12", used: "15 min 48 sec" },
+  openTime: { elapsed: "01:23:45", used: "1h 23min" },
+};
+
+const LOGO = "./assets/secret-grounds-logo.png";
+
+function icon(name, cls) {
+  return `<svg class="${cls||''}"><use href="#icon-${name}"/></svg>`;
+}
+
+/* ============================================================
+   SCREEN BUILDERS -- one function per customer-facing state.
+   Each returns the full innerHTML for #screen, plus optional
+   data-* attributes applied to #screen (accent / connection).
+   ============================================================ */
+
+function lockScreenMarkup({ offline = false } = {}) {
+  return `
+    <div class="lock-fog"></div>
+    ${lockVolumetricRays()}
+    ${lockFlowStreaks()}
+    <div class="lock-branding-bloom"></div>
+    <div class="lock-watermark"><img src="${LOGO}" alt="" /></div>
+    <div class="lock-particles">${particleDots(72)}</div>
+    <div class="lock-vignette"></div>
+    <div class="lock-gear">${icon('gear')}</div>
+    <div class="lock-content">
+      <img class="lock-logo" src="${LOGO}" alt="" />
+      <h1 class="lock-title">SECRET GROUNDS</h1>
+      <p class="lock-headline">Available soon.</p>
+      <p class="lock-instruction">Please ask the cashier to begin your session.</p>
+      <div class="login-card">
+        <div class="login-title">MEMBER LOGIN</div>
+        <div class="field-group">
+          <label class="field-label">username</label>
+          <div class="field">
+            ${icon('user')}
+            <input type="text" placeholder="enter username" />
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">pin</label>
+          <div class="field">
+            ${icon('lock')}
+            <input type="password" placeholder="enter pin" id="pin-input" />
+            <span class="eye-toggle" id="eye-toggle">${icon('eye')}</span>
+          </div>
+        </div>
+        <button class="btn-gradient">LOG IN</button>
+      </div>
+      <div class="lock-pc-row">${icon('computer')}<span>${DATA.pcName}</span></div>
+      <div class="lock-connection-warning">Waiting for cashier connection...</div>
+    </div>
+  `;
+}
+
+// Two very soft, wide "god ray" beams fanning down from the upper
+// corners -- heavily blurred, low-opacity, screen-blended polygons.
+// This is the "volumetric light" layer: it reads as ambient light
+// filling the room, not as a distinct shape the way the streaks do.
+function lockVolumetricRays() {
+  return `
+    <svg class="lock-rays" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="rayGradA" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#3B82F6" stop-opacity="0.32"/>
+          <stop offset="100%" stop-color="#3B82F6" stop-opacity="0"/>
+        </linearGradient>
+        <linearGradient id="rayGradB" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#22D3EE" stop-opacity="0.28"/>
+          <stop offset="100%" stop-color="#22D3EE" stop-opacity="0"/>
+        </linearGradient>
+        <filter id="rayBlur" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="46"/>
+        </filter>
+      </defs>
+      <polygon points="-120,-60 380,-60 760,880 220,880" fill="url(#rayGradA)" filter="url(#rayBlur)"/>
+      <polygon points="1580,-60 2040,-60 1880,820 1360,820" fill="url(#rayGradB)" filter="url(#rayBlur)"/>
+    </svg>
+  `;
+}
+
+// Two flowing light streaks (SVG, curved), each drawn as a soft wide
+// blurred glow pass plus a thin bright core pass along the same path --
+// the pure-CSS equivalent of a "light trail" render. Deliberately routed
+// through the left/right thirds of the frame with their brightest point
+// away from center, so the area directly behind the login card stays calm.
+function lockFlowStreaks() {
+  const pathA = "M -220,150 C 230,70 470,300 610,410 C 790,550 860,570 980,500";
+  const pathB = "M 2140,940 C 1790,830 1560,700 1410,600 C 1250,495 1140,455 1000,370";
+  return `
+    <svg class="lock-flow" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="streakA" x1="-220" y1="150" x2="980" y2="500" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#22D3EE" stop-opacity="0"/>
+          <stop offset="26%" stop-color="#67E8F9" stop-opacity="0.95"/>
+          <stop offset="48%" stop-color="#3B82F6" stop-opacity="0.45"/>
+          <stop offset="100%" stop-color="#3B82F6" stop-opacity="0"/>
+        </linearGradient>
+        <linearGradient id="streakB" x1="2140" y1="940" x2="1000" y2="370" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#22D3EE" stop-opacity="0"/>
+          <stop offset="26%" stop-color="#67E8F9" stop-opacity="0.9"/>
+          <stop offset="48%" stop-color="#3B82F6" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="#3B82F6" stop-opacity="0"/>
+        </linearGradient>
+        <filter id="streakGlow" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="16"/>
+        </filter>
+        <filter id="streakCore" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="2.2"/>
+        </filter>
+      </defs>
+      <path d="${pathA}" fill="none" stroke="url(#streakA)" stroke-width="70" stroke-linecap="round" filter="url(#streakGlow)"/>
+      <path d="${pathB}" fill="none" stroke="url(#streakB)" stroke-width="64" stroke-linecap="round" filter="url(#streakGlow)"/>
+      <path d="${pathA}" fill="none" stroke="url(#streakA)" stroke-width="2.5" stroke-linecap="round" filter="url(#streakCore)"/>
+      <path d="${pathB}" fill="none" stroke="url(#streakB)" stroke-width="2.5" stroke-linecap="round" filter="url(#streakCore)"/>
+    </svg>
+  `;
+}
+
+function particleDots(count) {
+  let html = '';
+  // Deterministic pseudo-random scatter (fixed seed feel) so it
+  // doesn't jitter between renders. Mixed sizes/opacities read as a
+  // starfield rather than a uniform dot grid.
+  const seeded = [];
+  let s = 42;
+  for (let i = 0; i < count * 3; i++) {
+    s = (s * 9301 + 49297) % 233280;
+    seeded.push(s / 233280);
+  }
+  for (let i = 0; i < count; i++) {
+    const x = (seeded[i] * 100).toFixed(1);
+    const y = (seeded[i + count] * 100).toFixed(1);
+    const size = (0.8 + seeded[i + count * 2] * 1.8).toFixed(1);
+    const op = (0.15 + seeded[i + count * 2] * 0.45).toFixed(2);
+    html += `<i style="left:${x}%; top:${y}%; width:${size}px; height:${size}px; opacity:${op};"></i>`;
+  }
+  return html;
+}
+
+function overlayCardMarkup(kind) {
+  // kind: 'open-time' | 'package' | 'member'
+  const showLogout = true; // visual reference only -- porting must confirm Open Time logout with product before enabling in the real client
+  if (kind === 'open-time') {
+    return {
+      accent: 'orange',
+      html: `
+        ${overlayHeader()}
+        <div class="overlay-timer">${DATA.openTime.elapsed}</div>
+        <div class="overlay-timer-caption">Elapsed Time</div>
+        <div class="overlay-divider"></div>
+        ${overlayStat('clock', 'Used Time', DATA.openTime.used)}
+        <div class="overlay-stat-row identity">
+          ${icon('user')}
+          <div><div class="overlay-identity-name guest">Guest</div><div class="overlay-identity-caption">Open Time</div></div>
+        </div>
+        <div class="overlay-pc-row">${icon('computer')}<span>${DATA.pcName}</span></div>
+        ${showLogout ? overlayFooterLogout() : ''}
+      `
+    };
+  }
+  if (kind === 'package') {
+    return {
+      accent: 'cyan',
+      html: `
+        ${overlayHeader()}
+        <div class="overlay-timer">${DATA.package.remaining}</div>
+        <div class="overlay-timer-caption">Remaining Time</div>
+        <div class="overlay-divider"></div>
+        ${overlayStat('clock', 'Used Time', DATA.package.used)}
+        <div class="overlay-stat-row identity">
+          ${icon('user')}
+          <div><div class="overlay-identity-name guest">Guest</div><div class="overlay-identity-caption">Package</div></div>
+        </div>
+        <div class="overlay-pc-row">${icon('computer')}<span>${DATA.pcName}</span></div>
+        ${overlayFooterLogout()}
+      `
+    };
+  }
+  // member
+  return {
+    accent: 'cyan',
+    html: `
+      ${overlayHeader()}
+      <div class="overlay-timer">${DATA.member.remaining}</div>
+      <div class="overlay-timer-caption">Remaining Time</div>
+      <div class="overlay-divider"></div>
+      ${overlayStat('clock', 'Used Time', DATA.member.used)}
+      <div class="overlay-stat-row identity">
+        ${icon('user')}
+        <div><div class="overlay-identity-name">${DATA.memberName}</div><div class="overlay-identity-caption">Member</div></div>
+      </div>
+      <div class="overlay-pc-row">${icon('computer')}<span>${DATA.pcName}</span></div>
+      ${overlayFooterLogout()}
+    `
+  };
+}
+
+function overlayHeader() {
+  return `
+    <div class="overlay-header">
+      <img src="${LOGO}" alt="" />
+      <div class="overlay-eyebrow">SECRET GROUNDS</div>
+      <div class="overlay-icon-btn">${icon('chevron-down')}</div>
+      <div class="overlay-icon-btn">${icon('dots')}</div>
+    </div>
+  `;
+}
+function overlayStat(iconName, caption, value) {
+  return `
+    <div class="overlay-stat-row">
+      ${icon(iconName)}
+      <div><div class="overlay-stat-caption">${caption}</div><div class="overlay-stat-value">${value}</div></div>
+    </div>
+  `;
+}
+function overlayFooterLogout() {
+  return `
+    <div class="overlay-footer-divider"></div>
+    <div class="overlay-actions"><button class="btn-outline">Log Out</button></div>
+  `;
+}
+
+function overlayPillMarkup() {
+  return `<div class="overlay-pill"><img src="${LOGO}" alt="" /><span>SECRET GROUNDS</span></div>`;
+}
+
+/* ============================================================
+   STATE REGISTRY
+   ============================================================ */
+const STATES = {
+  'lock': {
+    build(screen) {
+      screen.classList.remove('desktop-backdrop');
+      screen.innerHTML = lockScreenMarkup();
+    }
+  },
+  'open-time': {
+    build(screen) {
+      screen.classList.add('desktop-backdrop');
+      const { accent, html } = overlayCardMarkup('open-time');
+      screen.dataset.accent = accent;
+      screen.innerHTML = `<div class="desktop-hint">Customer's desktop (idle)</div><div class="overlay-anchor"><div class="overlay-card">${html}</div></div>`;
+    }
+  },
+  'package': {
+    build(screen) {
+      screen.classList.add('desktop-backdrop');
+      const { accent, html } = overlayCardMarkup('package');
+      screen.dataset.accent = accent;
+      screen.innerHTML = `<div class="desktop-hint">Customer's desktop (idle)</div><div class="overlay-anchor"><div class="overlay-card">${html}</div></div>`;
+    }
+  },
+  'member': {
+    build(screen) {
+      screen.classList.add('desktop-backdrop');
+      const { accent, html } = overlayCardMarkup('member');
+      screen.dataset.accent = accent;
+      screen.innerHTML = `<div class="desktop-hint">Customer's desktop (idle)</div><div class="overlay-anchor"><div class="overlay-card">${html}</div></div>`;
+    }
+  },
+  'collapsed': {
+    build(screen) {
+      screen.classList.add('desktop-backdrop');
+      screen.innerHTML = `<div class="desktop-hint">Customer's desktop (idle)</div><div class="overlay-anchor">${overlayPillMarkup()}</div>`;
+    }
+  },
+  'connection-lost': {
+    build(screen) {
+      screen.classList.remove('desktop-backdrop');
+      screen.dataset.connection = 'offline';
+      screen.innerHTML = lockScreenMarkup({ offline: true });
+    }
+  },
+  'reconnecting': {
+    build(screen) {
+      screen.classList.add('desktop-backdrop');
+      const { accent, html } = overlayCardMarkup('member');
+      screen.dataset.accent = accent;
+      const withWarning = html.replace(
+        '<div class="overlay-pc-row">',
+        '<div class="overlay-connection-warning">Reconnecting...</div><div class="overlay-pc-row">'
+      );
+      screen.innerHTML = `<div class="desktop-hint">Customer's desktop (idle)</div><div class="overlay-anchor"><div class="overlay-card">${withWarning}</div></div>`;
+    }
+  },
+};
+
+/* ============================================================
+   RESOLUTION FRAME + RENDER LOOP
+   ============================================================ */
+const RES = {
+  '1920x1080': [1920, 1080],
+  '1366x768': [1366, 768],
+  '3440x1440': [3440, 1440],
+};
+
+let currentState = 'lock';
+let currentRes = '1920x1080';
+
+const screenEl = document.getElementById('screen');
+const frameShell = document.getElementById('frame-shell');
+const frameLabel = document.getElementById('frame-label');
+const viewport = document.getElementById('viewport');
+const zoomReadout = document.getElementById('zoom-readout');
+
+function render() {
+  delete screenEl.dataset.accent;
+  delete screenEl.dataset.connection;
+  screenEl.className = 'screen';
+  STATES[currentState].build(screenEl);
+  layout();
+  wireInteractions();
+}
+
+function layout() {
+  const [w, h] = RES[currentRes];
+  screenEl.style.width = w + 'px';
+  screenEl.style.height = h + 'px';
+
+  const availW = viewport.clientWidth - 64;
+  const availH = viewport.clientHeight - 64;
+  const scale = Math.min(availW / w, availH / h, 1);
+
+  // The shell's own layout box is the SCALED size (what actually
+  // reserves space in the page); .screen keeps its true resolution
+  // and is visually scaled down inside it from the top-left corner.
+  frameShell.style.width = (w * scale) + 'px';
+  frameShell.style.height = (h * scale) + 'px';
+  screenEl.style.transform = `scale(${scale})`;
+  frameLabel.textContent = `${w} × ${h} @ ${Math.round(scale * 100)}%`;
+  zoomReadout.textContent = Math.round(scale * 100) + '%';
+}
+
+function wireInteractions() {
+  const eyeToggle = document.getElementById('eye-toggle');
+  const pinInput = document.getElementById('pin-input');
+  if (eyeToggle && pinInput) {
+    eyeToggle.addEventListener('click', () => {
+      const revealed = pinInput.type === 'text';
+      pinInput.type = revealed ? 'password' : 'text';
+      eyeToggle.classList.toggle('revealed', !revealed);
+      eyeToggle.innerHTML = icon(revealed ? 'eye' : 'eye-off');
+    });
+  }
+
+  const minimizeBtn = screenEl.querySelector('.overlay-icon-btn');
+  if (minimizeBtn && (currentState === 'open-time' || currentState === 'package' || currentState === 'member' || currentState === 'reconnecting')) {
+    minimizeBtn.addEventListener('click', () => {
+      currentState = 'collapsed';
+      updateActiveNav();
+      render();
+    });
+  }
+  const pill = screenEl.querySelector('.overlay-pill');
+  if (pill) {
+    pill.addEventListener('click', () => {
+      currentState = 'member';
+      updateActiveNav();
+      render();
+    });
+  }
+}
+
+function updateActiveNav() {
+  document.querySelectorAll('.state-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.state === currentState);
+  });
+}
+
+document.getElementById('state-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('.state-btn');
+  if (!btn) return;
+  currentState = btn.dataset.state;
+  updateActiveNav();
+  render();
+});
+
+document.querySelector('.toolbar').addEventListener('click', (e) => {
+  const btn = e.target.closest('.res-btn');
+  if (!btn) return;
+  currentRes = btn.dataset.res;
+  document.querySelectorAll('.res-btn').forEach(b => b.classList.toggle('active', b === btn));
+  layout();
+});
+
+window.addEventListener('resize', layout);
+
+render();
+</script>
+</body>
+</html>

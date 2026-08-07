@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -26,3 +27,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # Two sequential Tk() interpreters, each created on its own background
+    # thread (one per smoke check above), leave a Tcl async handler that
+    # normal Python interpreter finalization tries to clean up from the main
+    # thread -- a different thread than created it. Tcl treats that mismatch
+    # as fatal ("async handler deleted by the wrong thread") and aborts with
+    # a nonzero exit code even though both checks already passed. Exiting
+    # immediately, before that finalization runs, sidesteps it.
+    sys.stdout.flush()
+    os._exit(0)

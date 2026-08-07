@@ -78,7 +78,7 @@ def test_active_prepaid_overlay() -> None:
     overlay.update_time(65)
     model = overlay.build_view_model()
     assert model.title == "Session Active"
-    assert model.timer_label == "Time Remaining"
+    assert model.timer_label == "Remaining Time"
     assert model.timer_value == "1:05"
     assert model.customer_name == "Guest"
 
@@ -404,6 +404,49 @@ def test_collapsed_overlay_still_receives_timer_updates() -> None:
     assert overlay.build_view_model().timer_value == overlay.format_timer(11)
 
 
+def test_used_time_is_tracked_separately_from_the_primary_timer() -> None:
+    overlay = CustomerOverlayController("PC-13", enable_gui=False)
+    overlay.show_session("Prepaid")
+    overlay.update_time(3600)
+    model = overlay.build_view_model()
+    assert model.used_time_value in {"0s", "1s"}
+
+    # A resync (is_new_session=False) must not reset the used-time clock --
+    # only a genuinely new session does. int() truncation means the used-time
+    # value only ticks over once a full second has actually elapsed.
+    time.sleep(1.1)
+    overlay.show_session("Prepaid", is_new_session=False)
+    resynced_model = overlay.build_view_model()
+    assert resynced_model.used_time_value != "0s"
+
+    # A genuinely new session resets it.
+    overlay.show_session("Prepaid", is_new_session=True)
+    fresh_model = overlay.build_view_model()
+    assert fresh_model.used_time_value in {"0s", "1s"}
+
+
+def test_is_member_session_flag_distinguishes_member_from_other_modes() -> None:
+    member_overlay = CustomerOverlayController("PC-14", enable_gui=False)
+    member_overlay.show_session("Member Time", customer_name="Kinairah")
+    assert member_overlay.build_view_model().is_member_session is True
+
+    prepaid_overlay = CustomerOverlayController("PC-15", enable_gui=False)
+    prepaid_overlay.show_session("Prepaid")
+    assert prepaid_overlay.build_view_model().is_member_session is False
+
+    open_time_overlay = CustomerOverlayController("PC-16", enable_gui=False)
+    open_time_overlay.show_session("Open Time", is_elapsed=True)
+    assert open_time_overlay.build_view_model().is_member_session is False
+
+
+def test_format_used_time_is_human_readable_not_clock_style() -> None:
+    overlay = CustomerOverlayController("PC-17", enable_gui=False)
+    assert overlay.format_used_time(5) == "5s"
+    assert overlay.format_used_time(65) == "1m 05s"
+    assert overlay.format_used_time(3600) == "1h 00m"
+    assert overlay.format_used_time(4325) == "1h 12m"
+
+
 def test_lock_screen_remains_non_bypassable() -> None:
     # The active-session overlay was deliberately redesigned to be a normal,
     # minimizable window (native title bar, taskbar entry). The lock screen
@@ -453,6 +496,9 @@ def main() -> None:
     test_end_session_hides_customer_overlay()
     test_resync_preserves_collapsed_state_but_new_session_expands()
     test_collapsed_overlay_still_receives_timer_updates()
+    test_used_time_is_tracked_separately_from_the_primary_timer()
+    test_is_member_session_flag_distinguishes_member_from_other_modes()
+    test_format_used_time_is_human_readable_not_clock_style()
     test_lock_screen_remains_non_bypassable()
     test_power_executor_guard_is_enabled_for_tests()
     print("Customer UI smoke tests passed.")

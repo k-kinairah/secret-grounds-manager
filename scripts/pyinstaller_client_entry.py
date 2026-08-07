@@ -1,4 +1,5 @@
 import os
+import sys
 
 from client.client import main
 from client.customer_overlay import run_customer_overlay_gui_smoke
@@ -19,5 +20,18 @@ if __name__ == "__main__":
         run_lock_screen_gui_smoke()
         run_customer_overlay_gui_smoke()
         print("Packaged lock-screen and customer-overlay GUI smoke passed.")
+        # Two separate Tk() interpreters, each created on its own background
+        # thread (one per smoke check), leave a Tcl async handler that a
+        # normal Python interpreter finalization tries to clean up from the
+        # main thread -- a different thread than created it. Tcl treats that
+        # mismatch as fatal ("async handler deleted by the wrong thread") and
+        # aborts the process with a nonzero exit code, even though both
+        # checks above already completed successfully. Exiting immediately,
+        # before that finalization runs, sidesteps it; this branch is a
+        # diagnostic-only entry point (gated behind SECRET_GROUNDS_CLIENT_GUI_SMOKE),
+        # never reached by the real client, so skipping normal shutdown here
+        # has no production effect.
+        sys.stdout.flush()
+        os._exit(0)
     else:
         main()

@@ -62,6 +62,20 @@ def verify_tk_runtime(*, create_root: bool = True) -> TkRuntimeInfo:
                 root.withdraw()
                 root.update_idletasks()
                 root.destroy()
+            else:
+                # A bare tk.Tcl() (useTk=False) has no destroy() -- that's a
+                # Tk widget command, unavailable without Tk loaded. Force
+                # its refcount to zero and collect it here, synchronously,
+                # on this same thread, rather than leaving it for whatever
+                # later GC pass happens to run -- possibly on a different
+                # thread while other code is creating/destroying real Tk()
+                # roots on background threads, which is exactly the
+                # mismatch that trips Tcl's "async handler deleted by the
+                # wrong thread" panic at process exit.
+                del root
+                import gc
+
+                gc.collect()
     except Exception as error:
         raise TkRuntimeError(_build_failure_message(error)) from error
 

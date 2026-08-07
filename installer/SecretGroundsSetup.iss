@@ -72,6 +72,7 @@ Source: "..\scripts\client-config-tool.ps1"; DestDir: "{app}\scripts"; Flags: ig
 Source: "..\scripts\install-client-role.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
 Source: "..\scripts\install-client-autostart.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
 Source: "..\scripts\remove-client-autostart.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
+Source: "..\scripts\start-client-after-install.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
 Source: "..\scripts\install-startup-folder-shortcuts.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
 Source: "..\scripts\remove-client-startup-folder-shortcut.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
 Source: "..\scripts\client-config-tool.ps1"; DestDir: "{tmp}"; Flags: dontcopy
@@ -617,10 +618,45 @@ begin
   end;
 end;
 
+function ClientLogPathMessage: String;
+begin
+  Result := 'Check: ' + ExpandConstant('{app}\logs\client.log');
+end;
+
+function ClientAutostartKeepArgValue: String;
+begin
+  // Same reasoning as CashierAutostartArgValue: a plain presence/absence
+  // [switch], not a boolean value, since an externally-invoked
+  // "powershell.exe -File ... -Param:$true" does not reliably bind
+  // boolean-valued parameters across the process boundary.
+  if ClientOptionsPage.Values[0] then
+    Result := '-KeepAutostart'
+  else
+    Result := '';
+end;
+
+procedure RunClientPostInstall;
+begin
+  if SelectedRole <> 'client' then Exit;
+  // Offline preparation deliberately saves config without contacting the
+  // cashier -- starting the client now would immediately try to connect,
+  // defeating the entire point of preparing a station offline.
+  if not (IsClientOnline or IsClientPreserve) then Exit;
+
+  if not RunCashierScript('start-client-after-install.ps1', ClientAutostartKeepArgValue) then begin
+    MsgBox('Secret Grounds was installed, but the client could not be started automatically.' + #13#10#13#10 +
+      ClientLogPathMessage + #13#10#13#10 +
+      'You can start it later from the Start Menu, or by signing in again if automatic startup is enabled.',
+      mbError, MB_OK);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then
+  if CurStep = ssPostInstall then begin
     RunCashierPostInstall;
+    RunClientPostInstall;
+  end;
 end;
 
 function InitializeUninstall: Boolean;

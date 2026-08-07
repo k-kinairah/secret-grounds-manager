@@ -2,11 +2,15 @@
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, get_package_paths
 
 hiddenimports = []
 hiddenimports += collect_submodules('client')
 hiddenimports += collect_submodules('server')
+hiddenimports += collect_submodules('webview')
+hiddenimports += collect_submodules('webview.platforms')
+hiddenimports += collect_submodules('pythonnet')
+hiddenimports += collect_submodules('clr_loader')
 
 python_root = Path(sys.base_prefix)
 
@@ -27,9 +31,24 @@ datas = [
     ('client\\config.example.json', '.'),
     ('client\\assets\\secret-grounds-logo.png', 'assets'),
 ]
+datas += collect_tree('client\\web_ui', 'client\\web_ui')
 datas += collect_tree(python_root / 'tcl' / 'tcl8.6', '_tcl_data')
 datas += collect_tree(python_root / 'tcl' / 'tk8.6', '_tk_data')
 datas += collect_tree(python_root / 'Lib' / 'tkinter', 'tkinter')
+_, webview_package_dir = get_package_paths('webview')
+webview_lib_dir = Path(webview_package_dir) / 'lib'
+webview_edgechromium_files = [
+    Path('Microsoft.Web.WebView2.Core.dll'),
+    Path('Microsoft.Web.WebView2.WinForms.dll'),
+    Path('WebBrowserInterop.x64.dll'),
+    Path('WebBrowserInterop.x86.dll'),
+    Path('runtimes') / 'win-arm64' / 'native' / 'WebView2Loader.dll',
+    Path('runtimes') / 'win-x64' / 'native' / 'WebView2Loader.dll',
+    Path('runtimes') / 'win-x86' / 'native' / 'WebView2Loader.dll',
+]
+for webview_file in webview_edgechromium_files:
+    datas.append((str(webview_lib_dir / webview_file), str(Path('webview') / 'lib' / webview_file.parent)))
+datas += collect_data_files('webview', subdir='js')
 
 binaries = []
 for dll_name in ('_tkinter.pyd', 'tcl86t.dll', 'tk86t.dll'):
@@ -52,6 +71,11 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+a.datas = [
+    entry
+    for entry in a.datas
+    if not str(entry[0]).replace('\\', '/').endswith('webview/lib/pywebview-android.jar')
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(
