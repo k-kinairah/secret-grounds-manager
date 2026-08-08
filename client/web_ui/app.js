@@ -1,5 +1,8 @@
 const app = document.getElementById("app");
-const LOGO = "../assets/secret-grounds-logo.png";
+const DEFAULT_LOGO_CANDIDATES = [
+  "../assets/secret-grounds-logo.png",
+  "../../assets/secret-grounds-logo.png"
+];
 
 let currentState = {
   view: "lock",
@@ -17,9 +20,18 @@ let currentState = {
   is_login_processing: false,
   can_logout: false,
   countdown: null,
-  accent: "#22D3EE"
+  accent: "#22D3EE",
+  logo_url: ""
 };
 let lockDraft = { username: "", pin: "", pinVisible: false };
+let displayClock = {
+  timerId: null,
+  view: "lock",
+  mode: null,
+  key: "",
+  baseSeconds: null,
+  baseStamp: 0
+};
 
 function icon(name, cls) {
   return `<svg class="${cls || ""}"><use href="#icon-${name}"></use></svg>`;
@@ -34,7 +46,11 @@ function emitAction(action, payload = {}) {
 window.SecretGroundsUI = {
   setState(nextState) {
     currentState = { ...currentState, ...nextState };
+    syncDisplayClock();
     render();
+  },
+  handleLogoError(img) {
+    useNextLogoCandidate(img);
   },
   focusLock() {
     const active = document.activeElement;
@@ -43,6 +59,32 @@ window.SecretGroundsUI = {
     if (username && !username.disabled) username.focus();
   }
 };
+
+function logoCandidates() {
+  const configured = currentState.logo_url || window.SECRET_GROUNDS_LOGO_URL || "";
+  return [configured, ...DEFAULT_LOGO_CANDIDATES].filter((value, index, values) => value && values.indexOf(value) === index);
+}
+
+function logoUrlAt(index) {
+  return logoCandidates()[index] || "";
+}
+
+function logoImage(className = "") {
+  const classAttr = className ? ` class="${className}"` : "";
+  return `<img${classAttr} data-logo-index="0" src="${escapeHtml(logoUrlAt(0))}" alt="" onerror="window.SecretGroundsUI.handleLogoError(this)" />`;
+}
+
+function useNextLogoCandidate(img) {
+  const nextIndex = Number(img.dataset.logoIndex || 0) + 1;
+  const nextUrl = logoUrlAt(nextIndex);
+  if (nextUrl) {
+    img.dataset.logoIndex = String(nextIndex);
+    img.src = nextUrl;
+    return;
+  }
+  img.classList.add("logo-missing");
+  img.removeAttribute("src");
+}
 
 function formatTimer(totalSeconds, elapsed = false) {
   if (totalSeconds === null || totalSeconds === undefined) return "--:--";
@@ -54,6 +96,67 @@ function formatTimer(totalSeconds, elapsed = false) {
     return hours ? `${pad(hours)}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
   }
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+}
+
+function authoritativeTimer() {
+  if (currentState.view !== "overlay") return null;
+  const isOpen = currentState.session_type === "Open Time";
+  const seconds = isOpen ? currentState.elapsed_seconds : currentState.remaining_seconds;
+  if (seconds === null || seconds === undefined) return null;
+  return {
+    mode: isOpen ? "elapsed" : "countdown",
+    key: `${currentState.session_type || ""}|${currentState.customer_name || ""}|${currentState.pc_name || ""}`,
+    seconds: Math.max(0, Math.floor(Number(seconds) || 0))
+  };
+}
+
+function syncDisplayClock() {
+  const timer = authoritativeTimer();
+  if (!timer) {
+    stopDisplayClock();
+    displayClock.view = currentState.view;
+    return;
+  }
+  displayClock.view = "overlay";
+  displayClock.mode = timer.mode;
+  displayClock.key = timer.key;
+  displayClock.baseSeconds = timer.seconds;
+  displayClock.baseStamp = performance.now();
+  if (!displayClock.timerId) {
+    displayClock.timerId = window.setInterval(updateDisplayedTimer, 1000);
+  }
+}
+
+function stopDisplayClock() {
+  if (displayClock.timerId) {
+    window.clearInterval(displayClock.timerId);
+    displayClock.timerId = null;
+  }
+  displayClock.mode = null;
+  displayClock.key = "";
+  displayClock.baseSeconds = null;
+  displayClock.baseStamp = 0;
+}
+
+function displayedTimerSeconds() {
+  if (displayClock.baseSeconds === null || displayClock.mode === null) {
+    const isOpen = currentState.session_type === "Open Time";
+    return isOpen ? currentState.elapsed_seconds : currentState.remaining_seconds;
+  }
+  const elapsed = Math.floor((performance.now() - displayClock.baseStamp) / 1000);
+  if (displayClock.mode === "elapsed") return displayClock.baseSeconds + elapsed;
+  return Math.max(0, displayClock.baseSeconds - elapsed);
+}
+
+function updateDisplayedTimer() {
+  if (currentState.view !== "overlay") {
+    stopDisplayClock();
+    return;
+  }
+  const timer = document.querySelector(".overlay-timer");
+  if (!timer) return;
+  const isOpen = currentState.session_type === "Open Time";
+  timer.textContent = formatTimer(displayedTimerSeconds(), isOpen);
 }
 
 function formatUsedTime(totalSeconds) {
@@ -165,12 +268,12 @@ function renderLock() {
       ${lockVolumetricRays()}
       ${lockFlowStreaks()}
       <div class="lock-branding-bloom"></div>
-      <div class="lock-watermark"><img src="${LOGO}" alt="" /></div>
+      <div class="lock-watermark">${logoImage()}</div>
       <div class="lock-particles">${particleDots(72)}</div>
       <div class="lock-vignette"></div>
       <button class="lock-gear" type="button" data-action="open_setup">${icon("gear")}</button>
       <div class="lock-content">
-        <img class="lock-logo" src="${LOGO}" alt="" />
+        ${logoImage("lock-logo")}
         <h1 class="lock-title">${escapeHtml((currentState.shop_display_name || "Secret Grounds").toUpperCase())}</h1>
         <p class="lock-headline">${escapeHtml(currentState.headline || "Available soon.")}</p>
         <p class="lock-instruction">${escapeHtml(currentState.instruction || "")}</p>
@@ -222,7 +325,7 @@ function renderOverlay() {
   document.body.dataset.webviewSurface = "overlay";
   const isOpen = currentState.session_type === "Open Time";
   const isMember = currentState.session_type === "Member Time";
-  const primarySeconds = isOpen ? currentState.elapsed_seconds : currentState.remaining_seconds;
+  const primarySeconds = displayedTimerSeconds();
   const timerLabel = isOpen ? "Elapsed Time" : "Remaining Time";
   const identityName = isMember ? (currentState.customer_name || "").toLowerCase() : "Guest";
   const identityCaption = isMember ? "Member" : (isOpen ? "Open Time" : "Package");
@@ -259,7 +362,7 @@ function renderOverlay() {
 function overlayHeader() {
   return `
     <div class="overlay-header">
-      <img src="${LOGO}" alt="" />
+      ${logoImage()}
       <div class="overlay-eyebrow">SECRET GROUNDS</div>
       <button class="overlay-icon-btn" type="button" data-action="collapse_overlay">${icon("chevron-down")}</button>
     </div>`;
@@ -270,7 +373,7 @@ function renderPill() {
   app.innerHTML = `
     <section class="web-overlay-root">
       <div class="overlay-pill" data-action="restore_overlay">
-        <img src="${LOGO}" alt="" />
+        ${logoImage()}
         <span>SECRET GROUNDS</span>
       </div>
     </section>`;

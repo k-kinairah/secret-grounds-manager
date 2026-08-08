@@ -31,6 +31,7 @@ html, body, #app {
 }
 body[data-webview-surface="overlay"] { background: #0f172a; }
 body[data-webview-surface="pill"] { background: #101a29; }
+img.logo-missing { visibility: hidden; }
 button, input { font: inherit; }
 button { border: 0; }
 .svg-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }

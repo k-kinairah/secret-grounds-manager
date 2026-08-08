@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Lock, Thread, current_thread
@@ -25,6 +26,24 @@ def _diagnostic(message: str) -> None:
 
 def web_ui_index_path() -> Path:
     return Path(__file__).resolve().parent / "web_ui" / "index.html"
+
+
+def bundled_root_path() -> Path:
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        return Path(frozen_root)
+    return Path(__file__).resolve().parents[1]
+
+
+def secret_grounds_logo_url() -> str:
+    candidates = [
+        bundled_root_path() / "assets" / "secret-grounds-logo.png",
+        Path(__file__).resolve().parent / "assets" / "secret-grounds-logo.png",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.as_uri()
+    return ""
 
 
 def primary_work_area() -> tuple[int, int, int, int]:
@@ -302,6 +321,7 @@ class SecretGroundsWebViewHost:
             with self.lock:
                 return {
                     "view": "lock",
+                    "logo_url": secret_grounds_logo_url(),
                     "pc_name": self.lock_state.pc_name,
                     "shop_display_name": self.lock_state.shop_display_name,
                     "headline": self.lock_state.headline,
@@ -313,6 +333,7 @@ class SecretGroundsWebViewHost:
         model = self.lock_controller.build_view_model()
         return {
             "view": "lock",
+            "logo_url": secret_grounds_logo_url(),
             "pc_name": model.pc_name,
             "shop_display_name": model.brand,
             "mode": model.mode,
@@ -331,6 +352,7 @@ class SecretGroundsWebViewHost:
                 state = self.overlay_state
                 return {
                     "view": "overlay",
+                    "logo_url": secret_grounds_logo_url(),
                     "pc_name": state.pc_name,
                     "shop_display_name": state.shop_display_name,
                     "session_type": state.session_type,
@@ -344,6 +366,7 @@ class SecretGroundsWebViewHost:
         model = self.overlay_controller.build_view_model()
         return {
             "view": "overlay",
+            "logo_url": secret_grounds_logo_url(),
             "pc_name": model.pc_name,
             "shop_display_name": model.eyebrow.title(),
             "session_type": model.session_type,
@@ -601,7 +624,7 @@ class SecretGroundsWebViewHost:
             self.restore_overlay()
 
     def render_pill(self) -> None:
-        self._evaluate("pill", {"view": "pill", "pc_name": self.pc_name})
+        self._evaluate("pill", {"view": "pill", "logo_url": secret_grounds_logo_url(), "pc_name": self.pc_name})
 
     def collapse_overlay(self) -> None:
         overlay = self.windows.get("overlay")
