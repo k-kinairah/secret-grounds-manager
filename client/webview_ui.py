@@ -4,6 +4,7 @@ import ctypes
 import json
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, Lock, Thread, current_thread
 from typing import TYPE_CHECKING, Any, Callable
@@ -22,6 +23,28 @@ MemberLoginAction = Callable[[str, str], str | None]
 
 def _diagnostic(message: str) -> None:
     print(f"[webview-ui] {message}", flush=True)
+    try:
+        log_path = Path(sys.executable).resolve().with_name("client-webview-startup.log")
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write(f"{timestamp} [webview-ui] {message}\n")
+    except Exception:
+        pass
+
+
+def _thread_label() -> str:
+    thread = current_thread()
+    return f"thread={thread.name}/{thread.ident}"
+
+
+def _handle_value(handle: Any) -> int:
+    if handle is None:
+        return 0
+    try:
+        return int(handle)
+    except TypeError:
+        value = getattr(handle, "value", None)
+        return int(value or 0)
 
 
 def web_ui_index_path() -> Path:
@@ -62,6 +85,76 @@ def primary_work_area() -> tuple[int, int, int, int]:
 def bottom_right_geometry(width: int, height: int, margin: int = 16) -> tuple[int, int]:
     left, top, right, bottom = primary_work_area()
     return (right - width - margin, bottom - height - margin)
+
+
+def _window_hwnd(window: webview.Window) -> int | None:
+    native = getattr(window, "native", None)
+    if native is None:
+        return None
+    try:
+        return int(native.Handle.ToInt64())
+    except Exception as error:
+        _diagnostic(f"native hwnd unavailable: {error}")
+        return None
+
+
+def _taskbar_hwnd(window: webview.Window) -> int | None:
+    hwnd = _window_hwnd(window)
+    if not hwnd:
+        return None
+    try:
+        from ctypes import wintypes
+
+        get_ancestor = ctypes.windll.user32.GetAncestor
+        get_ancestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        get_ancestor.restype = wintypes.HWND
+        root = get_ancestor(wintypes.HWND(hwnd), 2)  # GA_ROOT
+        root_value = _handle_value(root)
+        if root_value:
+            return root_value
+    except Exception as error:
+        _diagnostic(f"native root hwnd lookup failed: {error}")
+    return hwnd
+
+
+def _describe_window_state(label: str, hwnd: int) -> None:
+    try:
+        from ctypes import wintypes
+
+        handle = wintypes.HWND(hwnd)
+        get_style = ctypes.windll.user32.GetWindowLongPtrW
+        get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+        get_style.restype = ctypes.c_ssize_t
+        get_window = ctypes.windll.user32.GetWindow
+        get_window.argtypes = [wintypes.HWND, wintypes.UINT]
+        get_window.restype = wintypes.HWND
+        get_parent = ctypes.windll.user32.GetParent
+        get_parent.argtypes = [wintypes.HWND]
+        get_parent.restype = wintypes.HWND
+        get_ancestor = ctypes.windll.user32.GetAncestor
+        get_ancestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        get_ancestor.restype = wintypes.HWND
+        is_visible = ctypes.windll.user32.IsWindowVisible
+        is_visible.argtypes = [wintypes.HWND]
+        is_visible.restype = wintypes.BOOL
+        is_iconic = ctypes.windll.user32.IsIconic
+        is_iconic.argtypes = [wintypes.HWND]
+        is_iconic.restype = wintypes.BOOL
+        root = get_ancestor(handle, 2)
+        root_owner = get_ancestor(handle, 3)
+        owner = get_window(handle, 4)  # GW_OWNER
+        parent = get_parent(handle)
+        style = get_style(handle, -16)
+        exstyle = get_style(handle, -20)
+        _diagnostic(
+            f"{label} hwnd=0x{hwnd:X} root=0x{_handle_value(root):X} root_owner=0x{_handle_value(root_owner):X} "
+            f"owner=0x{_handle_value(owner):X} parent=0x{_handle_value(parent):X} style=0x{style:X} "
+            f"exstyle=0x{exstyle:X} appwindow={bool(exstyle & 0x00040000)} "
+            f"toolwindow={bool(exstyle & 0x00000080)} visible={bool(is_visible(handle))} "
+            f"minimized={bool(is_iconic(handle))} {_thread_label()}"
+        )
+    except Exception as error:
+        _diagnostic(f"{label} window state diagnostics failed: {error}")
 
 
 def move_window_exact(window: webview.Window, x: int, y: int) -> None:
@@ -174,6 +267,15 @@ def apply_window_opacity(window: webview.Window, opacity: float) -> None:
         _diagnostic(f"native window opacity failed: {error}")
 
 
+def apply_pill_native_geometry(pill: webview.Window, content_width: int, content_height: int) -> None:
+    """Size/position the pill host snug to its CSS content, clipped to match."""
+    x, y = bottom_right_geometry(content_width, content_height)
+    pill.resize(content_width, content_height)
+    move_window_exact(pill, x, y)
+    apply_rounded_window_region(pill, content_width, content_height, 19)
+    apply_window_opacity(pill, 1.0)
+
+
 def set_native_window_visibility(
     window: webview.Window,
     is_visible: bool,
@@ -185,18 +287,23 @@ def set_native_window_visibility(
     try:
         from ctypes import wintypes
 
-        native = getattr(window, "native", None)
-        if native is None:
+        hwnd_value = _taskbar_hwnd(window)
+        if hwnd_value is None:
             return False
-        hwnd = wintypes.HWND(int(native.Handle.ToInt64()))
-        show_window = ctypes.windll.user32.ShowWindow
+        hwnd = wintypes.HWND(hwnd_value)
+        _describe_window_state("native visibility before", hwnd_value)
+        show_window = ctypes.windll.user32.ShowWindowAsync
         show_window.argtypes = [wintypes.HWND, ctypes.c_int]
         show_window.restype = wintypes.BOOL
         if not is_visible:
+            _diagnostic(f"native visibility before hide {_thread_label()}")
             show_window(hwnd, 0)  # SW_HIDE
+            _diagnostic(f"native visibility after hide {_thread_label()}")
             return True
 
+        _diagnostic(f"native visibility before show visible={is_visible} activate={activate} on_top={on_top} {_thread_label()}")
         show_window(hwnd, 5 if activate else 4)  # SW_SHOW / SW_SHOWNOACTIVATE
+        _diagnostic(f"native visibility after show visible={is_visible} {_thread_label()}")
         set_window_pos = ctypes.windll.user32.SetWindowPos
         set_window_pos.argtypes = [
             wintypes.HWND,
@@ -209,15 +316,152 @@ def set_native_window_visibility(
         ]
         set_window_pos.restype = wintypes.BOOL
         insert_after = wintypes.HWND(-1 if on_top else -2)  # HWND_TOPMOST / HWND_NOTOPMOST
-        flags = 0x0001 | 0x0002 | 0x0010  # NOSIZE | NOMOVE | NOACTIVATE
+        flags = 0x0001 | 0x0002 | 0x0010 | 0x4000  # NOSIZE | NOMOVE | NOACTIVATE | ASYNCWINDOWPOS
+        _diagnostic(f"native visibility before set_window_pos on_top={on_top} {_thread_label()}")
         if not set_window_pos(hwnd, insert_after, 0, 0, 0, 0, flags):
             raise ctypes.WinError()
+        _diagnostic(f"native visibility after set_window_pos on_top={on_top} {_thread_label()}")
         if activate:
             ctypes.windll.user32.SetForegroundWindow(hwnd)
+        _describe_window_state("native visibility after", hwnd_value)
         return True
     except Exception as error:
         _diagnostic(f"native window visibility failed: {error}")
         return False
+
+
+def set_native_window_z_order(window: webview.Window, on_top: bool) -> bool:
+    try:
+        from ctypes import wintypes
+
+        hwnd_value = _taskbar_hwnd(window)
+        if hwnd_value is None:
+            return False
+        hwnd = wintypes.HWND(hwnd_value)
+        _describe_window_state("native z-order before", hwnd_value)
+        set_window_pos = ctypes.windll.user32.SetWindowPos
+        set_window_pos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        set_window_pos.restype = wintypes.BOOL
+        insert_after = wintypes.HWND(-1 if on_top else -2)  # HWND_TOPMOST / HWND_NOTOPMOST
+        flags = 0x0001 | 0x0002 | 0x0010 | 0x4000  # NOSIZE | NOMOVE | NOACTIVATE | ASYNCWINDOWPOS
+        _diagnostic(f"native z-order before set_window_pos on_top={on_top} {_thread_label()}")
+        if not set_window_pos(hwnd, insert_after, 0, 0, 0, 0, flags):
+            raise ctypes.WinError()
+        _diagnostic(f"native z-order after set_window_pos on_top={on_top} {_thread_label()}")
+        _describe_window_state("native z-order after", hwnd_value)
+        return True
+    except Exception as error:
+        _diagnostic(f"native z-order failed: {error}")
+        return False
+
+
+def set_native_taskbar_presence(window: webview.Window, is_visible: bool) -> bool:
+    try:
+        from ctypes import wintypes
+
+        native = getattr(window, "native", None)
+        if native is None:
+            _diagnostic(f"native taskbar presence skipped: native missing visible={is_visible}")
+            return False
+        hwnd_value = _taskbar_hwnd(window)
+        if hwnd_value is None:
+            _diagnostic(f"native taskbar presence skipped: hwnd missing visible={is_visible}")
+            return False
+        hwnd = wintypes.HWND(hwnd_value)
+        get_style = ctypes.windll.user32.GetWindowLongPtrW
+        get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+        get_style.restype = ctypes.c_ssize_t
+        set_style = ctypes.windll.user32.SetWindowLongPtrW
+        set_style.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        set_style.restype = ctypes.c_ssize_t
+        get_window = ctypes.windll.user32.GetWindow
+        get_window.argtypes = [wintypes.HWND, wintypes.UINT]
+        get_window.restype = wintypes.HWND
+        set_owner = ctypes.windll.user32.SetWindowLongPtrW
+        set_window_pos = ctypes.windll.user32.SetWindowPos
+        set_window_pos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        set_window_pos.restype = wintypes.BOOL
+        _describe_window_state("native taskbar presence before", hwnd_value)
+        extended_style = get_style(hwnd, -20)
+        if is_visible:
+            extended_style = (extended_style | 0x00040000) & ~0x00000080  # APPWINDOW, not TOOLWINDOW
+            owner = get_window(hwnd, 4)  # GW_OWNER
+            if owner:
+                _diagnostic(
+                    f"native taskbar presence clearing owner owner=0x{int(owner):X} {_thread_label()}"
+                )
+                set_owner(hwnd, -8, 0)  # GWLP_HWNDPARENT on a top-level window
+        else:
+            extended_style = (extended_style & ~0x00040000) | 0x00000080
+        _diagnostic(f"native taskbar presence before exstyle visible={is_visible} {_thread_label()}")
+        set_style(hwnd, -20, extended_style)
+        _diagnostic(f"native taskbar presence after exstyle visible={is_visible} {_thread_label()}")
+        flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020 | 0x4000
+        _diagnostic(f"native taskbar presence before frame refresh visible={is_visible} {_thread_label()}")
+        set_window_pos(hwnd, None, 0, 0, 0, 0, flags)
+        _diagnostic(f"native taskbar presence after frame refresh visible={is_visible} {_thread_label()}")
+        _diagnostic(f"native taskbar presence before ShowInTaskbar visible={is_visible} {_thread_label()}")
+        native.ShowInTaskbar = is_visible
+        _diagnostic(f"native taskbar presence after ShowInTaskbar visible={is_visible} {_thread_label()}")
+        _describe_window_state("native taskbar presence after", hwnd_value)
+        return True
+    except Exception as error:
+        _diagnostic(f"native taskbar presence failed: {error}")
+        return False
+
+
+def set_native_window_minimized(window: webview.Window, is_minimized: bool) -> bool:
+    try:
+        from ctypes import wintypes
+
+        hwnd_value = _taskbar_hwnd(window)
+        if hwnd_value is None:
+            _diagnostic(f"native minimize skipped: native missing minimized={is_minimized}")
+            return False
+        hwnd = wintypes.HWND(hwnd_value)
+        _describe_window_state("native minimize before", hwnd_value)
+        show_window = ctypes.windll.user32.ShowWindowAsync
+        show_window.argtypes = [wintypes.HWND, ctypes.c_int]
+        show_window.restype = wintypes.BOOL
+        _diagnostic(f"native minimize before ShowWindowAsync minimized={is_minimized} {_thread_label()}")
+        if not show_window(hwnd, 6 if is_minimized else 9):  # SW_MINIMIZE / SW_RESTORE
+            raise ctypes.WinError()
+        _diagnostic(f"native minimize after ShowWindowAsync minimized={is_minimized} {_thread_label()}")
+        _describe_window_state("native minimize after", hwnd_value)
+        return True
+    except Exception as error:
+        _diagnostic(f"native minimize state failed: {error}")
+        try:
+            from ctypes import wintypes
+
+            native = getattr(window, "native", None)
+            if native is None:
+                return False
+            hwnd = wintypes.HWND(int(native.Handle.ToInt64()))
+            show_window = ctypes.windll.user32.ShowWindow
+            show_window.argtypes = [wintypes.HWND, ctypes.c_int]
+            show_window.restype = wintypes.BOOL
+            show_window(hwnd, 6 if is_minimized else 9)  # SW_MINIMIZE / SW_RESTORE
+            return True
+        except Exception as fallback_error:
+            _diagnostic(f"native minimize fallback failed: {fallback_error}")
+            return False
 
 
 def js_set_state_script(state: dict[str, Any]) -> str:
@@ -274,6 +518,7 @@ class SecretGroundsWebViewHost:
         overlay_controller: CustomerOverlayController | None = None,
         enable_lock_window: bool = True,
         enable_overlay_window: bool = True,
+        initial_lock_ready: Callable[[], bool] | None = None,
     ) -> None:
         self.pc_name = pc_name
         self.member_login_action = member_login_action
@@ -283,6 +528,7 @@ class SecretGroundsWebViewHost:
         self.overlay_controller = overlay_controller
         self.enable_lock_window = enable_lock_window
         self.enable_overlay_window = enable_overlay_window
+        self.initial_lock_ready = initial_lock_ready
         self.lock_state = WebLockState(pc_name=pc_name)
         self.overlay_state = WebOverlayState(pc_name=pc_name)
         self.windows: dict[str, webview.Window] = {}
@@ -381,6 +627,7 @@ class SecretGroundsWebViewHost:
 
     def create_windows(self, lock_only: bool = False) -> None:
         url = web_ui_index_path().as_uri()
+        lock_initially_visible = self.enable_lock_window
         _diagnostic(f"before create_window lock url={url}")
         lock_window = webview.create_window(
             "Secret Grounds",
@@ -392,16 +639,16 @@ class SecretGroundsWebViewHost:
             resizable=False,
             background_color="#0B1220",
             text_select=False,
-            hidden=not self.enable_lock_window,
+            hidden=not lock_initially_visible,
         )
         _diagnostic("after create_window lock")
         self.windows = {"lock": lock_window}
-        self.window_visibility = {"lock": self.enable_lock_window}
+        self.window_visibility = {"lock": lock_initially_visible}
         self._bind_window_events("lock", lock_window)
         if lock_only or not self.enable_overlay_window:
             return
 
-        overlay_x, overlay_y = bottom_right_geometry(276, 220)
+        overlay_x, overlay_y = (-32000, -32000)
         _diagnostic("before create_window overlay")
         overlay_window = webview.create_window(
             "Secret Grounds Session",
@@ -415,13 +662,13 @@ class SecretGroundsWebViewHost:
             on_top=True,
             resizable=False,
             min_size=(1, 1),
-            hidden=True,
+            hidden=False,
             transparent=True,
             background_color="#000000",
             text_select=False,
         )
         _diagnostic("after create_window overlay")
-        pill_x, pill_y = bottom_right_geometry(178, 38)
+        pill_x, pill_y = (-32000, -32000)
         _diagnostic("before create_window pill")
         pill_window = webview.create_window(
             "Secret Grounds",
@@ -432,18 +679,18 @@ class SecretGroundsWebViewHost:
             x=pill_x,
             y=pill_y,
             frameless=True,
-            on_top=True,
+            on_top=False,
             resizable=False,
             min_size=(1, 1),
-            hidden=True,
+            hidden=False,
             transparent=True,
-            background_color="#000000",
+            background_color="#101a29",
             text_select=False,
         )
         _diagnostic("after create_window pill")
         self.windows = {"lock": lock_window, "overlay": overlay_window, "pill": pill_window}
         self.window_visibility = {
-            "lock": self.enable_lock_window,
+            "lock": lock_initially_visible,
             "overlay": False,
             "pill": False,
         }
@@ -455,6 +702,9 @@ class SecretGroundsWebViewHost:
         window.events.closing += self._handle_closing
         if key == "lock":
             window.events.minimized += self._restore_locked_window
+
+    def _initial_lock_is_ready(self) -> bool:
+        return self.initial_lock_ready is None or self.initial_lock_ready()
 
     def _handle_closing(self) -> bool | None:
         return None if self.allow_close else False
@@ -479,6 +729,7 @@ class SecretGroundsWebViewHost:
         _diagnostic("after webview.start")
 
     def _on_start(self) -> None:
+        _diagnostic("webview host on_start")
         self.started.set()
         self._bind_native_lock_guard()
         if self.lock_controller is not None or self.overlay_controller is not None:
@@ -515,11 +766,13 @@ class SecretGroundsWebViewHost:
                 self.render_pill()
 
     def request_lock_refresh(self) -> None:
+        _diagnostic("request lock refresh")
         with self.lock:
             self.pending_lock_refresh = True
         self.refresh_event.set()
 
     def request_overlay_refresh(self) -> None:
+        _diagnostic("request overlay refresh")
         with self.lock:
             self.pending_overlay_refresh = True
         self.refresh_event.set()
@@ -572,7 +825,18 @@ class SecretGroundsWebViewHost:
             self._focus_lock_inputs()
 
     def refresh_lock(self) -> None:
+        _diagnostic(
+            "refresh_lock "
+            f"loaded={'lock' in self.loaded} initial_ready={self._initial_lock_is_ready()} "
+            f"visibility={self.window_visibility.get('lock')}"
+        )
         if "lock" not in self.loaded:
+            if self.enable_lock_window and self._initial_lock_is_ready():
+                _diagnostic("lock ready before load; showing hidden lock to trigger WebView load")
+                self._set_window_visible("lock", True)
+            return
+        if self.enable_lock_window and not self._initial_lock_is_ready():
+            self.hide_lock()
             return
         if self.lock_controller is None:
             self.show_lock()
@@ -587,6 +851,7 @@ class SecretGroundsWebViewHost:
         self._set_window_visible("lock", False)
 
     def show_overlay(self, overlay_state: WebOverlayState) -> None:
+        _diagnostic(f"show_overlay direct state={overlay_state}")
         with self.lock:
             self.overlay_state = overlay_state
         self.hide_lock()
@@ -603,12 +868,21 @@ class SecretGroundsWebViewHost:
         self._evaluate("overlay", self.overlay_payload())
 
     def refresh_overlay(self) -> None:
-        if "overlay" not in self.loaded or "pill" not in self.loaded:
-            return
+        _diagnostic(
+            "refresh_overlay "
+            f"loaded_overlay={'overlay' in self.loaded} loaded_pill={'pill' in self.loaded}"
+        )
         if self.overlay_controller is None:
+            if "overlay" not in self.loaded:
+                return
             self.render_overlay()
             return
         model = self.overlay_controller.build_view_model()
+        _diagnostic(
+            "refresh_overlay model "
+            f"visible={model.is_visible} collapsed={model.is_collapsed} "
+            f"seconds={model.seconds_value} elapsed={model.is_elapsed}"
+        )
         overlay = self.windows.get("overlay")
         pill = self.windows.get("pill")
         if not self.enable_overlay_window or not model.is_visible:
@@ -618,6 +892,13 @@ class SecretGroundsWebViewHost:
                 self._set_window_visible("pill", False)
             return
         self.hide_lock()
+        if overlay is not None and "overlay" not in self.loaded:
+            _diagnostic("overlay visible before load; showing hidden overlay to trigger WebView load")
+            self._set_window_visible("overlay", True)
+            return
+        if "overlay" not in self.loaded:
+            _diagnostic("overlay visible but overlay window missing/not loaded")
+            return
         if model.is_collapsed:
             self.collapse_overlay()
         else:
@@ -626,23 +907,28 @@ class SecretGroundsWebViewHost:
     def render_pill(self) -> None:
         self._evaluate("pill", {"view": "pill", "logo_url": secret_grounds_logo_url(), "pc_name": self.pc_name})
 
+    def show_collapsed_control(self) -> None:
+        pill = self.windows.get("pill")
+        if pill is None:
+            return
+        self.render_pill()
+        width, height = self.last_pill_size
+        apply_pill_native_geometry(pill, width, height)
+        self._set_window_visible("pill", True)
+        self._set_window_on_top(pill, False)
+
     def collapse_overlay(self) -> None:
+        _diagnostic("collapse_overlay invoked")
         overlay = self.windows.get("overlay")
         pill = self.windows.get("pill")
         if overlay is not None:
+            self._set_window_on_top(overlay, False)
             self._set_window_visible("overlay", False)
         if pill is not None:
-            self.render_pill()
-            width, height = self.last_pill_size
-            x, y = bottom_right_geometry(width, height)
-            pill.resize(width, height)
-            move_window_exact(pill, x, y)
-            apply_rounded_window_region(pill, width, height, 19)
-            apply_window_opacity(pill, 0.74)
-            self._set_window_visible("pill", True)
-            self._set_window_on_top(pill, True)
+            self.show_collapsed_control()
 
     def restore_overlay(self) -> None:
+        _diagnostic("restore_overlay invoked")
         pill = self.windows.get("pill")
         overlay = self.windows.get("overlay")
         if pill is not None:
@@ -655,16 +941,20 @@ class SecretGroundsWebViewHost:
     def _set_window_visible(self, key: str, is_visible: bool) -> None:
         window = self.windows.get(key)
         if window is None:
+            _diagnostic(f"set_window_visible skipped key={key} missing visible={is_visible}")
             return
         with self.lock:
             if self.window_visibility.get(key) == is_visible:
+                _diagnostic(f"set_window_visible noop key={key} visible={is_visible}")
                 return
             self.window_visibility[key] = is_visible
         try:
+            _diagnostic(f"set_window_visible key={key} visible={is_visible}")
             if not set_native_window_visibility(
                 window,
                 is_visible,
                 activate=is_visible and key == "lock",
+                on_top=is_visible and key != "pill",
             ):
                 if is_visible:
                     window.show()
@@ -677,13 +967,10 @@ class SecretGroundsWebViewHost:
 
     @staticmethod
     def _set_window_on_top(window: webview.Window, on_top: bool) -> None:
-        if not set_native_window_visibility(
-            window,
-            True,
-            activate=False,
-            on_top=on_top,
-        ):
+        _diagnostic(f"set_window_on_top on_top={on_top}")
+        if not set_native_window_z_order(window, on_top):
             window.on_top = on_top
+        _diagnostic(f"set_window_on_top complete on_top={on_top}")
 
     def update_overlay_size(self, width: int, height: int) -> None:
         width = max(120, min(360, width))
@@ -735,11 +1022,7 @@ class SecretGroundsWebViewHost:
                 width = max(110, min(220, int(payload.get("width", 130))))
                 height = max(32, min(60, int(payload.get("height", 38))))
                 self.last_pill_size = (width, height)
-                x, y = bottom_right_geometry(width, height)
-                pill.resize(width, height)
-                move_window_exact(pill, x, y)
-                apply_rounded_window_region(pill, width, height, 19)
-                apply_window_opacity(pill, 0.74)
+                apply_pill_native_geometry(pill, width, height)
             return
         if action == "collapse_overlay":
             if self.overlay_controller is not None:

@@ -405,26 +405,17 @@ svg { width: 1em; height: 1em; }
   align-items: center;
   gap: 7px;
   height: 38px;
-  padding: 0 12px;
+  padding: 0 13px;
   background: #101a29;
-  border: 1px solid transparent;
+  border: 2px solid #22d3ee;
   border-radius: var(--radius-pill);
   box-shadow: none;
   cursor: pointer;
   width: fit-content;
 }
-.overlay-pill::before {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  border: 1px solid rgba(66,148,188,0.58);
-  border-radius: calc(var(--radius-pill) - 1px);
-  pointer-events: none;
-}
 .overlay-pill:hover {
-  background: #142237;
+  background: #132236;
 }
-.overlay-pill:hover::before { border-color: rgba(66,175,210,0.74); }
 .overlay-pill img { width: 17px; height: 17px; object-fit: contain; }
 .overlay-pill span {
   font-size: 10px;
