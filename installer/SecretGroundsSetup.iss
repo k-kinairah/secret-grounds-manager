@@ -80,19 +80,19 @@ Source: "..\scripts\read-client-config-status.ps1"; DestDir: "{tmp}"; Flags: don
 Source: "..\scripts\read-cashier-status.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
-Name: "{group}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14; Check: IsCashier
-Name: "{group}\Start Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\start-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
-Name: "{group}\Stop Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
-Name: "{group}\Restart Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\restart-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
-Name: "{group}\Secret Grounds Status"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\status-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
-Name: "{commondesktop}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14; Check: IsCashier
-Name: "{group}\Configure Secret Grounds Client"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure-client.ps1"""; WorkingDir: "{app}"; Check: IsClient
+Name: "{group}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14; Check: IsCashier
+Name: "{group}\Start Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\start-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
+Name: "{group}\Stop Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\stop-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
+Name: "{group}\Restart Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\restart-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
+Name: "{group}\Secret Grounds Status"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\status-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
+Name: "{commondesktop}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14; Check: IsCashier
+Name: "{group}\Configure Secret Grounds Client"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"""; WorkingDir: "{app}"; Check: IsClient
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure-client.ps1"" -Mode Preserve -ClientConfigPath ""{app}\client\config.json"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Preserving existing client configuration..."; Check: IsClientPreserve
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure-client.ps1"" -Mode {code:GetConfigMode} -ServerHost ""{code:GetClientServerHost}"" -ServerPort {code:GetClientServerPort} -StationId ""{code:GetClientStationId}"" -DisplayName ""{code:GetClientDisplayName}"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Saving validated client configuration..."; Check: IsClientOnline
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\configure-client.ps1"" -Mode {code:GetConfigMode} -ServerHost ""{code:GetClientServerHost}"" -ServerPort {code:GetClientServerPort} -StationId ""{code:GetClientStationId}"" -DisplayName ""{code:GetClientDisplayName}"" -AllowOffline"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Saving offline client configuration..."; Check: IsClientOffline
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-client-autostart.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Installing client autostart..."; Check: ShouldInstallClientAutostart
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"" -Mode Preserve -ClientConfigPath ""{app}\client\config.json"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Preserving existing client configuration..."; Check: IsClientPreserve
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"" -Mode {code:GetConfigMode} -ServerHost ""{code:GetClientServerHost}"" -ServerPort {code:GetClientServerPort} -StationId ""{code:GetClientStationId}"" -DisplayName ""{code:GetClientDisplayName}"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Saving validated client configuration..."; Check: IsClientOnline
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"" -Mode {code:GetConfigMode} -ServerHost ""{code:GetClientServerHost}"" -ServerPort {code:GetClientServerPort} -StationId ""{code:GetClientStationId}"" -DisplayName ""{code:GetClientDisplayName}"" -AllowOffline"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Saving offline client configuration..."; Check: IsClientOffline
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\install-client-autostart.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Installing client autostart..."; Check: ShouldInstallClientAutostart
 Filename: "http://127.0.0.1:3001"; Description: "Open Secret Grounds Dashboard"; Flags: postinstall shellexec skipifsilent; Check: CashierServicesAreHealthy
 
 [UninstallRun]
@@ -101,9 +101,9 @@ Filename: "http://127.0.0.1:3001"; Description: "Open Secret Grounds Dashboard";
 ; dialog between InitializeUninstall and here can sit open indefinitely, long
 ; enough in principle for a Task Scheduler trigger to relaunch something.
 ; Removing the scheduled tasks right after this closes that window for good.
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop-all-for-uninstall.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\remove-cashier-autostart.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\remove-client-autostart.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\stop-all-for-uninstall.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\remove-cashier-autostart.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\remove-client-autostart.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
 
 [Code]
 var
@@ -319,7 +319,7 @@ begin
 
   ScriptPath := ExpandConstant('{tmp}') + '\read-client-config-status.ps1';
   TempOut := ExpandConstant('{tmp}') + '\sg-config-status.txt';
-  CmdParams := '/C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath +
+  CmdParams := '/C powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ScriptPath +
     '" -ConfigPath "' + ConfigPath + '" > "' + TempOut + '" 2>&1';
 
   if Exec('cmd.exe', CmdParams, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then begin
@@ -357,7 +357,7 @@ begin
 
   ScriptPath := ExpandConstant('{tmp}') + '\read-cashier-status.ps1';
   TempOut := ExpandConstant('{tmp}') + '\sg-cashier-status.txt';
-  CmdParams := '/C powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath +
+  CmdParams := '/C powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ScriptPath +
     '" -InstallPath "' + PreviousInstallLocation + '" > "' + TempOut + '" 2>&1';
 
   if Exec('cmd.exe', CmdParams, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then begin
@@ -545,7 +545,7 @@ var
 begin
   ScriptPath := ExpandConstant('{app}\scripts\' + ScriptName);
   Result := Exec('powershell.exe',
-    '-NoProfile -ExecutionPolicy Bypass -File "' + ScriptPath + '" ' + Arguments,
+    '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ScriptPath + '" ' + Arguments,
     ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
 end;
 
@@ -674,7 +674,7 @@ begin
   // still connected. If processes can't be stopped in time, abort here
   // rather than silently leaving a partially-deleted install directory.
   StoppedCleanly := Exec('powershell.exe',
-    '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\stop-all-for-uninstall.ps1') + '"',
+    '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ExpandConstant('{app}\scripts\stop-all-for-uninstall.ps1') + '"',
     ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
 
   Result := True;
