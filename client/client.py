@@ -80,6 +80,7 @@ class SecretGroundsClient:
         self.final_warning_sound_enabled = EXPIRATION_SOUND_ENABLED
         self.websocket_lock = Lock()
         self.current_websocket: SimpleWebSocketClient | None = None
+        self.initial_reconciliation_complete = Event()
         self.lock_screen = lock_screen or LockScreenController(
             pc_name=pc_name,
             enable_gui=enable_lock_screen,
@@ -97,6 +98,14 @@ class SecretGroundsClient:
             logout_action=self.customer_logout_current_session,
         )
         self.lock_screen.start()
+
+    def mark_initial_reconciliation_complete(self) -> None:
+        if self.initial_reconciliation_complete.is_set():
+            return
+        self.initial_reconciliation_complete.set()
+        refresh = getattr(self.lock_screen, "presentation_refresh", None)
+        if callable(refresh):
+            refresh()
 
     def build_payload(self, include_mac: bool = False) -> dict[str, str | None]:
         # Keep payload creation centralized so future client metadata is easy to add.
@@ -1095,7 +1104,10 @@ class SecretGroundsClient:
 
     def run_forever(self) -> None:
         self.register_until_connected()
-        self.reconcile_session_state()
+        try:
+            self.reconcile_session_state()
+        finally:
+            self.mark_initial_reconciliation_complete()
 
         # Heartbeats and live commands are separate loops so a slow command does
         # not stop presence updates, and a server restart reconnects both paths.
@@ -1520,16 +1532,14 @@ def run_client_with_production_ui(
             overlay_controller=client.customer_overlay,
             enable_lock_window=enable_lock_screen,
             enable_overlay_window=enable_customer_overlay,
+            initial_lock_ready=client.initial_reconciliation_complete.is_set,
         )
 
         def watch_webview_startup() -> None:
-            ready_event = getattr(host, "ready", getattr(host, "started", None))
-            if ready_event is None or ready_event.wait(10):
-                return
-            activate_tk_fallback("WebView2 did not become ready within 10 seconds.")
             started_event = getattr(host, "started", None)
-            if started_event is not None and started_event.is_set():
-                host.shutdown()
+            if started_event is None or started_event.wait(10):
+                return
+            activate_tk_fallback("WebView2 event loop did not start within 10 seconds.")
 
         Thread(
             target=watch_webview_startup,

@@ -384,6 +384,12 @@ def test_client_spec_bundles_logo_asset() -> None:
     assert logo_path.stat().st_size > 0
 
 
+def test_client_executable_is_windowed_for_silent_startup() -> None:
+    spec = read("SecretGroundsClient.spec")
+    assert "console=False" in spec
+    assert "console=True" not in spec
+
+
 def test_uninstall_stops_all_processes_before_removing_files() -> None:
     # A clean uninstall test found SecretGroundsClient.exe and node.exe still
     # running afterward, the client still connected, and {app} left behind
@@ -565,6 +571,7 @@ def main() -> None:
         test_dashboard_scripts_never_shell_out_to_system_node,
         test_dashboard_builds_self_contained_standalone_output,
         test_client_spec_bundles_logo_asset,
+        test_client_executable_is_windowed_for_silent_startup,
         test_uninstall_stops_all_processes_before_removing_files,
         test_uninstall_gate_runs_before_any_file_removal,
         test_uninstall_still_removes_both_scheduled_tasks,

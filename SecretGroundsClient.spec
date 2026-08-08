@@ -94,7 +94,7 @@ exe = EXE(
     # much higher false-positive rate, and this codebase has no code-signing
     # certificate to offset that risk yet -- keep it off.
     upx=False,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

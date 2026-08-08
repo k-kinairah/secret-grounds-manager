@@ -153,6 +153,7 @@ def test_webview_startup_failure_uses_tk_fallback() -> None:
             self.lock_screen = FakeLock()
             self.customer_overlay = FakeOverlay()
             self.stop_event = threading.Event()
+            self.initial_reconciliation_complete = threading.Event()
             self.run_calls = 0
 
         def run_forever(self) -> None:
@@ -196,6 +197,43 @@ def test_window_visibility_changes_are_idempotent() -> None:
     assert window.hide_calls == 1
 
 
+def test_webview_collapse_shows_desktop_control() -> None:
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.show_calls = 0
+            self.hide_calls = 0
+            self.on_top = True
+            self.size = (0, 0)
+            self.position = (0, 0)
+
+        def show(self) -> None:
+            self.show_calls += 1
+
+        def hide(self) -> None:
+            self.hide_calls += 1
+
+        def resize(self, width: int, height: int) -> None:
+            self.size = (width, height)
+
+        def move(self, x: int, y: int) -> None:
+            self.position = (x, y)
+
+    host = SecretGroundsWebViewHost()
+    overlay_window = FakeWindow()
+    pill_window = FakeWindow()
+    host.windows = {
+        "overlay": overlay_window,  # type: ignore[dict-item]
+        "pill": pill_window,  # type: ignore[dict-item]
+    }
+    host.loaded = {"overlay", "pill"}
+    host.window_visibility = {"overlay": True, "pill": False}
+    host.collapse_overlay()
+    assert overlay_window.hide_calls == 1
+    assert pill_window.show_calls == 1
+    assert pill_window.on_top is False
+    assert host.window_visibility["pill"] is True
+
+
 def test_native_visibility_returns_false_without_a_loaded_winforms_host() -> None:
     window = SimpleNamespace(native=None)
     assert not set_native_window_visibility(window, True)  # type: ignore[arg-type]
@@ -213,6 +251,7 @@ def main() -> None:
     test_production_bridge_renders_controller_state_and_routes_actions()
     test_webview_startup_failure_uses_tk_fallback()
     test_window_visibility_changes_are_idempotent()
+    test_webview_collapse_shows_desktop_control()
     test_native_visibility_returns_false_without_a_loaded_winforms_host()
     test_javascript_errors_are_recorded_by_the_bridge()
     print("WebView UI smoke tests passed.")
