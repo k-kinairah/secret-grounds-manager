@@ -396,6 +396,13 @@ svg { width: 1em; height: 1em; }
   font-weight: 700;
   color: #FB923C;
 }
+.overlay-notice {
+  margin-top: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--danger);
+  text-align: center;
+}
 .overlay-footer-divider { height: 1px; background: rgba(71, 92, 123, 0.58); margin: 12px 0 10px; }
 .overlay-actions { display: flex; justify-content: center; gap: 8px; }
 .overlay-confirm-title {

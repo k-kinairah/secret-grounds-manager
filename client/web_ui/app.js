@@ -29,6 +29,12 @@ let lockDraft = { username: "", pin: "", pinVisible: false };
 // previous one) last typed into the unrelated MEMBER LOGIN form.
 let unlockDraft = { pin: "", pinVisible: false };
 let overlayLockConfirmVisible = false;
+// True only while a "Lock PC" request is in flight. Kept separate from
+// overlayLockConfirmVisible so a routine per-second state push (the session
+// timer refreshes the overlay every second regardless of this flow) can't
+// clobber the confirm panel back to the plain active view before the
+// backend has actually responded -- see the confirm button handler below.
+let lockPcPending = false;
 let displayClock = {
   timerId: null,
   view: "lock",
@@ -57,6 +63,28 @@ window.SecretGroundsUI = {
     if (nextState.mode === "member_locked" && currentState.mode !== "member_locked") {
       unlockDraft.pin = "";
       unlockDraft.pinVisible = false;
+    }
+    // A notice arriving while a lock request is pending is the definitive
+    // "the backend responded and it failed" signal (success instead hides
+    // this whole window, so there's nothing left here to reset). Only then
+    // do we leave the confirm panel -- never just because time passed.
+    if (lockPcPending && nextState.notice) {
+      lockPcPending = false;
+      overlayLockConfirmVisible = false;
+    }
+    // presentation_token only changes when the overlay transitions from
+    // hidden to visible again (see customer_overlay.py's show_session) --
+    // e.g. a successful lock hides this window, and unlocking later shows
+    // it again as what is, to the member, a brand new screen. Any leftover
+    // local UI flow (a Lock PC confirmation that was mid-flight when the
+    // window was hidden) must not resurface on that fresh presentation.
+    if (
+      currentState.presentation_token !== undefined &&
+      nextState.presentation_token !== undefined &&
+      nextState.presentation_token !== currentState.presentation_token
+    ) {
+      lockPcPending = false;
+      overlayLockConfirmVisible = false;
     }
     currentState = { ...currentState, ...nextState };
     syncDisplayClock();
@@ -437,6 +465,9 @@ function renderOverlay() {
   const connection = currentState.connection_state !== "online"
     ? `<div class="overlay-connection-warning">Reconnecting...</div>`
     : "";
+  const notice = currentState.notice
+    ? `<div class="overlay-notice">${escapeHtml(currentState.notice)}</div>`
+    : "";
   const used = !isOpen
     ? `<div class="overlay-stat-row">${icon("clock")}<div><div class="overlay-stat-caption">Used Time</div><div class="overlay-stat-value">${formatUsedTime(currentState.used_seconds)}</div></div></div>`
     : "";
@@ -466,6 +497,7 @@ function renderOverlay() {
         </div>
         <div class="overlay-pc-row">${icon("computer")}<span>${escapeHtml(currentState.pc_name || "PC-01")}</span></div>
         ${connection}
+        ${notice}
         ${actions}
       </div>
     </section>`;
@@ -492,17 +524,30 @@ function renderLockConfirmPanel() {
         <div class="overlay-confirm-body">Your session will remain active and your time will continue running while this PC is locked.</div>
         <div class="overlay-confirm-actions">
           <button class="btn-outline" type="button" id="lock-pc-cancel">Cancel</button>
-          <button class="btn-gradient" type="button" id="lock-pc-confirm">Lock PC</button>
+          <button class="btn-gradient" type="button" id="lock-pc-confirm" ${lockPcPending ? "disabled" : ""}>${lockPcPending ? "Locking..." : "Lock PC"}</button>
         </div>
       </div>
     </section>`;
   document.getElementById("lock-pc-cancel").addEventListener("click", () => {
     overlayLockConfirmVisible = false;
+    lockPcPending = false;
     renderOverlay();
   });
   document.getElementById("lock-pc-confirm").addEventListener("click", () => {
-    overlayLockConfirmVisible = false;
+    // Deliberately does NOT clear overlayLockConfirmVisible here. The
+    // routine per-second state push (the session timer refreshes the
+    // overlay every second regardless of this flow) used to arrive before
+    // the backend responded, and because that flag was already cleared,
+    // renderOverlay() fell through to the plain active view -- silently
+    // discarding the confirm panel (and the still-in-flight request's
+    // eventual result) before the member ever saw an outcome. Now the
+    // confirm panel stays up, showing a pending state, until setState()
+    // sees a definitive result: a notice (failure) or the whole window
+    // being hidden by the server (success).
+    if (lockPcPending) return;
+    lockPcPending = true;
     emitAction("lock_pc");
+    renderLockConfirmPanel();
   });
   requestResize();
 }

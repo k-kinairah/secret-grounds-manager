@@ -34,6 +34,7 @@ class CustomerOverlayViewModel:
     seconds_value: int | None = None
     used_seconds: int = 0
     can_lock_pc: bool = False
+    presentation_token: int = 0
 
 
 @dataclass
@@ -60,6 +61,14 @@ class CustomerOverlayState:
     # using this station" only needs to survive a GUI collapse/reconnect
     # within the same client process, not a full process restart.
     session_started_monotonic: float | None = None
+    # Incremented every time show_session() (re-)presents the overlay --
+    # both a genuinely new session and a resume-after-unlock. Lets the
+    # WebView UI tell "this is a fresh presentation" apart from "just
+    # another routine per-second tick of an already-showing overlay", so it
+    # can safely reset any client-local UI flow (e.g. an in-progress Lock PC
+    # confirmation) that must not survive the overlay being hidden and shown
+    # again for what is, from the member's perspective, a new screen.
+    presentation_token: int = 0
 
 
 class CustomerOverlayController:
@@ -138,6 +147,14 @@ class CustomerOverlayController:
         is_new_session: bool = True,
     ) -> None:
         with self.lock:
+            # Only a genuine hidden->visible transition (a fresh presentation,
+            # e.g. after a customer lock/unlock cycle) bumps the token -- NOT
+            # every show_session() call, since reconnect resyncs and display
+            # name refreshes call this routinely while already visible, and
+            # must not reset an in-progress client-local UI flow such as an
+            # open Lock PC confirmation.
+            if not self.state.is_visible:
+                self.state.presentation_token += 1
             self.state.is_visible = True
             self.state.session_type = session_type
             self.state.customer_name = customer_name
@@ -272,6 +289,7 @@ class CustomerOverlayController:
                 notice=self.state.notice,
                 notice_ticks_remaining=self.state.notice_ticks_remaining,
                 session_started_monotonic=self.state.session_started_monotonic,
+                presentation_token=self.state.presentation_token,
             )
         timer_label = "Elapsed Time" if state.is_elapsed else "Remaining Time"
         title = "Session Active" if not state.is_elapsed else "Open Time Active"
@@ -312,6 +330,7 @@ class CustomerOverlayController:
             # (session_service.engage_customer_lock), never trusted from
             # this client-side gate alone.
             can_lock_pc=is_member_session and self.lock_pc_action is not None,
+            presentation_token=state.presentation_token,
         )
 
     def _tick_notice_locked(self) -> None:

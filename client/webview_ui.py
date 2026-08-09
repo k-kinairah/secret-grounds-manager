@@ -626,6 +626,7 @@ class SecretGroundsWebViewHost:
             "can_logout": self.overlay_controller.logout_action is not None,
             "can_lock_pc": model.can_lock_pc,
             "notice": model.notice or "",
+            "presentation_token": model.presentation_token,
         }
 
     def create_windows(self, lock_only: bool = False) -> None:
