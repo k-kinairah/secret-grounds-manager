@@ -57,7 +57,9 @@ export function PcCard({
           : "Powered Off";
   const sessionLabel =
     pc.session_status === "active"
-      ? "In Use"
+      ? pc.customer_locked
+        ? "Active · Customer Locked"
+        : "In Use"
       : pc.session_status === "grace_period"
         ? "Grace Period"
       : pc.session_status === "shutting_down"

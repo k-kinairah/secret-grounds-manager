@@ -199,6 +199,7 @@ class PCDashboardRecord(BaseModel):
     member_balance_before_seconds: int | None = None
     member_balance_after_seconds: int | None = None
     mac_address: str | None = None
+    customer_locked: bool = False
 
 
 class PCRegistrationResponse(PCRecord):
@@ -352,6 +353,7 @@ class ClientCommand(BaseModel):
         "sleep",
         "show_message",
         "show_announcement",
+        "clear_customer_lock",
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
@@ -611,6 +613,8 @@ SessionEventType = Literal[
     "automatic_shutdown_failed",
     "session_moved_to_settlement",
     "expiration_final_warning_reached",
+    "customer_lock_engaged",
+    "customer_lock_cleared",
 ]
 
 
@@ -653,6 +657,7 @@ class SessionRecord(BaseModel):
     member_balance_after_seconds: int | None = None
     grace_started_at: datetime | None = None
     shutdown_at: datetime | None = None
+    customer_locked: bool = False
 
 
 class SessionEventRecord(BaseModel):
@@ -756,6 +761,37 @@ class ClientMemberLoginResponse(BaseModel):
     rounding_rule: str = "Balances are tracked and deducted in whole seconds."
 
 
+class ClientSessionLockRequest(BaseModel):
+    pc_name: str = Field(..., min_length=1)
+    ip_address: str = Field(..., min_length=1)
+    mac_address: str | None = None
+    session_id: str = Field(..., min_length=1)
+
+
+class ClientSessionLockResponse(BaseModel):
+    session: SessionRecord
+
+
+class ClientSessionUnlockRequest(BaseModel):
+    pc_name: str = Field(..., min_length=1)
+    ip_address: str = Field(..., min_length=1)
+    mac_address: str | None = None
+    pin: str
+
+    @field_validator("pin")
+    @classmethod
+    def validate_pin(cls, value: str) -> str:
+        pin = validate_member_pin_value(value)
+        if pin is None:
+            raise ValueError("PIN is required")
+        return pin
+
+
+class ClientSessionUnlockResponse(BaseModel):
+    session: SessionRecord
+    member_display_name: str
+
+
 class MemberAddTimeRequest(BaseModel):
     member_id: str = Field(..., min_length=1)
     seconds: int = Field(..., gt=0)
@@ -812,6 +848,7 @@ class SessionStateSummary(BaseModel):
     session_mode: SessionMode = "prepaid"
     member_code_snapshot: str | None = None
     member_name_snapshot: str | None = None
+    customer_locked: bool = False
 
 
 class PCSessionStateResponse(BaseModel):

@@ -8,6 +8,7 @@ export interface PcActionAvailability {
   canEnd: boolean;
   canCollectPayment: boolean;
   canViewDetails: boolean;
+  canClearCustomerLock: boolean;
 }
 
 export interface PcMonitorPresentation {
@@ -20,7 +21,8 @@ export interface PcMonitorPresentation {
     | "monitorTileSettlement"
     | "monitorTileDanger"
     | "monitorTileOffline"
-    | "monitorTileWaking";
+    | "monitorTileWaking"
+    | "monitorTileLocked";
   label:
     | "Available"
     | "In Use"
@@ -31,7 +33,8 @@ export interface PcMonitorPresentation {
     | "Powered Off"
     | "Waking"
     | "Settlement"
-    | "Recovery";
+    | "Recovery"
+    | "Customer Locked";
 }
 
 export function getPcMonitorPresentation(pc: PcSummary): PcMonitorPresentation {
@@ -60,6 +63,14 @@ export function getPcMonitorPresentation(pc: PcSummary): PcMonitorPresentation {
   }
 
   if (pc.session_status === "active") {
+    // A temporary member-initiated lock, not a new status -- the station
+    // stays counted as "In Use" everywhere else (summarizePcs, KPI tiles),
+    // this only overrides the badge shown for it, same precedent as
+    // recovery_required/startup_status above.
+    if (pc.customer_locked) {
+      return { className: "monitorTileLocked", label: "Customer Locked" };
+    }
+
     if (
       pc.session_mode !== "open_time" &&
       pc.remaining_seconds !== null &&
@@ -130,7 +141,8 @@ export function getPcActionAvailability(pc: PcSummary): PcActionAvailability {
     canAddTime: isOnline && (isActive || isGrace),
     canEnd: isOnline && (isActive || isGrace),
     canCollectPayment: isSettlementPending,
-    canViewDetails: true
+    canViewDetails: true,
+    canClearCustomerLock: isOnline && isActive && pc.customer_locked
   };
 }
 

@@ -124,6 +124,7 @@ function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
     member_balance_before_seconds: null,
     member_balance_after_seconds: null,
     mac_address: null,
+    customer_locked: false,
     ...overrides
   };
 }
@@ -211,7 +212,8 @@ assert.deepEqual(getPcActionAvailability(offlinePc), {
   canAddTime: false,
   canEnd: false,
   canCollectPayment: false,
-  canViewDetails: true
+  canViewDetails: true,
+  canClearCustomerLock: false
 });
 
 const wakeReadyPc = makePc({
@@ -256,6 +258,41 @@ assert.deepEqual(getPcMonitorPresentation(lowTimePc), {
   className: "monitorTileLowTime",
   label: "Low Time"
 });
+
+const customerLockedPc = makePc({
+  session_status: "active",
+  session_mode: "member_balance",
+  active_session_id: "session-locked",
+  remaining_seconds: 600,
+  customer_locked: true
+});
+// A temporary member lock is a badge override, not a new session_status --
+// the station must still count as "In Use" everywhere else (KPI summary),
+// same precedent as recovery_required/startup_status.
+assert.equal(getPcCardTone(customerLockedPc), "active");
+assert.deepEqual(getPcMonitorPresentation(customerLockedPc), {
+  className: "monitorTileLocked",
+  label: "Customer Locked"
+});
+assert.equal(getPcActionAvailability(customerLockedPc).canClearCustomerLock, true);
+assert.equal(
+  summarizePcs([customerLockedPc]).inUse,
+  1,
+  "a customer-locked PC must still count as in-use, never available"
+);
+
+const unlockedMemberPc = makePc({
+  session_status: "active",
+  session_mode: "member_balance",
+  active_session_id: "session-unlocked",
+  remaining_seconds: 600,
+  customer_locked: false
+});
+assert.equal(
+  getPcActionAvailability(unlockedMemberPc).canClearCustomerLock,
+  false,
+  "Clear Customer Lock must not be available when the PC isn't locked"
+);
 
 const settlementPc = makePc({
   session_status: "settlement_pending",

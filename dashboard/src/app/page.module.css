@@ -932,6 +932,17 @@
   color: #22d3ee;
 }
 
+.monitorTileLocked .monitorScreen {
+  border-color: rgb(168 85 247 / 0.92);
+  box-shadow:
+    inset 0 0 26px rgb(168 85 247 / 0.08),
+    0 0 24px rgb(168 85 247 / 0.3);
+}
+
+.monitorTileLocked .monitorStatusLight {
+  color: #c084fc;
+}
+
 .emptyState,
 .loadingCard {
   align-items: center;

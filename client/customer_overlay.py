@@ -33,6 +33,7 @@ class CustomerOverlayViewModel:
     is_visible: bool = False
     seconds_value: int | None = None
     used_seconds: int = 0
+    can_lock_pc: bool = False
 
 
 @dataclass
@@ -77,6 +78,7 @@ class CustomerOverlayController:
         position: str = "bottom-right",
         enable_gui: bool = True,
         logout_action: Callable[[], str | None] | None = None,
+        lock_pc_action: Callable[[], str | None] | None = None,
         presentation_refresh: Callable[[], None] | None = None,
     ) -> None:
         self.state = CustomerOverlayState(pc_name=pc_name)
@@ -85,6 +87,7 @@ class CustomerOverlayController:
         self.enable_gui = enable_gui
         self.external_presentation_active = False
         self.logout_action = logout_action
+        self.lock_pc_action = lock_pc_action
         self.presentation_refresh = presentation_refresh
         self.lock = Lock()
         self.gui_started = False
@@ -304,6 +307,11 @@ class CustomerOverlayController:
             is_visible=state.is_visible,
             seconds_value=state.seconds_value,
             used_seconds=used_seconds,
+            # Presentation only: which sessions are actually eligible to be
+            # locked is enforced independently by the backend
+            # (session_service.engage_customer_lock), never trusted from
+            # this client-side gate alone.
+            can_lock_pc=is_member_session and self.lock_pc_action is not None,
         )
 
     def _tick_notice_locked(self) -> None:
@@ -953,6 +961,22 @@ class CustomerOverlayController:
         if self.logout_action is None:
             return
         message = self.logout_action()
+        if message:
+            with self.lock:
+                self.state.notice = message
+                self.state.notice_ticks_remaining = TIME_ADDED_CONFIRMATION_TICKS
+            self.schedule_gui_refresh()
+
+    def handle_lock_pc_clicked(self) -> None:
+        # Confirmation ("Lock this computer? ...") is handled by the caller
+        # (the WebView overlay UI) before this fires -- by the time this
+        # runs, the member has already confirmed. On success, lock_pc_action
+        # itself switches the display to the locked screen; on failure it
+        # returns a message that stays on this still-visible overlay, same
+        # shape as handle_logout_clicked.
+        if self.lock_pc_action is None:
+            return
+        message = self.lock_pc_action()
         if message:
             with self.lock:
                 self.state.notice = message

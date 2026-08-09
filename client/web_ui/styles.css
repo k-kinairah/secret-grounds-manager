@@ -167,6 +167,11 @@ svg { width: 1em; height: 1em; }
   font-weight: 700;
   margin: 0 0 6px;
 }
+/* Member-locked "SESSION LOCKED" screen: same branded background as the
+   idle "Available soon" lock screen, but a distinct danger-toned headline
+   and login-card accent so it never reads as the ordinary idle state. */
+.lock-headline-danger { color: var(--danger); }
+.login-card.is-unlock .login-title { color: var(--danger); }
 .lock-instruction {
   font-size: 15px;
   color: var(--text-secondary);
@@ -392,7 +397,21 @@ svg { width: 1em; height: 1em; }
   color: #FB923C;
 }
 .overlay-footer-divider { height: 1px; background: rgba(71, 92, 123, 0.58); margin: 12px 0 10px; }
-.overlay-actions { display: flex; justify-content: center; }
+.overlay-actions { display: flex; justify-content: center; gap: 8px; }
+.overlay-confirm-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 12px;
+}
+.overlay-confirm-body {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-top: 8px;
+}
+.overlay-confirm-actions { display: flex; justify-content: center; gap: 8px; margin-top: 16px; }
+.overlay-confirm-actions .btn-gradient { width: auto; height: 34px; padding: 0 20px; margin-top: 0; font-size: 11px; }
 .btn-outline {
   height: 30px;
   padding: 0 19px;

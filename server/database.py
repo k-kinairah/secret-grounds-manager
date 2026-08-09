@@ -154,6 +154,108 @@ def ensure_session_events_accept_payment_events(connection: sqlite3.Connection) 
     connection.execute("DROP TABLE session_events_old")
 
 
+def ensure_session_events_accept_customer_lock_events(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'session_events'"
+    ).fetchone()
+    if row is None or "customer_lock_engaged" in (row["sql"] or ""):
+        return
+
+    connection.execute("ALTER TABLE session_events RENAME TO session_events_old")
+    connection.execute(
+        """
+        CREATE TABLE session_events (
+            event_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            event_type TEXT NOT NULL CHECK (
+                event_type IN (
+                    'session_started',
+                    'time_added',
+                    'session_completed',
+                    'session_ended_manually',
+                    'session_cancelled',
+                    'command_failed',
+                    'payment_recorded',
+                    'payment_voided',
+                    'prepaid_start_paid',
+                    'prepaid_add_time_paid',
+                    'open_time_started',
+                    'open_time_ended',
+                    'open_time_settled',
+                    'payment_action_review_required',
+                    'recovery_force_end',
+                    'session_prepared',
+                    'wake_signal_sent',
+                    'client_connected',
+                    'session_activation_started',
+                    'session_activated',
+                    'startup_failed',
+                    'prepared_session_cancelled',
+                    'automatic_reminder_sent',
+                    'time_expired',
+                    'operator_changed',
+                    'shutdown_grace_started',
+                    'time_added_during_grace',
+                    'automatic_shutdown_cancelled',
+                    'shutdown_grace_completed',
+                    'automatic_shutdown_initiated',
+                    'shutdown_command_acknowledged',
+                    'shutdown_command_invoked',
+                    'automatic_shutdown_failed',
+                    'session_moved_to_settlement',
+                    'expiration_final_warning_reached',
+                    'customer_lock_engaged',
+                    'customer_lock_cleared'
+                )
+            ),
+            seconds INTEGER,
+            message TEXT,
+            created_at TEXT NOT NULL,
+            rate_id TEXT,
+            rate_name_snapshot TEXT,
+            amount TEXT,
+            payment_id TEXT,
+            payment_method TEXT,
+            performed_by_user_id TEXT,
+            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO session_events (
+            event_id,
+            session_id,
+            event_type,
+            seconds,
+            message,
+            created_at,
+            rate_id,
+            rate_name_snapshot,
+            amount,
+            payment_id,
+            payment_method,
+            performed_by_user_id
+        )
+        SELECT
+            event_id,
+            session_id,
+            event_type,
+            seconds,
+            message,
+            created_at,
+            rate_id,
+            rate_name_snapshot,
+            amount,
+            payment_id,
+            payment_method,
+            performed_by_user_id
+        FROM session_events_old
+        """
+    )
+    connection.execute("DROP TABLE session_events_old")
+
+
 SESSION_STATUS_VALUES = (
     "active",
     "grace_period",
@@ -200,6 +302,7 @@ SESSION_COLUMN_DEFINITIONS = {
     "ended_by_user_id": "TEXT",
     "grace_started_at": "TEXT",
     "shutdown_at": "TEXT",
+    "customer_locked": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -210,6 +313,7 @@ SESSION_COLUMN_DEFAULT_SELECTS = {
     "total_amount": "'0.00'",
     "session_mode": "'prepaid'",
     "settlement_pending": "0",
+    "customer_locked": "0",
 }
 
 
@@ -986,7 +1090,8 @@ def initialize_database() -> None:
                 metered_rate_duration_seconds_snapshot INTEGER,
                 settlement_pending INTEGER NOT NULL DEFAULT 0,
                 grace_started_at TEXT,
-                shutdown_at TEXT
+                shutdown_at TEXT,
+                customer_locked INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -1047,6 +1152,7 @@ def initialize_database() -> None:
         add_column_if_missing(connection, "sessions", "member_name_snapshot", "TEXT")
         add_column_if_missing(connection, "sessions", "member_balance_before_seconds", "INTEGER")
         add_column_if_missing(connection, "sessions", "member_balance_after_seconds", "INTEGER")
+        add_column_if_missing(connection, "sessions", "customer_locked", "INTEGER NOT NULL DEFAULT 0")
         connection.execute(
             """
             UPDATE sessions
@@ -1097,7 +1203,9 @@ def initialize_database() -> None:
                     'shutdown_command_invoked',
                     'automatic_shutdown_failed',
                     'session_moved_to_settlement',
-                    'expiration_final_warning_reached'
+                    'expiration_final_warning_reached',
+                    'customer_lock_engaged',
+                    'customer_lock_cleared'
                     )
                 ),
                 seconds INTEGER,
@@ -1113,6 +1221,7 @@ def initialize_database() -> None:
             """
         )
         ensure_session_events_accept_payment_events(connection)
+        ensure_session_events_accept_customer_lock_events(connection)
         add_column_if_missing(connection, "session_events", "rate_id", "TEXT")
         add_column_if_missing(connection, "session_events", "rate_name_snapshot", "TEXT")
         add_column_if_missing(connection, "session_events", "amount", "TEXT")

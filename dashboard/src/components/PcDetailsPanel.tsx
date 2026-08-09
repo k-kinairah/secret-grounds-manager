@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import styles from "@/app/page.module.css";
-import { sendPcMessage, sendPowerCommand, updatePcMacAddress, wakePc } from "@/lib/api";
+import { clearCustomerLock, sendPcMessage, sendPowerCommand, updatePcMacAddress, wakePc } from "@/lib/api";
 import { getPcActionAvailability } from "@/lib/pcStatus";
 import { formatDateTime, formatMoney, formatTimer } from "@/lib/time";
 import type { MessageSeverity, PcSummary, UserRole } from "@/lib/types";
@@ -137,7 +137,7 @@ function statusLabel(pc: PcSummary): string {
     return "Recovery Required";
   }
   if (pc.session_status === "active") {
-    return "In Use";
+    return pc.customer_locked ? "Active · Customer Locked" : "In Use";
   }
   if (pc.session_status === "grace_period") {
     return "Time Ended";
@@ -426,7 +426,31 @@ export function PcDetailsPanel({
 
             <section className={styles.controlSection} aria-label="Session actions">
               <h3>Session Actions</h3>
+              {pc.customer_locked ? (
+                <p className={styles.helperWarning}>
+                  The member has locked this station; their session and timer continue
+                  running underneath.
+                </p>
+              ) : null}
               <div className={styles.modalActionGrid}>
+                {pc.customer_locked ? (
+                  <button
+                    className={styles.secondaryButton}
+                    disabled={!actions.canClearCustomerLock || isWorking}
+                    onClick={() =>
+                      pc.active_session_id
+                        ? void runPanelAction(
+                            () => clearCustomerLock(pc.active_session_id as string),
+                            "Customer lock cleared."
+                          )
+                        : undefined
+                    }
+                    type="button"
+                  >
+                    <Icon name="stop" />
+                    Clear Customer Lock
+                  </button>
+                ) : null}
                 <button
                   className={styles.primaryButton}
                   disabled={!actions.canStart}

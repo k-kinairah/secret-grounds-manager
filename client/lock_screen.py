@@ -33,6 +33,7 @@ class LockScreenState:
     is_final_warning: bool = False
     login_message: str | None = None
     is_login_processing: bool = False
+    locked_member_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ class LockScreenViewModel:
     dev_escape_active: bool = False
     login_message: str | None = None
     is_login_processing: bool = False
+    locked_member_name: str = ""
 
 
 class LockScreenController:
@@ -68,6 +70,7 @@ class LockScreenController:
         enable_dev_escape: bool,
         open_setup_wizard: Callable[[], object] | None = None,
         member_login_action: MemberLoginAction | None = None,
+        session_unlock_action: Callable[[str], str | None] | None = None,
         presentation_refresh: PresentationRefresh | None = None,
     ) -> None:
         self.pc_name = pc_name
@@ -75,6 +78,7 @@ class LockScreenController:
         self.enable_dev_escape = enable_dev_escape
         self.open_setup_wizard = open_setup_wizard
         self.member_login_action = member_login_action
+        self.session_unlock_action = session_unlock_action
         self.presentation_refresh = presentation_refresh
         self.state = LockScreenState()
         self.state_lock = Lock()
@@ -96,6 +100,13 @@ class LockScreenController:
         self.pin_visible = False
         self._username_field = None
         self._pin_field = None
+        self._login_card_canvas = None
+        self.unlock_pin_entry = None
+        self.unlock_pin_toggle_button = None
+        self.unlock_button = None
+        self.unlock_message_label = None
+        self._unlock_pin_field = None
+        self._unlock_card_canvas = None
         self.gui_ready_event = Event()
         self.gui_error: BaseException | None = None
         self.pump_after_id = None
@@ -145,6 +156,30 @@ class LockScreenController:
         if reason:
             print(reason)
         print("Lock screen shown.")
+        self._notify_presentation()
+
+        if self.enable_gui:
+            self._schedule(self._show_window)
+
+    def show_member_locked(self, member_display_name: str) -> None:
+        """Member-initiated "Lock PC": reuses the exact same is_locked=True
+        window/focus/topmost machinery as the idle "Available soon" screen
+        (show_locked) and the expiration screens below -- the only
+        difference is which content renders inside that already-locked
+        window. The active session and its timer are untouched by this."""
+        with self.state_lock:
+            self.state.is_locked = True
+            self.state.dev_escape_active = False
+            self.state.mode = "member_locked"
+            self.state.locked_member_name = member_display_name
+            self.state.headline = "Session locked."
+            self.state.instruction = f"This PC is reserved for {member_display_name}."
+            self.state.countdown = None
+            self.state.is_final_warning = False
+            self.state.login_message = None
+            self.state.is_login_processing = False
+
+        print(f"Member-locked screen shown for {member_display_name}.")
         self._notify_presentation()
 
         if self.enable_gui:
@@ -274,10 +309,13 @@ class LockScreenController:
             dev_escape_active = self.state.dev_escape_active
             login_message = self.state.login_message
             is_login_processing = self.state.is_login_processing
+            locked_member_name = self.state.locked_member_name
         if is_final_warning:
             accent = "#F87171"
         elif mode == "grace":
             accent = "#FBBF24"
+        elif mode == "member_locked":
+            accent = "#F43F5E"
         else:
             accent = "#22D3EE"
         return LockScreenViewModel(
@@ -295,6 +333,7 @@ class LockScreenController:
             dev_escape_active=dev_escape_active,
             login_message=login_message,
             is_login_processing=is_login_processing,
+            locked_member_name=locked_member_name,
         )
 
     def use_development_escape(self) -> None:
@@ -347,6 +386,38 @@ class LockScreenController:
                 self._finish_member_login(message)
 
         Thread(target=run_login, daemon=True).start()
+
+    def submit_session_unlock(self, pin: str) -> None:
+        # Deliberately PIN-only, no username: the active session already
+        # identifies which member this is -- verification happens against
+        # that specific member server-side (session_service.
+        # clear_customer_lock_by_pin), never a general member lookup.
+        if self.session_unlock_action is None:
+            return
+        with self.state_lock:
+            if self.state.is_login_processing:
+                return
+            self.state.login_message = None
+
+        pin = pin.strip()
+        if not pin:
+            self._set_login_message("Enter your PIN.")
+            return
+
+        with self.state_lock:
+            self.state.is_login_processing = True
+            self.state.login_message = "Checking your PIN..."
+        self._update_login_state()
+        self._notify_presentation()
+
+        def run_unlock() -> None:
+            message = self.session_unlock_action(pin)
+            if self.enable_gui:
+                self._schedule(lambda: self._finish_member_login(message))
+            else:
+                self._finish_member_login(message)
+
+        Thread(target=run_unlock, daemon=True).start()
 
     def _notify_presentation(self) -> None:
         refresh = self.presentation_refresh
@@ -680,11 +751,107 @@ class LockScreenController:
             # Top gap is now carried by the instruction label's own large
             # bottom margin above -- this only needs a small bottom margin.
             card_canvas.pack(pady=(0, 4))
+            self._login_card_canvas = card_canvas
 
             if self.username_entry is not None:
                 self.username_entry.bind("<Return>", lambda _: self._submit_member_login())
             if self.pin_entry is not None:
                 self.pin_entry.bind("<Return>", lambda _: self._submit_member_login())
+
+        if self.session_unlock_action is not None:
+            # Fallback parity for the member-locked screen: this is a
+            # security-relevant path (WebView2 failing mid-lock must not
+            # silently drop the lock), so it gets its own real PIN-only
+            # card and UNLOCK action rather than reusing the general
+            # username+PIN member-login card above. Same card styling,
+            # deliberately no username field.
+            unlock_card_bg = "#0A101D"
+            unlock_card_radius = theme.RADIUS_CARD + 6
+            unlock_field_width = round(300 * scale)
+            unlock_field_height = round(40 * scale)
+            unlock_canvas = tk.Canvas(container, highlightthickness=0, bd=0, background=theme.BG_DEEP)
+            unlock_inner = tk.Frame(
+                unlock_canvas,
+                background=unlock_card_bg,
+                padx=round(32 * scale),
+                pady=round(24 * scale),
+            )
+
+            unlock_title = tk.Label(
+                unlock_inner,
+                text="UNLOCK",
+                font=("Segoe UI", font_size(12), "bold"),
+                foreground=theme.DANGER,
+                background=unlock_card_bg,
+            )
+            unlock_title.pack(pady=(0, round(16 * scale)))
+
+            unlock_pin_label = tk.Label(
+                unlock_inner,
+                text="pin",
+                font=("Segoe UI", font_size(9), "bold"),
+                foreground=theme.TEXT_MUTED,
+                background=unlock_card_bg,
+                anchor="w",
+            )
+            unlock_pin_label.pack(fill="x", pady=(0, 4))
+            unlock_pin_field = theme.IconField(
+                unlock_inner,
+                tk,
+                icon="lock",
+                placeholder="enter pin",
+                width=unlock_field_width,
+                height=unlock_field_height,
+                show="*",
+                trailing_icon="eye",
+                trailing_command=self._toggle_pin_visibility,
+                font=("Segoe UI", font_size(10)),
+                bg=unlock_card_bg,
+            )
+            unlock_pin_field.pack(pady=(0, round(10 * scale)))
+            self.unlock_pin_entry = unlock_pin_field.entry
+            self.unlock_pin_toggle_button = unlock_pin_field.trailing_icon
+            self._unlock_pin_field = unlock_pin_field
+
+            self.unlock_message_label = tk.Label(
+                unlock_inner,
+                text="",
+                font=("Segoe UI", font_size(10)),
+                foreground=theme.WARNING,
+                background=unlock_card_bg,
+                wraplength=unlock_field_width,
+                justify="left",
+            )
+            self.unlock_message_label.pack(anchor="w", pady=(0, 14))
+
+            self.unlock_button = theme.GradientButton(
+                unlock_inner,
+                tk,
+                text="UNLOCK",
+                command=self._submit_session_unlock,
+                width=unlock_field_width,
+                height=round(42 * scale),
+                font=("Segoe UI", font_size(10), "bold"),
+                bg=unlock_card_bg,
+            )
+            self.unlock_button.pack()
+
+            unlock_inner.update_idletasks()
+            unlock_content_width = unlock_inner.winfo_reqwidth()
+            unlock_content_height = unlock_inner.winfo_reqheight()
+            unlock_canvas.configure(width=unlock_content_width, height=unlock_content_height)
+            theme.draw_rounded_rect(
+                unlock_canvas, 0, 0, unlock_content_width, unlock_content_height, unlock_card_radius,
+                fill=unlock_card_bg, outline="#26314A", width=1,
+            )
+            unlock_canvas.create_window(0, 0, window=unlock_inner, anchor="nw")
+            self._unlock_card_canvas = unlock_canvas
+            # Not packed here -- _update_lock_text() packs/unpacks this and
+            # the login card so only the one matching the current mode is
+            # ever visible.
+
+            if self.unlock_pin_entry is not None:
+                self.unlock_pin_entry.bind("<Return>", lambda _: self._submit_session_unlock())
 
         self.countdown_label = tk.Label(
             container,
@@ -914,6 +1081,20 @@ class LockScreenController:
                 text=model.countdown or "",
                 foreground=model.accent,
             )
+        # Exactly one of the two cards is ever packed: the member-locked
+        # screen shows PIN-only UNLOCK, everything else shows the general
+        # username+PIN MEMBER LOGIN card (if enabled).
+        show_unlock = model.mode == "member_locked"
+        if self._unlock_card_canvas is not None:
+            if show_unlock:
+                self._unlock_card_canvas.pack(pady=(0, 4))
+            else:
+                self._unlock_card_canvas.pack_forget()
+        if self._login_card_canvas is not None:
+            if show_unlock:
+                self._login_card_canvas.pack_forget()
+            else:
+                self._login_card_canvas.pack(pady=(0, 4))
         self._update_login_state()
         self._update_connection_label()
 
@@ -925,6 +1106,10 @@ class LockScreenController:
         username = self._username_field.get_value().strip() if self._username_field is not None else ""
         pin = self._pin_field.get_value().strip() if self._pin_field is not None else ""
         self.submit_member_login(username, pin)
+
+    def _submit_session_unlock(self) -> None:
+        pin = self._unlock_pin_field.get_value().strip() if self._unlock_pin_field is not None else ""
+        self.submit_session_unlock(pin)
 
     def _finish_member_login(self, message: str | None) -> None:
         with self.state_lock:
@@ -941,6 +1126,10 @@ class LockScreenController:
         self._notify_presentation()
 
     def _toggle_pin_visibility(self) -> None:
+        # Shared by the login card's PIN field and the member-locked
+        # screen's unlock PIN field -- only one of the two cards is ever
+        # packed/visible at a time, so a single shared reveal state is
+        # simpler than tracking them independently.
         self.pin_visible = not self.pin_visible
         if self.pin_entry is not None:
             self.pin_entry.configure(show="" if self.pin_visible else "*")
@@ -949,6 +1138,10 @@ class LockScreenController:
             # single toggle icon) -- only its color signals state, matching
             # the accent used for a focused field.
             self.pin_toggle_button.set_color(theme.ACCENT_PRIMARY if self.pin_visible else theme.TEXT_MUTED)
+        if self.unlock_pin_entry is not None:
+            self.unlock_pin_entry.configure(show="" if self.pin_visible else "*")
+        if self.unlock_pin_toggle_button is not None:
+            self.unlock_pin_toggle_button.set_color(theme.DANGER if self.pin_visible else theme.TEXT_MUTED)
 
     def _update_login_state(self) -> None:
         with self.state_lock:
@@ -972,6 +1165,20 @@ class LockScreenController:
                 self.pin_toggle_button.set_color(theme.ACCENT_PRIMARY if self.pin_visible else theme.TEXT_MUTED)
         if self.login_message_label is not None:
             self.login_message_label.configure(text=message or "")
+        if self.unlock_button is not None:
+            self.unlock_button.configure(
+                state=state,
+                text="UNLOCKING..." if is_processing else "UNLOCK",
+            )
+        if self.unlock_pin_entry is not None:
+            self.unlock_pin_entry.configure(state=state)
+        if self.unlock_pin_toggle_button is not None:
+            if is_processing:
+                self.unlock_pin_toggle_button.set_color(theme.LINE)
+            else:
+                self.unlock_pin_toggle_button.set_color(theme.DANGER if self.pin_visible else theme.TEXT_MUTED)
+        if self.unlock_message_label is not None:
+            self.unlock_message_label.configure(text=message or "")
 
 
 def run_lock_screen_gui_smoke(timeout_seconds: float = 6.0) -> None:

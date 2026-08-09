@@ -46,6 +46,7 @@ class LocalSession:
     expiration_state: str = "active"
     grace_shutdown_monotonic: float | None = None
     final_warning_sent: bool = False
+    customer_locked: bool = False
 
 
 class SecretGroundsClient:
@@ -87,6 +88,7 @@ class SecretGroundsClient:
             enable_dev_escape=enable_dev_escape,
             open_setup_wizard=open_setup_wizard,
             member_login_action=self.member_login_from_lock_screen,
+            session_unlock_action=self.unlock_current_session,
         )
         self.recovery_store = recovery_store or SessionRecoveryStore(
             SESSION_RECOVERY_PATH
@@ -96,6 +98,7 @@ class SecretGroundsClient:
             position=CUSTOMER_OVERLAY_POSITION,
             enable_gui=enable_customer_overlay,
             logout_action=self.customer_logout_current_session,
+            lock_pc_action=self.lock_current_session,
         )
         self.lock_screen.start()
 
@@ -162,6 +165,93 @@ class SecretGroundsClient:
             return "Login is taking too long. Please try again."
         except requests.RequestException:
             return "We could not log you in. Please ask the cashier."
+
+    def lock_current_session(self) -> str | None:
+        """Member-initiated "Lock PC": a display switch only. The active
+        session, its timer thread, and billing are untouched -- Python and
+        the server remain authoritative for timing throughout."""
+        with self.active_session_lock:
+            if self.active_session is None:
+                return "No active session to lock."
+            if self.active_session.session_mode != "member_balance":
+                return "Only member sessions can be locked."
+            session_id = self.active_session.session_id
+            member_display_name = self.active_session.customer_name or "Member"
+
+        try:
+            response = self.session.post(
+                f"{self.server_url}/client/session-lock",
+                json={**self.build_payload(include_mac=True), "session_id": session_id},
+                timeout=max(self.request_timeout, 10),
+            )
+            if response.status_code >= 400:
+                try:
+                    detail = response.json().get("detail")
+                except ValueError:
+                    detail = None
+                return detail if isinstance(detail, str) else "Could not lock this PC. Please ask the cashier."
+        except requests.ConnectionError:
+            return "Connection lost. Please try again."
+        except requests.Timeout:
+            return "Locking is taking too long. Please try again."
+        except requests.RequestException:
+            return "Could not lock this PC. Please ask the cashier."
+
+        with self.active_session_lock:
+            if self.active_session is not None and self.active_session.session_id == session_id:
+                self.active_session.customer_locked = True
+        self.customer_overlay.hide()
+        self.lock_screen.show_member_locked(member_display_name)
+        print(f"Session {session_id} customer-locked by {member_display_name}.")
+        return None
+
+    def unlock_current_session(self, pin: str) -> str | None:
+        """Verifies the PIN against the SAME member already tied to the
+        active session (server-resolved from session_id, never a client-
+        supplied member id) and, on success, restores the same overlay
+        without restarting or resetting anything."""
+        with self.active_session_lock:
+            if self.active_session is None or not self.active_session.customer_locked:
+                return "This PC is not locked."
+            session_id = self.active_session.session_id
+            session_mode = self.active_session.session_mode
+
+        try:
+            response = self.session.post(
+                f"{self.server_url}/client/session-unlock",
+                json={**self.build_payload(include_mac=True), "pin": pin},
+                timeout=max(self.request_timeout, 10),
+            )
+            if response.status_code >= 400:
+                try:
+                    detail = response.json().get("detail")
+                except ValueError:
+                    detail = None
+                return detail if isinstance(detail, str) else "Incorrect PIN. Please try again."
+            payload = response.json()
+        except requests.ConnectionError:
+            return "Connection lost. Please try again."
+        except requests.Timeout:
+            return "Unlock is taking too long. Please try again."
+        except requests.RequestException:
+            return "Could not unlock this PC. Please ask the cashier."
+
+        display_name = payload.get("member_display_name")
+        with self.active_session_lock:
+            if self.active_session is not None and self.active_session.session_id == session_id:
+                self.active_session.customer_locked = False
+                if isinstance(display_name, str):
+                    self.active_session.customer_name = display_name
+
+        self.lock_screen.hide_for_session()
+        self.customer_overlay.show_session(
+            session_type=self.human_session_mode(session_mode),
+            customer_name=display_name if isinstance(display_name, str) else None,
+            is_elapsed=False,
+            is_new_session=False,
+        )
+        print(f"Session {session_id} customer lock cleared by member PIN.")
+        return None
 
     def register_once(self) -> bool:
         try:
@@ -342,6 +432,9 @@ class SecretGroundsClient:
         if command_type == "end_session":
             return self.end_local_session(command)
 
+        if command_type == "clear_customer_lock":
+            return self.handle_clear_customer_lock_command(command)
+
         if command_type in {"shutdown", "restart", "sleep"}:
             return self.handle_remote_power_command(command)
 
@@ -353,6 +446,30 @@ class SecretGroundsClient:
             status="failed",
             message=f"Unsupported command type: {command_type}",
         )
+
+    def handle_clear_customer_lock_command(self, command: dict[str, Any]) -> dict[str, str | None]:
+        """Cashier override, pushed from the dashboard: clears only the
+        member lock and restores the same overlay. Never requires the
+        member's PIN."""
+        command_id = str(command.get("command_id", ""))
+        with self.active_session_lock:
+            if self.active_session is None:
+                return self.build_acknowledgement(command_id, "failed", "no_matching_local_session")
+            was_locked = self.active_session.customer_locked
+            self.active_session.customer_locked = False
+            session_mode = self.active_session.session_mode
+            customer_name = self.active_session.customer_name
+
+        if was_locked:
+            self.lock_screen.hide_for_session()
+            self.customer_overlay.show_session(
+                session_type=self.human_session_mode(session_mode),
+                customer_name=customer_name,
+                is_elapsed=False,
+                is_new_session=False,
+            )
+            print("Customer lock cleared by cashier override.")
+        return self.build_acknowledgement(command_id, "completed", "Customer lock cleared")
 
     def handle_remote_power_command(self, command: dict[str, Any]) -> dict[str, str | None]:
         command_id = str(command.get("command_id", ""))
@@ -390,6 +507,7 @@ class SecretGroundsClient:
         scheduled_end_at: str,
         session_mode: str = "prepaid",
         customer_name: str | None = None,
+        customer_locked: bool = False,
     ) -> bool:
         old_stop_event: Event | None = None
         self.last_session_init_failure_reason = None
@@ -425,26 +543,35 @@ class SecretGroundsClient:
                         )
                         return False
                     try:
-                        self.lock_screen.hide_for_session()
+                        if customer_locked:
+                            self.lock_screen.show_member_locked(
+                                customer_name or self.active_session.customer_name or "Member"
+                            )
+                        else:
+                            self.lock_screen.hide_for_session()
                     except Exception as error:
                         print(
-                            "Lock screen hide failed for already-active "
+                            "Lock screen update failed for already-active "
                             f"session_id={session_id}: {error}"
                         )
                         self.last_session_init_failure_reason = (
-                            f"Could not unlock the PC: {error}"
+                            f"Could not update the PC lock state: {error}"
                         )
                         return False
                     print(
                         "Local session already active; refreshed persisted state "
-                        f"and hid lock screen for session_id={session_id}."
+                        f"for session_id={session_id} (customer_locked={customer_locked})."
                     )
-                    self.customer_overlay.show_session(
-                        session_type=self.human_session_mode(session_mode),
-                        customer_name=customer_name or self.active_session.customer_name,
-                        is_elapsed=session_mode == "open_time",
-                        is_new_session=False,
-                    )
+                    self.active_session.customer_locked = customer_locked
+                    if customer_locked:
+                        self.customer_overlay.hide()
+                    else:
+                        self.customer_overlay.show_session(
+                            session_type=self.human_session_mode(session_mode),
+                            customer_name=customer_name or self.active_session.customer_name,
+                            is_elapsed=session_mode == "open_time",
+                            is_new_session=False,
+                        )
                     print(f"Local session {session_id} is already active.")
                     return True
                 old_stop_event = self.active_session.stop_event
@@ -494,6 +621,7 @@ class SecretGroundsClient:
                 timer_thread=timer_thread,
                 session_mode=session_mode,
                 customer_name=customer_name,
+                customer_locked=customer_locked,
             )
             try:
                 self.recovery_store.save(
@@ -515,21 +643,31 @@ class SecretGroundsClient:
             if old_stop_event is not None:
                 old_stop_event.set()
             try:
-                self.lock_screen.hide_for_session()
-                print(f"Lock screen hidden for session_id={session_id}.")
+                if customer_locked:
+                    self.lock_screen.show_member_locked(customer_name or "Member")
+                    print(f"Session {session_id} started already customer-locked.")
+                else:
+                    self.lock_screen.hide_for_session()
+                    print(f"Lock screen hidden for session_id={session_id}.")
             except Exception as error:
                 self.active_session.stop_event.set()
                 self.active_session = None
                 self.recovery_store.clear()
-                print(f"Lock screen hide failed for session_id={session_id}: {error}")
-                self.last_session_init_failure_reason = f"Could not unlock the PC: {error}"
+                print(f"Lock screen update failed for session_id={session_id}: {error}")
+                self.last_session_init_failure_reason = f"Could not update the PC lock state: {error}"
                 return False
-            print(f"Session {session_id} unlocked.")
-            self.customer_overlay.show_session(
-                session_type=self.human_session_mode(session_mode),
-                customer_name=customer_name,
-                is_elapsed=session_mode == "open_time",
-            )
+            if customer_locked:
+                self.customer_overlay.hide()
+            else:
+                print(f"Session {session_id} unlocked.")
+                self.customer_overlay.show_session(
+                    session_type=self.human_session_mode(session_mode),
+                    customer_name=customer_name,
+                    is_elapsed=session_mode == "open_time",
+                )
+            # The timer thread starts regardless of customer_locked: billing
+            # and countdown/elapsed timing are never paused by a customer
+            # lock, only the on-screen presentation changes.
             timer_thread.start()
 
         return True
@@ -1216,6 +1354,7 @@ class SecretGroundsClient:
         shutdown_at = server_session.get("shutdown_at")
         server_time = server_state.get("server_time")
         member_display_name = server_session.get("member_name_snapshot") or server_session.get("member_code_snapshot")
+        customer_locked = bool(server_session.get("customer_locked", False))
 
         if not isinstance(session_id, str):
             print("Reconciliation failed: server session is missing session_id.")
@@ -1248,12 +1387,17 @@ class SecretGroundsClient:
             return True
 
         if session_mode == "open_time":
+            # Open Time sessions are never member-linked (see
+            # engage_customer_lock's session_mode check server-side), so
+            # customer_locked is always False here in practice -- passed
+            # through anyway for defense in depth.
             return self.initialize_local_session(
                 session_id=session_id,
                 duration_seconds=None,
                 scheduled_end_at=str(scheduled_end_at or server_time or ""),
                 session_mode="open_time",
                 customer_name=member_display_name if isinstance(member_display_name, str) else None,
+                customer_locked=customer_locked,
             )
 
         if not isinstance(scheduled_end_at, str):
@@ -1289,6 +1433,7 @@ class SecretGroundsClient:
             scheduled_end_at=scheduled_end_at,
             session_mode=session_mode,
             customer_name=member_display_name if isinstance(member_display_name, str) else None,
+            customer_locked=customer_locked,
         )
 
     def initialize_grace_period_from_server(

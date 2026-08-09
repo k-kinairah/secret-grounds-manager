@@ -689,6 +689,10 @@ class SessionService:
             "ended_at": ended_at,
             "ended_reason": ended_reason,
             "ended_by_user_id": actor_user_id,
+            # Ending a session (manually, forced, or via expiration) must
+            # never leave a stale customer lock behind -- there is no active
+            # session left for it to apply to.
+            "customer_locked": False,
         }
         if session.session_mode == "open_time":
             actual_elapsed_seconds, billed_seconds, final_amount = (
@@ -1362,6 +1366,112 @@ class SessionService:
 
         return SessionCommandResponse(
             session=session,
+            command=command,
+            acknowledgements=acknowledgements,
+        )
+
+    def engage_customer_lock(self, pc_name: str, session_id: str) -> SessionRecord:
+        """Member-initiated "Lock PC": a temporary display switch, not a new
+        session and not a pause. Eligibility is re-checked here from the
+        authoritative session row -- the client's own can_lock_pc gate is
+        presentation-only and is never trusted as authorization."""
+        cleaned_pc_name = pc_name.strip()
+        session = self.repository.get_active_session_for_pc(cleaned_pc_name)
+        if session is None or session.session_id != session_id:
+            raise HTTPException(status_code=409, detail="No matching active session for this PC")
+        if session.session_mode != "member_balance" or not session.member_id:
+            raise HTTPException(status_code=403, detail="Only an authenticated member session can be locked")
+        if session.status != "active":
+            raise HTTPException(status_code=409, detail="Session is not active")
+        if session.customer_locked:
+            return session
+
+        updated_session = session.model_copy(update={"customer_locked": True})
+        self.repository.update_session(updated_session)
+        self.create_event(
+            session.session_id,
+            "customer_lock_engaged",
+            message="Member locked the workstation; the session and its timer continue.",
+        )
+        return updated_session
+
+    def clear_customer_lock_by_pin(self, pc_name: str, pin: str) -> tuple[SessionRecord, str]:
+        """Member-initiated unlock: verifies the PIN against the SAME member
+        already tied to the active session (never a client-supplied member
+        id), reusing the existing PIN lockout in member_repository as-is."""
+        if self.member_repository is None:
+            raise HTTPException(status_code=500, detail="Member service is unavailable")
+        cleaned_pc_name = pc_name.strip()
+        session = self.repository.get_active_session_for_pc(cleaned_pc_name)
+        if session is None:
+            raise HTTPException(status_code=409, detail="No active session for this PC")
+        if not session.customer_locked:
+            raise HTTPException(status_code=409, detail="This PC is not customer-locked")
+        if session.session_mode != "member_balance" or not session.member_id:
+            raise HTTPException(status_code=409, detail="This session has no linked member")
+
+        self.member_repository.verify_member_pin(session.member_id, pin)  # type: ignore[attr-defined]
+
+        updated_session = session.model_copy(update={"customer_locked": False})
+        self.repository.update_session(updated_session)
+        self.create_event(
+            session.session_id,
+            "customer_lock_cleared",
+            message="Member unlocked the workstation with their PIN.",
+        )
+        member_display_name = (
+            session.member_name_snapshot or session.member_code_snapshot or "Member"
+        )
+        return updated_session, member_display_name
+
+    async def clear_customer_lock_override(
+        self,
+        session_id: str,
+        actor_user_id: str | None,
+    ) -> SessionCommandResponse:
+        """Cashier/operator override: clears only the temporary customer
+        lock and keeps the active session running. Never requires the
+        member's PIN."""
+        session = self.repository.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not session.customer_locked:
+            raise HTTPException(status_code=409, detail="This PC is not customer-locked")
+
+        self.require_available_client(session.pc_name)
+        updated_session = session.model_copy(update={"customer_locked": False})
+        command = self.create_command(
+            "clear_customer_lock",
+            {"session_id": session.session_id},
+        )
+        try:
+            acknowledgements = await self.send_required_command(session.pc_name, command)
+        except Exception as error:
+            self.create_event(
+                session.session_id,
+                "command_failed",
+                message=str(error),
+                performed_by_user_id=actor_user_id,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Clear customer lock command failed: {error}",
+            ) from error
+
+        self.repository.update_session(updated_session)
+        self.create_event(
+            session.session_id,
+            "customer_lock_cleared",
+            message="Cashier cleared the customer lock.",
+            performed_by_user_id=actor_user_id,
+        )
+        response_session = (
+            self.billing_service.enrich_session(updated_session)
+            if self.billing_service is not None
+            else updated_session
+        )
+        return SessionCommandResponse(
+            session=response_session,
             command=command,
             acknowledgements=acknowledgements,
         )

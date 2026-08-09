@@ -24,6 +24,11 @@ let currentState = {
   logo_url: ""
 };
 let lockDraft = { username: "", pin: "", pinVisible: false };
+// Deliberately separate from lockDraft: the unlock PIN field must always
+// start empty, never pre-filled from whatever a member (this one or a
+// previous one) last typed into the unrelated MEMBER LOGIN form.
+let unlockDraft = { pin: "", pinVisible: false };
+let overlayLockConfirmVisible = false;
 let displayClock = {
   timerId: null,
   view: "lock",
@@ -45,6 +50,14 @@ function emitAction(action, payload = {}) {
 
 window.SecretGroundsUI = {
   setState(nextState) {
+    // Reset the unlock PIN draft only on a genuine transition into the
+    // member-locked screen (e.g. a fresh lock, or reconnect restoring it) --
+    // not on every incidental push while already showing it (a WebSocket
+    // reconnect blip mid-typing must not wipe what the member just typed).
+    if (nextState.mode === "member_locked" && currentState.mode !== "member_locked") {
+      unlockDraft.pin = "";
+      unlockDraft.pinVisible = false;
+    }
     currentState = { ...currentState, ...nextState };
     syncDisplayClock();
     render();
@@ -321,8 +334,100 @@ function renderLock() {
   }
 }
 
+function renderMemberLocked() {
+  // Distinct from the idle "Available soon" lock screen: no username field
+  // (the active session already identifies the member), a danger-toned
+  // headline/card accent, and an UNLOCK button instead of LOG IN. Reuses
+  // the exact same fullscreen/topmost lock window and PIN field markup
+  // (including the custom eye toggle), so all of that screen's existing
+  // input-blocking behavior and PIN-field styling applies unchanged.
+  const currentPin = document.getElementById("unlock-pin-input");
+  if (currentPin) {
+    unlockDraft.pin = currentPin.value;
+    unlockDraft.pinVisible = currentPin.type === "text";
+  }
+  const previousFocus = document.activeElement?.id || "";
+  const offline = currentState.connection_state !== "online";
+  const disabled = currentState.is_login_processing ? "disabled" : "";
+  const memberName = currentState.locked_member_name || "this member";
+  const loginMessage = currentState.login_message
+    ? `<div class="lock-login-message">${escapeHtml(currentState.login_message)}</div>`
+    : "";
+  app.innerHTML = `
+    <section class="lock-screen lock-screen-member-locked ${offline ? "is-offline" : ""}">
+      <div class="lock-fog"></div>
+      ${lockVolumetricRays()}
+      ${lockFlowStreaks()}
+      <div class="lock-branding-bloom"></div>
+      <div class="lock-watermark">${logoImage()}</div>
+      <div class="lock-particles">${particleDots(72)}</div>
+      <div class="lock-vignette"></div>
+      <div class="lock-content">
+        ${logoImage("lock-logo")}
+        <h1 class="lock-title">${escapeHtml((currentState.shop_display_name || "Secret Grounds").toUpperCase())}</h1>
+        <p class="lock-headline lock-headline-danger">SESSION LOCKED</p>
+        <p class="lock-instruction">This PC is reserved for ${escapeHtml(memberName)}.\nYour session is still running. Enter your PIN to continue.</p>
+        <form class="login-card is-unlock" id="unlock-form">
+          <div class="login-title">UNLOCK</div>
+          <div class="field-group">
+            <label class="field-label" for="unlock-pin-input">pin</label>
+            <div class="field">
+              ${icon("lock")}
+              <input id="unlock-pin-input" name="pin" type="password" autocomplete="off" placeholder="enter pin" ${disabled} />
+              <button class="eye-toggle" id="unlock-eye-toggle" type="button" ${disabled}>${icon("eye")}</button>
+            </div>
+          </div>
+          <button class="btn-gradient" type="submit" ${disabled}>${currentState.is_login_processing ? "UNLOCKING..." : "UNLOCK"}</button>
+          ${loginMessage}
+        </form>
+        <div class="lock-pc-row">${icon("computer")}<span>${escapeHtml(currentState.pc_name || "PC-01")}</span></div>
+        <div class="lock-connection-warning">Waiting for cashier connection...</div>
+      </div>
+    </section>`;
+  wireMemberLocked();
+  const pin = document.getElementById("unlock-pin-input");
+  const eye = document.getElementById("unlock-eye-toggle");
+  if (pin) {
+    pin.value = unlockDraft.pin;
+    pin.type = unlockDraft.pinVisible ? "text" : "password";
+  }
+  if (eye && unlockDraft.pinVisible) {
+    eye.classList.add("revealed");
+    eye.innerHTML = icon("eye-off");
+  }
+  if (!currentState.is_login_processing) {
+    const previous = document.getElementById(previousFocus);
+    if (previous) previous.focus();
+    else if (pin) pin.focus();
+  }
+}
+
+function wireMemberLocked() {
+  const form = document.getElementById("unlock-form");
+  if (form) {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      emitAction("unlock_session", { pin: document.getElementById("unlock-pin-input").value });
+    });
+  }
+  const eye = document.getElementById("unlock-eye-toggle");
+  const pin = document.getElementById("unlock-pin-input");
+  if (eye && pin) {
+    eye.addEventListener("click", () => {
+      const reveal = pin.type === "password";
+      pin.type = reveal ? "text" : "password";
+      eye.classList.toggle("revealed", reveal);
+      eye.innerHTML = icon(reveal ? "eye-off" : "eye");
+    });
+  }
+}
+
 function renderOverlay() {
   document.body.dataset.webviewSurface = "overlay";
+  if (overlayLockConfirmVisible) {
+    renderLockConfirmPanel();
+    return;
+  }
   const isOpen = currentState.session_type === "Open Time";
   const isMember = currentState.session_type === "Member Time";
   const primarySeconds = displayedTimerSeconds();
@@ -335,8 +440,17 @@ function renderOverlay() {
   const used = !isOpen
     ? `<div class="overlay-stat-row">${icon("clock")}<div><div class="overlay-stat-caption">Used Time</div><div class="overlay-stat-value">${formatUsedTime(currentState.used_seconds)}</div></div></div>`
     : "";
-  const logout = currentState.can_logout
-    ? `<div class="overlay-footer-divider"></div><div class="overlay-actions"><button class="btn-outline" type="button" data-action="logout">Log Out</button></div>`
+  // Lock PC is a secondary action alongside Log Out -- never styled larger
+  // or more prominent than the timer/session info above it.
+  const actionButtons = [];
+  if (currentState.can_lock_pc) {
+    actionButtons.push(`<button class="btn-outline" type="button" id="lock-pc-open">Lock PC</button>`);
+  }
+  if (currentState.can_logout) {
+    actionButtons.push(`<button class="btn-outline" type="button" data-action="logout">Log Out</button>`);
+  }
+  const actions = actionButtons.length
+    ? `<div class="overlay-footer-divider"></div><div class="overlay-actions">${actionButtons.join("")}</div>`
     : "";
   app.innerHTML = `
     <section class="web-overlay-root">
@@ -352,19 +466,56 @@ function renderOverlay() {
         </div>
         <div class="overlay-pc-row">${icon("computer")}<span>${escapeHtml(currentState.pc_name || "PC-01")}</span></div>
         ${connection}
-        ${logout}
+        ${actions}
       </div>
     </section>`;
   wireActions();
+  const lockOpenButton = document.getElementById("lock-pc-open");
+  if (lockOpenButton) {
+    lockOpenButton.addEventListener("click", () => {
+      overlayLockConfirmVisible = true;
+      renderOverlay();
+    });
+  }
   requestResize();
 }
 
-function overlayHeader() {
+function renderLockConfirmPanel() {
+  // A focused confirm-only card, not an addition stacked onto the normal
+  // session card -- deliberately has no collapse control, so this always
+  // resolves via Cancel/Lock PC before anything else can happen.
+  app.innerHTML = `
+    <section class="web-overlay-root">
+      <div class="overlay-card">
+        ${overlayHeader(false)}
+        <div class="overlay-confirm-title">Lock this computer?</div>
+        <div class="overlay-confirm-body">Your session will remain active and your time will continue running while this PC is locked.</div>
+        <div class="overlay-confirm-actions">
+          <button class="btn-outline" type="button" id="lock-pc-cancel">Cancel</button>
+          <button class="btn-gradient" type="button" id="lock-pc-confirm">Lock PC</button>
+        </div>
+      </div>
+    </section>`;
+  document.getElementById("lock-pc-cancel").addEventListener("click", () => {
+    overlayLockConfirmVisible = false;
+    renderOverlay();
+  });
+  document.getElementById("lock-pc-confirm").addEventListener("click", () => {
+    overlayLockConfirmVisible = false;
+    emitAction("lock_pc");
+  });
+  requestResize();
+}
+
+function overlayHeader(showCollapse = true) {
+  const collapse = showCollapse
+    ? `<button class="overlay-icon-btn" type="button" data-action="collapse_overlay">${icon("chevron-down")}</button>`
+    : "";
   return `
     <div class="overlay-header">
       ${logoImage()}
       <div class="overlay-eyebrow">SECRET GROUNDS</div>
-      <button class="overlay-icon-btn" type="button" data-action="collapse_overlay">${icon("chevron-down")}</button>
+      ${collapse}
     </div>`;
 }
 
@@ -437,6 +588,8 @@ function render() {
     renderPill();
   } else if (currentState.view === "overlay") {
     renderOverlay();
+  } else if (currentState.mode === "member_locked") {
+    renderMemberLocked();
   } else {
     renderLock();
   }

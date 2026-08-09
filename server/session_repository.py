@@ -77,6 +77,7 @@ def row_to_session(row: Any) -> SessionRecord:
             if "shutdown_at" in row.keys() and row["shutdown_at"] is not None
             else None
         ),
+        customer_locked=bool(row["customer_locked"]) if "customer_locked" in row.keys() else False,
     )
 
 
@@ -137,9 +138,10 @@ class SessionRepository:
                     member_balance_before_seconds,
                     member_balance_after_seconds,
                     grace_started_at,
-                    shutdown_at
+                    shutdown_at,
+                    customer_locked
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.session_id,
@@ -175,6 +177,7 @@ class SessionRepository:
                     session.member_balance_after_seconds,
                     datetime_to_storage(session.grace_started_at),
                     datetime_to_storage(session.shutdown_at),
+                    1 if session.customer_locked else 0,
                 ),
             )
 
@@ -323,7 +326,8 @@ class SessionRepository:
                     member_balance_before_seconds = ?,
                     member_balance_after_seconds = ?,
                     grace_started_at = ?,
-                    shutdown_at = ?
+                    shutdown_at = ?,
+                    customer_locked = ?
                 WHERE session_id = ?
                 """,
                 (
@@ -359,6 +363,7 @@ class SessionRepository:
                     session.member_balance_after_seconds,
                     datetime_to_storage(session.grace_started_at),
                     datetime_to_storage(session.shutdown_at),
+                    1 if session.customer_locked else 0,
                     session.session_id,
                 ),
             )

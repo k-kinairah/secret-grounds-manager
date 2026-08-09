@@ -984,6 +984,15 @@ export async function endSession(sessionId: string): Promise<SessionCommandRespo
   );
 }
 
+export async function clearCustomerLock(sessionId: string): Promise<SessionCommandResponse> {
+  return requestJson<SessionCommandResponse>(
+    `${getApiBaseUrl()}/sessions/${sessionId}/clear-customer-lock`,
+    {
+      method: "POST"
+    }
+  );
+}
+
 export async function forceEndSession(sessionId: string): Promise<ForceEndSessionResponse> {
   return requestJson<ForceEndSessionResponse>(
     `${getApiBaseUrl()}/sessions/${sessionId}/force-end`,

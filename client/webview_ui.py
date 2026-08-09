@@ -591,6 +591,7 @@ class SecretGroundsWebViewHost:
             "connection_state": "online" if model.connection_online else "offline",
             "login_message": model.login_message or "",
             "is_login_processing": model.is_login_processing,
+            "locked_member_name": model.locked_member_name,
         }
 
     def overlay_payload(self) -> dict[str, Any]:
@@ -623,6 +624,7 @@ class SecretGroundsWebViewHost:
             "used_seconds": model.used_seconds,
             "connection_state": "online" if model.connection_online else "offline",
             "can_logout": self.overlay_controller.logout_action is not None,
+            "can_lock_pc": model.can_lock_pc,
             "notice": model.notice or "",
         }
 
@@ -1076,6 +1078,12 @@ class SecretGroundsWebViewHost:
                 if message:
                     print(message)
             return
+        if action == "lock_pc":
+            # The confirmation dialog ("Lock this computer? ...") already
+            # happened client-side in the overlay UI before this fires.
+            if self.overlay_controller is not None:
+                self.overlay_controller.handle_lock_pc_clicked()
+            return
         if action == "member_login":
             username = str(payload.get("username", "")).strip()
             pin = str(payload.get("pin", "")).strip()
@@ -1084,6 +1092,12 @@ class SecretGroundsWebViewHost:
                 return
             if self.member_login_action is not None:
                 Thread(target=self._run_member_login, args=(username, pin), daemon=True).start()
+            return
+        if action == "unlock_session":
+            pin = str(payload.get("pin", "")).strip()
+            if self.lock_controller is not None:
+                self.lock_controller.submit_session_unlock(pin)
+            return
 
     def _focus_lock_inputs(self) -> None:
         if "lock" not in self.loaded:

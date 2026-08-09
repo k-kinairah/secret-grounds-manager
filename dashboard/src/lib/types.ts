@@ -104,6 +104,7 @@ export interface PcSummary {
   member_balance_before_seconds: number | null;
   member_balance_after_seconds: number | null;
   mac_address: string | null;
+  customer_locked: boolean;
 }
 
 export interface PcLayoutSlot {

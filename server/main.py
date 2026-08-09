@@ -33,6 +33,10 @@ from server.schemas import (
     ClientSafeSettings,
     ClientMemberLoginRequest,
     ClientMemberLoginResponse,
+    ClientSessionLockRequest,
+    ClientSessionLockResponse,
+    ClientSessionUnlockRequest,
+    ClientSessionUnlockResponse,
     CommandAcknowledgement,
     BroadcastCommandRequest,
     BroadcastCommandResponse,
@@ -2144,6 +2148,9 @@ def get_registered_pcs(
                     else None
                 ),
                 mac_address=pc.mac_address,
+                customer_locked=(
+                    active_session.customer_locked if active_session is not None else False
+                ),
             )
         )
 
@@ -2174,6 +2181,7 @@ def get_pc_session_state(pc_name: str) -> PCSessionStateResponse:
                 session_mode=active_session.session_mode,
                 member_code_snapshot=active_session.member_code_snapshot,
                 member_name_snapshot=active_session.member_name_snapshot,
+                customer_locked=active_session.customer_locked,
             )
             if has_client_active_session and active_session is not None
             else None
@@ -2829,6 +2837,52 @@ async def client_member_login(
     )
 
 
+def friendly_customer_unlock_error(error: HTTPException) -> HTTPException:
+    detail = str(error.detail)
+    if error.status_code == 429:
+        return HTTPException(status_code=429, detail="Too many PIN attempts. Please try again shortly.")
+    if error.status_code in {403, 404} or "Invalid member username or PIN" in detail:
+        return HTTPException(status_code=403, detail="Incorrect PIN. Please try again.")
+    return error
+
+
+@app.post("/client/session-lock", response_model=ClientSessionLockResponse)
+async def client_session_lock(
+    request: ClientSessionLockRequest,
+) -> ClientSessionLockResponse:
+    """Member-initiated "Lock PC": reserves the workstation while their
+    active member session keeps running unchanged. Eligibility is enforced
+    independently here (session_service.engage_customer_lock), not trusted
+    from the client's own presentation-only can_lock_pc check."""
+    pc = require_registered_client_identity(
+        request.pc_name,
+        request.ip_address,
+        request.mac_address,
+    )
+    session = session_service.engage_customer_lock(pc.pc_name, request.session_id)
+    return ClientSessionLockResponse(session=session)
+
+
+@app.post("/client/session-unlock", response_model=ClientSessionUnlockResponse)
+async def client_session_unlock(
+    request: ClientSessionUnlockRequest,
+) -> ClientSessionUnlockResponse:
+    pc = require_registered_client_identity(
+        request.pc_name,
+        request.ip_address,
+        request.mac_address,
+    )
+    try:
+        session, member_display_name = session_service.clear_customer_lock_by_pin(
+            pc.pc_name,
+            request.pin,
+        )
+    except HTTPException as error:
+        raise friendly_customer_unlock_error(error) from error
+
+    return ClientSessionUnlockResponse(session=session, member_display_name=member_display_name)
+
+
 @app.post("/sessions/{session_id}/add-time", response_model=SessionCommandResponse)
 async def add_time_to_session(
     session_id: str,
@@ -2841,6 +2895,20 @@ async def add_time_to_session(
         request.seconds,
         request.rate_id,
         request.amount,
+        get_on_duty_actor_user_id(current_user),
+    )
+
+
+@app.post("/sessions/{session_id}/clear-customer-lock", response_model=SessionCommandResponse)
+async def clear_customer_lock(
+    session_id: str,
+    current_user: object = Depends(require_role("cashier")),
+) -> SessionCommandResponse:
+    """Cashier/operator override: clears only the temporary member lock and
+    keeps the active session running. Never requires the member's PIN."""
+    mark_stale_pcs_offline()
+    return await session_service.clear_customer_lock_override(
+        session_id,
         get_on_duty_actor_user_id(current_user),
     )
 
