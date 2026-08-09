@@ -542,6 +542,7 @@ class SecretGroundsWebViewHost:
         self.last_action: tuple[str, dict[str, Any]] | None = None
         self.ui_errors: list[dict[str, Any]] = []
         self.window_visibility: dict[str, bool] = {}
+        self.window_on_top: dict[str, bool] = {}
         self.allow_close = False
         self.refresh_event = Event()
         self.refresh_stop = Event()
@@ -627,7 +628,16 @@ class SecretGroundsWebViewHost:
 
     def create_windows(self, lock_only: bool = False) -> None:
         url = web_ui_index_path().as_uri()
-        lock_initially_visible = self.enable_lock_window
+        # The lock window is fullscreen and can't use the overlay/pill
+        # off-screen trick, so it must actually start hidden until the
+        # initial-reconciliation gate is satisfied -- otherwise it appears
+        # on screen (unstyled/pre-content) the instant it's created, then
+        # gets hidden again a moment later by refresh_lock()'s readiness
+        # check, which is a visible flash. refresh_lock() already knows how
+        # to show it once ready (even before WebView2 has loaded content),
+        # so gating the initial visibility here just makes that the only
+        # time it ever becomes visible.
+        lock_initially_visible = self.enable_lock_window and self._initial_lock_is_ready()
         _diagnostic(f"before create_window lock url={url}")
         lock_window = webview.create_window(
             "Secret Grounds",
@@ -821,7 +831,7 @@ class SecretGroundsWebViewHost:
         lock_window = self.windows.get("lock")
         if lock_window is not None:
             self._set_window_visible("lock", True)
-            self._set_window_on_top(lock_window, True)
+            self._set_window_on_top("lock", lock_window, True)
             self._focus_lock_inputs()
 
     def refresh_lock(self) -> None:
@@ -862,7 +872,7 @@ class SecretGroundsWebViewHost:
             self._set_window_visible("pill", False)
         if overlay is not None:
             self._set_window_visible("overlay", True)
-            self._set_window_on_top(overlay, True)
+            self._set_window_on_top("overlay", overlay, True)
 
     def render_overlay(self) -> None:
         self._evaluate("overlay", self.overlay_payload())
@@ -915,14 +925,14 @@ class SecretGroundsWebViewHost:
         width, height = self.last_pill_size
         apply_pill_native_geometry(pill, width, height)
         self._set_window_visible("pill", True)
-        self._set_window_on_top(pill, False)
+        self._set_window_on_top("pill", pill, False)
 
     def collapse_overlay(self) -> None:
         _diagnostic("collapse_overlay invoked")
         overlay = self.windows.get("overlay")
         pill = self.windows.get("pill")
         if overlay is not None:
-            self._set_window_on_top(overlay, False)
+            self._set_window_on_top("overlay", overlay, False)
             self._set_window_visible("overlay", False)
         if pill is not None:
             self.show_collapsed_control()
@@ -936,7 +946,7 @@ class SecretGroundsWebViewHost:
         if overlay is not None:
             self.render_overlay()
             self._set_window_visible("overlay", True)
-            self._set_window_on_top(overlay, True)
+            self._set_window_on_top("overlay", overlay, True)
 
     def _set_window_visible(self, key: str, is_visible: bool) -> None:
         window = self.windows.get(key)
@@ -965,12 +975,24 @@ class SecretGroundsWebViewHost:
                 self.window_visibility[key] = not is_visible
             raise
 
-    @staticmethod
-    def _set_window_on_top(window: webview.Window, on_top: bool) -> None:
-        _diagnostic(f"set_window_on_top on_top={on_top}")
+    def _set_window_on_top(self, key: str, window: webview.Window, on_top: bool) -> None:
+        # SetWindowPos(HWND_NOTOPMOST) does not just clear the topmost flag --
+        # it re-inserts the window just below the topmost band, i.e. above
+        # every other regular window currently in the z-order (a documented
+        # Win32 quirk). The collapsed pill's on-top state gets reasserted
+        # here on every per-second refresh tick while collapsed, so without
+        # this no-op guard that reassertion kept yanking the pill back above
+        # other apps (e.g. Discord) even though it was already correctly
+        # non-topmost -- the window's z-order should only actually change on
+        # a real state transition, not on every refresh.
+        if self.window_on_top.get(key) == on_top:
+            _diagnostic(f"set_window_on_top noop key={key} on_top={on_top}")
+            return
+        self.window_on_top[key] = on_top
+        _diagnostic(f"set_window_on_top key={key} on_top={on_top}")
         if not set_native_window_z_order(window, on_top):
             window.on_top = on_top
-        _diagnostic(f"set_window_on_top complete on_top={on_top}")
+        _diagnostic(f"set_window_on_top complete key={key} on_top={on_top}")
 
     def update_overlay_size(self, width: int, height: int) -> None:
         width = max(120, min(360, width))
@@ -1121,7 +1143,7 @@ class SecretGroundsWebViewHost:
         lock_window = self.windows.get("lock")
         self.setup_active = True
         if lock_window is not None:
-            self._set_window_on_top(lock_window, False)
+            self._set_window_on_top("lock", lock_window, False)
         try:
             result = action()
         except Exception:
