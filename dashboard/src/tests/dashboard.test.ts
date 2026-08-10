@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import {
   addTime,
   adminOperatorLogin,
-  calculateTime,
   createUser,
   createRate,
   fetchAdminSettings,
@@ -60,9 +59,9 @@ import {
   getPcMonitorPresentation,
   summarizePcs
 } from "../lib/pcStatus";
+import { getPackageRatesForPc, isRateEligibleNow } from "../lib/packageEligibility";
 import { saveRateProfile } from "../lib/rateActions";
 import { rateFormToInput, rateToForm } from "../lib/rateForm";
-import { calculatePreviewSeconds } from "../lib/sessionSelection";
 import {
   calculateOpenTimeEstimate,
   formatDuration,
@@ -430,6 +429,11 @@ const sampleRate: RateProfile = {
   rate_type: "package",
   is_active: true,
   sort_order: 10,
+  station_scope: "standard",
+  guest_only: false,
+  member_eligible: true,
+  eligible_start_local_time: null,
+  eligible_end_local_time: null,
   created_at: "2026-07-23T00:00:00+00:00",
   updated_at: "2026-07-23T00:00:00+00:00"
 };
@@ -439,7 +443,8 @@ assert.deepEqual(rateToForm(sampleRate), {
   minutes: "30",
   price: "50.00",
   rateType: "package",
-  sortOrder: "10"
+  sortOrder: "10",
+  stationScope: "standard"
 });
 assert.deepEqual(
   rateFormToInput({
@@ -447,26 +452,70 @@ assert.deepEqual(
     minutes: "90",
     price: "75.25",
     rateType: "package",
-    sortOrder: "12"
+    sortOrder: "12",
+    stationScope: "vip"
   }),
   {
     name: "Night Pack",
     duration_seconds: 5400,
     price: "75.25",
     rate_type: "package",
-    sort_order: 12
+    sort_order: 12,
+    station_scope: "vip"
   }
 );
 
-assert.equal(calculatePreviewSeconds("20.00", {
+const standardGuestRate: RateProfile = {
   ...sampleRate,
-  rate_id: "rate-metered",
-  name: "Regular Rate",
-  duration_seconds: 300,
-  price: "1.00",
-  rate_type: "metered",
-  sort_order: 0
-}), 6000);
+  rate_id: "rate-standard-guest-5",
+  name: "Standard Guest",
+  station_scope: "standard"
+};
+const vipGuestRate: RateProfile = {
+  ...sampleRate,
+  rate_id: "rate-vip-guest",
+  name: "VIP Guest",
+  station_scope: "vip"
+};
+const midnightRate: RateProfile = {
+  ...sampleRate,
+  rate_id: "rate-midnight",
+  name: "Standard Midnight Promo",
+  station_scope: "standard",
+  guest_only: true,
+  member_eligible: false,
+  eligible_start_local_time: "00:00",
+  eligible_end_local_time: "05:00"
+};
+const anyStationRate: RateProfile = {
+  ...sampleRate,
+  rate_id: "rate-any",
+  name: "Any Station Pass",
+  station_scope: "any"
+};
+
+const allTestRates = [standardGuestRate, vipGuestRate, midnightRate, anyStationRate];
+assert.deepEqual(
+  getPackageRatesForPc(allTestRates, { is_vip: false }, new Date("2026-01-01T02:00:00")).map((rate) => rate.rate_id),
+  ["rate-standard-guest-5", "rate-midnight", "rate-any"],
+  "Standard PC should only see Standard-scoped and Any-scoped packages, midnight included inside its window"
+);
+assert.deepEqual(
+  getPackageRatesForPc(allTestRates, { is_vip: false }, new Date("2026-01-01T14:00:00")).map((rate) => rate.rate_id),
+  ["rate-standard-guest-5", "rate-any"],
+  "Midnight promo must disappear outside its eligible window"
+);
+assert.deepEqual(
+  getPackageRatesForPc(allTestRates, { is_vip: true }, new Date("2026-01-01T02:00:00")).map((rate) => rate.rate_id),
+  ["rate-vip-guest", "rate-any"],
+  "VIP PC must never see Standard-only or midnight packages"
+);
+assert.equal(isRateEligibleNow(midnightRate, new Date("2026-01-01T00:00:00")), true, "00:00 is inclusive");
+assert.equal(isRateEligibleNow(midnightRate, new Date("2026-01-01T04:59:00")), true);
+assert.equal(isRateEligibleNow(midnightRate, new Date("2026-01-01T05:00:00")), false, "05:00 is exclusive");
+assert.equal(isRateEligibleNow(midnightRate, new Date("2026-01-01T23:59:00")), false);
+assert.equal(isRateEligibleNow(standardGuestRate, new Date("2026-01-01T14:00:00")), true, "no window means always eligible");
+
 assert.equal(calculateCashChange("20.00", "50.00"), 30);
 assert.equal(isPaymentInputValid("cash", "20.00", "20.00", "50.00"), true);
 assert.equal(isPaymentInputValid("cash", "20.00", "20.00", "10.00"), false);
@@ -570,7 +619,6 @@ async function runAsyncAssertions() {
     await logout();
     await resetMemberPin("member-1", "1234", "1234");
     await fetchRates(true);
-    await calculateTime("20.00");
     await createRate({
       name: "Temp",
       duration_seconds: 600,
@@ -650,7 +698,6 @@ async function runAsyncAssertions() {
         { method: "POST", url: "http://localhost:8000/auth/logout" },
         { method: "POST", url: "http://localhost:8000/members/member-1/pin" },
         { method: "GET", url: "http://localhost:8000/rates?include_inactive=true" },
-        { method: "POST", url: "http://localhost:8000/rates/calculate-time" },
         { method: "POST", url: "http://localhost:8000/rates" },
         { method: "PUT", url: "http://localhost:8000/rates/rate-30" },
         { method: "PATCH", url: "http://localhost:8000/rates/rate-30/status" },
@@ -697,10 +744,10 @@ async function runAsyncAssertions() {
     assert.deepEqual(fetchCalls[10].body, {
       category: "general"
     });
-    assert.equal((fetchCalls[20].body as RateProfileInput).price, "12.30");
-    assert.equal((fetchCalls[21].body as RateProfileInput).price, "50.00");
-    assert.equal((fetchCalls[21].body as RateProfileInput).duration_seconds, 1800);
-    assert.deepEqual(fetchCalls[23].body, {
+    assert.equal((fetchCalls[19].body as RateProfileInput).price, "12.30");
+    assert.equal((fetchCalls[20].body as RateProfileInput).price, "50.00");
+    assert.equal((fetchCalls[20].body as RateProfileInput).duration_seconds, 1800);
+    assert.deepEqual(fetchCalls[22].body, {
       display_name: "PC 3",
       area_label: "SECRET GROUND SHOP",
       layout_order: 30,
@@ -708,33 +755,33 @@ async function runAsyncAssertions() {
       is_enabled: false,
       mac_address: null
     });
-    assert.deepEqual(fetchCalls[24].body, {
+    assert.deepEqual(fetchCalls[23].body, {
       pc_name: "PC-01",
       member_username: "ada.player",
       duration_seconds: 3600,
       member_pin: "1234"
     });
-    assert.deepEqual(fetchCalls[25].body, {
+    assert.deepEqual(fetchCalls[24].body, {
       pc_name: "PC-01",
       amount: "20.00"
     });
-    assert.deepEqual(fetchCalls[26].body, {
+    assert.deepEqual(fetchCalls[25].body, {
       title: "Secret Grounds",
       message: "Please return to the cashier.",
       severity: "info",
       require_acknowledgement: false
     });
-    assert.deepEqual(fetchCalls[27].body, {});
-    assert.deepEqual(fetchCalls[28].body, {
+    assert.deepEqual(fetchCalls[26].body, {});
+    assert.deepEqual(fetchCalls[27].body, {
       amount: "5.00"
     });
-    assert.deepEqual(fetchCalls[29].body, null);
-    assert.deepEqual(fetchCalls[30].body, {
+    assert.deepEqual(fetchCalls[28].body, null);
+    assert.deepEqual(fetchCalls[29].body, {
       payment_method: "cash",
       amount: "20.00",
       cash_received: "50.00"
     });
-    assert.deepEqual(fetchCalls[35].body, {
+    assert.deepEqual(fetchCalls[34].body, {
       filename: "secretgrounds_2026-07-29_143500.db",
       confirm: true
     });
@@ -755,7 +802,8 @@ async function runAsyncAssertions() {
         minutes: "30",
         price: "50.00",
         rateType: "package",
-        sortOrder: "10"
+        sortOrder: "10",
+        stationScope: "standard"
       },
       createRateProfile: async () => {
         saveEvents.push("unexpected-create");
@@ -780,7 +828,8 @@ async function runAsyncAssertions() {
         minutes: "15",
         price: "25.00",
         rateType: "package",
-        sortOrder: "40"
+        sortOrder: "40",
+        stationScope: "standard"
       },
       createRateProfile: async (input) => {
         createEvents.push(`post:${input.price}:${input.is_active}`);
@@ -801,8 +850,38 @@ async function runAsyncAssertions() {
     assert.match(ratesCss, /\.field input::placeholder/);
     assert.match(ratesCss, /\.field input:-webkit-autofill/);
     assert.match(ratesCss, /\.errorMessage/);
-    assert.match(ratesCss, /\.meteredCard/);
+    assert.doesNotMatch(ratesCss, /\.meteredCard/);
     assert.match(ratesCss, /color: #f8fafc/);
+
+    const ratesManagerSource = readFileSync("src/components/RatesManager.tsx", "utf8");
+    assert.doesNotMatch(ratesManagerSource, /Regular Metered Rate/);
+    assert.doesNotMatch(ratesManagerSource, /Used when the cashier enters an amount/);
+    assert.doesNotMatch(ratesManagerSource, /Edit Metered Rate/);
+    assert.doesNotMatch(ratesManagerSource, /rate_type === "metered"/);
+    assert.doesNotMatch(ratesManagerSource, /rateType === "metered"/);
+    assert.match(ratesManagerSource, /Packages<\/h2>/);
+    assert.match(ratesManagerSource, /Create Package/);
+    assert.match(ratesManagerSource, /stationScope/);
+    assert.match(ratesManagerSource, /stationScopeLabel/);
+    assert.match(ratesManagerSource, />Standard</);
+    assert.match(ratesManagerSource, />VIP</);
+    assert.match(ratesManagerSource, />Any Station</);
+    assert.match(ratesManagerSource, /guest_only/);
+    assert.match(ratesManagerSource, /eligible_start_local_time/);
+
+    const sessionDialogSourceForOpenTimeRetirement = readFileSync("src/components/SessionDialog.tsx", "utf8");
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /Enter Amount/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, />Open Time</);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /"open_time"/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /calculatePreviewSeconds/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /meteredRate/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /Packages\s*<\/button>/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /Member\s*<\/button>/);
+    // Stage 4: VIP playable-time preview is server-computed (fetched from
+    // the backend), never recomputed with 2:1 conversion logic in React.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /fetchMemberVipPreview/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /Playable on VIP/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /STANDARD_SECONDS_PER_VIP_SECOND/);
 
     const monitorTileSource = readFileSync("src/components/PcMonitorTile.tsx", "utf8");
     assert.match(monitorTileSource, /monitorName/);
@@ -878,8 +957,23 @@ async function runAsyncAssertions() {
     assert.match(dashboardSource, /Choose a station to view session, billing, messaging, and power controls\./);
     assert.match(dashboardSource, /Register First PC/);
     assert.match(dashboardSource, /variant="dock"/);
+    assert.doesNotMatch(dashboardSource, /startOpenTimeSession/);
+    assert.doesNotMatch(dashboardSource, /meteredRate/);
+    // Historical open_time sessions (already active/settling before this
+    // upgrade) must still display and settle correctly -- only the ability
+    // to start a *new* one was removed.
+    assert.match(dashboardSource, /pc\.session_mode === "open_time"/);
+    assert.match(dashboardSource, /calculateOpenTimeEstimate/);
 
     const membersSource = readFileSync("src/components/MembersManager.tsx", "utf8");
+    // Stage 3: both balances must be visible, and VIP purchases must never
+    // be refundable through the UI (server independently enforces this too).
+    assert.match(membersSource, />Standard Time</);
+    assert.match(membersSource, />VIP Time</);
+    assert.match(membersSource, /vip_balance_seconds/);
+    assert.match(membersSource, /balance_type === "vip"/);
+    assert.match(membersSource, /VIP promo purchases are non-refundable/);
+    assert.match(membersSource, /transaction\.balance_type !== "vip"/);
     assert.match(membersSource, /Search by display name, username, or phone/);
     assert.match(membersSource, /useToast/);
     assert.match(membersSource, /pushToast/);

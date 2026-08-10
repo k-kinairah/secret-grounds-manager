@@ -49,46 +49,98 @@ def main() -> None:
         )
 
         rates = get_rates()
+        # Stage 2 activates the owner-confirmed default packages (lower
+        # sort_order) alongside the pre-existing legacy defaults.
         assert [rate.name for rate in rates if rate.rate_type == "package"] == [
+            "Standard Guest - P5 (20 Minutes)",
+            "Standard Guest - P10 (40 Minutes)",
+            "Standard Guest - P15 (1 Hour)",
+            "Standard Midnight Promo",
+            "VIP Guest - P30 (1 Hour)",
             "30 Minutes",
             "1 Hour",
             "2 Hours",
             "Overnight",
         ]
-        metered = get_metered_rate()
-        assert metered.name == "Regular Rate"
-        assert metered.price == Decimal("1.00")
-        assert metered.duration_seconds == 300
 
-        calculated = calculate_time(CalculateTimeRequest(amount=Decimal("20.00")))
-        assert calculated.duration_seconds == 6000
-        assert calculated.rate_name == "Regular Rate"
+        # Metered/Open Time customer operation is permanently retired.
+        try:
+            get_metered_rate()
+        except HTTPException as error:
+            assert error.status_code == 410
+        else:
+            raise AssertionError("GET /rates/metered must be retired")
 
-        fractional_rate = update_rate(
-            metered.rate_id,
-            RateProfileUpdate(
-                name="Regular Rate",
-                duration_seconds=300,
-                price=Decimal("2.00"),
-                rate_type="metered",
-                sort_order=0,
-            ),
+        try:
+            calculate_time(CalculateTimeRequest(amount=Decimal("20.00")))
+        except HTTPException as error:
+            assert error.status_code == 410
+        else:
+            raise AssertionError("POST /rates/calculate-time must be retired")
+
+        # The pre-existing legacy metered rate row must still exist (untouched
+        # historical data) even though it's no longer reachable for active use.
+        legacy_metered = next(
+            rate for rate in get_rates(include_inactive=True) if rate.rate_type == "metered"
         )
-        assert fractional_rate.rate_type == "metered"
-        fractional = calculate_time(CalculateTimeRequest(amount=Decimal("0.01")))
-        assert fractional.duration_seconds == 1
+        assert legacy_metered.name == "Regular Rate"
+        assert legacy_metered.price == Decimal("1.00")
+        assert legacy_metered.duration_seconds == 300
+        assert legacy_metered.is_active is True
 
-        update_rate(
-            metered.rate_id,
-            RateProfileUpdate(
-                name="Regular Rate",
-                duration_seconds=300,
-                price=Decimal("1.00"),
-                rate_type="metered",
-                sort_order=0,
-            ),
+        # Creating a brand new metered rate is rejected, active or not.
+        for is_active in (True, False):
+            try:
+                create_rate(
+                    RateProfileCreate(
+                        name="New Metered",
+                        duration_seconds=60,
+                        price=Decimal("1.00"),
+                        rate_type="metered",
+                        sort_order=1,
+                        is_active=is_active,
+                    )
+                )
+            except HTTPException as error:
+                assert error.status_code == 410
+            else:
+                raise AssertionError("Creating a new metered rate must be rejected")
+
+        # Editing the existing metered rate (even just its name/price) is
+        # rejected -- it is permanently frozen once retired.
+        try:
+            update_rate(
+                legacy_metered.rate_id,
+                RateProfileUpdate(
+                    name="Regular Rate",
+                    duration_seconds=300,
+                    price=Decimal("2.00"),
+                    rate_type="metered",
+                    sort_order=0,
+                ),
+            )
+        except HTTPException as error:
+            assert error.status_code == 410
+        else:
+            raise AssertionError("Editing an existing metered rate must be rejected")
+
+        # Deactivating the legacy metered rate is still allowed...
+        deactivated = update_rate_status(legacy_metered.rate_id, RateStatusUpdate(is_active=False))
+        assert deactivated.is_active is False
+
+        # ...but reactivating it is rejected.
+        try:
+            update_rate_status(legacy_metered.rate_id, RateStatusUpdate(is_active=True))
+        except HTTPException as error:
+            assert error.status_code == 410
+        else:
+            raise AssertionError("Reactivating an existing metered rate must be rejected")
+        still_inactive = next(
+            rate for rate in get_rates(include_inactive=True) if rate.rate_id == legacy_metered.rate_id
         )
+        assert still_inactive.is_active is False
 
+        # Package rate creation/edit remains fully unaffected.
         one_hour = next(rate for rate in rates if rate.name == "1 Hour")
         updated_one_hour = update_rate(
             one_hour.rate_id,
@@ -121,12 +173,15 @@ def main() -> None:
         assert session.base_amount == Decimal("100.10")
         assert session.total_amount == Decimal("100.10")
 
-        added_metered = asyncio.run(
-            session_service.add_time(session.session_id, amount=Decimal("5.00"))
-        )
-        assert added_metered.session.additional_amount == Decimal("5.00")
-        assert added_metered.session.total_amount == Decimal("105.10")
-        assert added_metered.session.added_seconds == 1500
+        # Enter Amount (amount-based session start/add-time) is retired too,
+        # since it relied on the now-retired active metered rate as a
+        # money-to-time conversion table.
+        try:
+            asyncio.run(session_service.add_time(session.session_id, amount=Decimal("5.00")))
+        except HTTPException as error:
+            assert error.status_code == 410
+        else:
+            raise AssertionError("Amount-based add-time must be rejected")
 
         changed_rate = update_rate(
             one_hour.rate_id,
@@ -156,8 +211,8 @@ def main() -> None:
             ),
         )
         added = asyncio.run(session_service.add_time(session.session_id, rate_id=thirty.rate_id))
-        assert added.session.additional_amount == Decimal("55.05")
-        assert added.session.total_amount == Decimal("155.15")
+        assert added.session.additional_amount == Decimal("50.05")
+        assert added.session.total_amount == Decimal("150.15")
 
         update_rate_status(thirty.rate_id, RateStatusUpdate(is_active=False))
         try:
@@ -199,32 +254,17 @@ def main() -> None:
         )
         assert created.price == Decimal("12.34")
 
-        second_metered = create_rate(
-            RateProfileCreate(
-                name="Second Metered",
-                duration_seconds=60,
-                price=Decimal("1.00"),
-                rate_type="metered",
-                sort_order=1,
-            )
-        )
-        assert second_metered.is_active is True
-        assert get_metered_rate().rate_id == second_metered.rate_id
-        original_metered = next(
-            rate
-            for rate in get_rates(include_inactive=True)
-            if rate.rate_id == metered.rate_id
-        )
-        assert original_metered.is_active is False
-
+        # Starting a brand new session via Enter Amount is rejected too.
         pc_registry.clear()
         register_pc(PCRegistration(pc_name="PC-AMOUNT", ip_address="127.0.0.1"))
         session_service.require_available_client = lambda _: pc_registry["PC-AMOUNT"]
-        amount_started = asyncio.run(
-            session_service.start_session("PC-AMOUNT", amount=Decimal("20.00"))
-        )
-        assert amount_started.session.base_amount == Decimal("20.00")
-        assert amount_started.session.original_seconds == 1200
+        try:
+            asyncio.run(session_service.start_session("PC-AMOUNT", amount=Decimal("20.00")))
+        except HTTPException as error:
+            assert error.status_code == 410
+        else:
+            raise AssertionError("Amount-based session start must be rejected")
+        assert session_repository.get_active_session_for_pc("PC-AMOUNT") is None
 
         print("Rate profile smoke test passed.")
 

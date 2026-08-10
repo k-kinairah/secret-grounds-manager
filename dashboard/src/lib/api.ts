@@ -12,6 +12,7 @@ import type {
   MembershipProduct,
   MemberSessionSelection,
   MemberTimeTransaction,
+  MemberVipPlayablePreview,
   OperatorAccess,
   OperatorActivityRecord,
   OperatorCreateInput,
@@ -19,7 +20,6 @@ import type {
   OperatorUpdateInput,
   PcLayoutSlot,
   PcSummary,
-  CalculatedTimeResponse,
   PaymentInput,
   PreparedSessionSelection,
   PrepaidSessionSelection,
@@ -703,6 +703,21 @@ export async function fetchMemberLedger(memberId: string): Promise<MemberTimeTra
   });
 }
 
+export async function fetchMemberVipPreview(
+  memberId: string,
+  pcName: string,
+  durationSeconds?: number
+): Promise<MemberVipPlayablePreview> {
+  const query = new URLSearchParams({ pc_name: pcName });
+  if (durationSeconds !== undefined) {
+    query.set("duration_seconds", String(durationSeconds));
+  }
+  return requestJson<MemberVipPlayablePreview>(
+    `${getApiBaseUrl()}/members/${memberId}/vip-preview?${query.toString()}`,
+    { cache: "no-store" }
+  );
+}
+
 export async function fetchMembershipProducts(): Promise<MembershipProduct[]> {
   return requestJson<MembershipProduct[]>(`${getApiBaseUrl()}/membership-products`, {
     cache: "no-store"
@@ -779,20 +794,6 @@ export async function fetchRates(includeInactive = false): Promise<RateProfile[]
   });
 }
 
-export async function fetchMeteredRate(): Promise<RateProfile> {
-  return requestJson<RateProfile>(`${getApiBaseUrl()}/rates/metered`, {
-    cache: "no-store"
-  });
-}
-
-export async function calculateTime(amount: string): Promise<CalculatedTimeResponse> {
-  return requestJson<CalculatedTimeResponse>(`${getApiBaseUrl()}/rates/calculate-time`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ amount })
-  });
-}
-
 export async function startSession(
   pcName: string,
   payload: { amount?: string; durationSeconds?: number; rateId?: string }
@@ -831,7 +832,7 @@ export async function startPrepaidSession(
 
 export async function prepareStartupSession(
   pcName: string,
-  payload: PreparedSessionSelection | MemberSessionSelection | { sessionMode: "open_time"; operatorId?: string }
+  payload: PreparedSessionSelection | MemberSessionSelection
 ): Promise<{ prepared_session: unknown; message: string }> {
   if ("sessionMode" in payload && payload.sessionMode === "member_balance") {
     return requestJson<{ prepared_session: unknown; message: string }>(
@@ -845,21 +846,6 @@ export async function prepareStartupSession(
           member_username: payload.memberUsername,
           duration_seconds: payload.durationSeconds,
           member_pin: payload.memberPin
-        })
-      }
-    );
-  }
-
-  if ("sessionMode" in payload && payload.sessionMode === "open_time") {
-    return requestJson<{ prepared_session: unknown; message: string }>(
-      `${getApiBaseUrl()}/sessions/prepare-startup`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pc_name: pcName,
-          session_mode: "open_time",
-          operator_id: payload.operatorId
         })
       }
     );
@@ -895,14 +881,6 @@ export async function cancelPreparedSession(preparedSessionId: string): Promise<
     `${getApiBaseUrl()}/prepared-sessions/${preparedSessionId}/cancel`,
     { method: "POST" }
   );
-}
-
-export async function startOpenTimeSession(pcName: string): Promise<SessionCommandResponse> {
-  return requestJson<SessionCommandResponse>(`${getApiBaseUrl()}/sessions/start-open-time`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pc_name: pcName })
-  });
 }
 
 export async function startMemberSession(

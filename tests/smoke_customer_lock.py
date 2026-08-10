@@ -28,7 +28,7 @@ def main() -> None:
             purchase_member_time,
             register_pc,
             session_service,
-            start_open_time_session,
+            start_session,
         )
         from server.schemas import (
             ClientMemberLoginRequest,
@@ -37,10 +37,14 @@ def main() -> None:
             CommandAcknowledgement,
             MemberCreateRequest,
             MemberPurchaseRequest,
-            OpenTimeStartRequest,
             PCRegistration,
+            SessionRecord,
+            StartSessionRequest,
             UserCreateRequest,
         )
+        from decimal import Decimal
+
+        from server.time_utils import current_utc_time
         from server.user_repository import UserRepository
 
         initialize_database()
@@ -111,19 +115,39 @@ def main() -> None:
         assert login.session.customer_locked is False
         original_scheduled_end_at = login.session.scheduled_end_at
 
-        # --- eligibility: non-member (open_time) session must be rejected ---
+        # --- eligibility: a non-member (open_time) session must not be
+        # lockable. Open Time can no longer be started via the API, so this
+        # constructs a historical open_time session directly -- the same
+        # shape a session already active before the upgrade would have --
+        # to prove the invariant still holds for it. ---
         register_pc(PCRegistration(pc_name="PC-OPEN", ip_address="127.0.0.2"))
-        open_time = asyncio.run(
-            start_open_time_session(OpenTimeStartRequest(pc_name="PC-OPEN"), cashier_user)
+        now = current_utc_time()
+        historical_open_time_session = SessionRecord(
+            session_id="historical-open-time-lock-test",
+            pc_name="PC-OPEN",
+            status="active",
+            started_at=now,
+            scheduled_end_at=now,
+            original_seconds=0,
+            added_seconds=0,
+            total_seconds=0,
+            amount_paid=None,
+            ended_reason=None,
+            created_at=now,
+            base_amount=Decimal("0.00"),
+            additional_amount=Decimal("0.00"),
+            total_amount=Decimal("0.00"),
+            session_mode="open_time",
+            settlement_pending=True,
         )
-        assert open_time.session.session_mode == "open_time"
+        session_service.repository.create_session(historical_open_time_session)
         try:
-            session_service.engage_customer_lock("PC-OPEN", open_time.session.session_id)
+            session_service.engage_customer_lock("PC-OPEN", historical_open_time_session.session_id)
         except HTTPException as error:
             assert error.status_code == 403
         else:
             raise AssertionError("Open Time sessions must not be lockable")
-        assert session_service.repository.get_session(open_time.session.session_id).customer_locked is False
+        assert session_service.repository.get_session(historical_open_time_session.session_id).customer_locked is False
 
         # --- lock the member session (member-initiated, no PIN needed) ---
         locked = asyncio.run(
@@ -146,7 +170,9 @@ def main() -> None:
 
         # --- PC must stay unavailable to a brand-new session while locked ---
         try:
-            asyncio.run(start_open_time_session(OpenTimeStartRequest(pc_name="PC-LOCK"), cashier_user))
+            asyncio.run(
+                start_session(StartSessionRequest(pc_name="PC-LOCK", duration_seconds=60))
+            )
         except HTTPException as error:
             assert error.status_code == 409
             assert "already has an active session" in error.detail

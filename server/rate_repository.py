@@ -4,9 +4,18 @@ import json
 from typing import Any
 from uuid import uuid4
 
+from fastapi import HTTPException
+
 from server.database import get_connection
 from server.schemas import RateProfile, RateProfileCreate, RateProfileUpdate
 from server.time_utils import current_utc_time
+
+
+METERED_RATE_RETIRED_DETAIL = (
+    "Metered/Open Time rates are permanently retired and can no longer be "
+    "created, edited, or reactivated. Existing historical metered rate rows "
+    "remain readable for settling already-existing sessions."
+)
 
 
 def decimal_to_storage(value: Decimal) -> str:
@@ -14,6 +23,7 @@ def decimal_to_storage(value: Decimal) -> str:
 
 
 def row_to_rate(row: Any) -> RateProfile:
+    keys = row.keys()
     return RateProfile(
         rate_id=row["rate_id"],
         name=row["name"],
@@ -22,6 +32,11 @@ def row_to_rate(row: Any) -> RateProfile:
         rate_type=row["rate_type"],
         is_active=bool(row["is_active"]),
         sort_order=row["sort_order"],
+        station_scope=row["station_scope"] if "station_scope" in keys else "standard",
+        guest_only=bool(row["guest_only"]) if "guest_only" in keys else False,
+        member_eligible=bool(row["member_eligible"]) if "member_eligible" in keys else True,
+        eligible_start_local_time=row["eligible_start_local_time"] if "eligible_start_local_time" in keys else None,
+        eligible_end_local_time=row["eligible_end_local_time"] if "eligible_end_local_time" in keys else None,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
@@ -133,6 +148,8 @@ class RateRepository:
         request: RateProfileCreate,
         performed_by_user_id: str | None = None,
     ) -> RateProfile:
+        if request.rate_type == "metered":
+            raise HTTPException(status_code=410, detail=METERED_RATE_RETIRED_DETAIL)
         now = current_utc_time()
         rate = RateProfile(
             rate_id=str(uuid4()),
@@ -142,6 +159,7 @@ class RateRepository:
             rate_type=request.rate_type,
             is_active=request.is_active,
             sort_order=request.sort_order,
+            station_scope=request.station_scope,
             created_at=now,
             updated_at=now,
         )
@@ -163,10 +181,11 @@ class RateRepository:
                     rate_type,
                     is_active,
                     sort_order,
+                    station_scope,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     rate.rate_id,
@@ -176,6 +195,7 @@ class RateRepository:
                     rate.rate_type,
                     1 if rate.is_active else 0,
                     rate.sort_order,
+                    rate.station_scope,
                     rate.created_at.isoformat(),
                     rate.updated_at.isoformat(),
                 ),
@@ -196,6 +216,8 @@ class RateRepository:
         request: RateProfileUpdate,
         performed_by_user_id: str | None = None,
     ) -> RateProfile | None:
+        if request.rate_type == "metered":
+            raise HTTPException(status_code=410, detail=METERED_RATE_RETIRED_DETAIL)
         existing = self.get_rate(rate_id)
         if existing is None:
             return None
@@ -207,6 +229,7 @@ class RateRepository:
                 "price": request.price,
                 "rate_type": request.rate_type,
                 "sort_order": request.sort_order,
+                "station_scope": request.station_scope,
                 "updated_at": current_utc_time(),
             }
         )
@@ -221,7 +244,7 @@ class RateRepository:
             connection.execute(
                 """
                 UPDATE rate_profiles
-                SET name = ?, duration_seconds = ?, price = ?, rate_type = ?, sort_order = ?, updated_at = ?
+                SET name = ?, duration_seconds = ?, price = ?, rate_type = ?, sort_order = ?, station_scope = ?, updated_at = ?
                 WHERE rate_id = ?
                 """,
                 (
@@ -230,6 +253,7 @@ class RateRepository:
                     decimal_to_storage(updated.price),
                     updated.rate_type,
                     updated.sort_order,
+                    updated.station_scope,
                     updated.updated_at.isoformat(),
                     updated.rate_id,
                 ),
@@ -253,6 +277,8 @@ class RateRepository:
         existing = self.get_rate(rate_id)
         if existing is None:
             return None
+        if existing.rate_type == "metered" and is_active:
+            raise HTTPException(status_code=410, detail=METERED_RATE_RETIRED_DETAIL)
 
         updated = existing.model_copy(
             update={

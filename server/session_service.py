@@ -5,10 +5,12 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from server.balance_conversion import split_vip_session
 from server.connection_manager import ClientConnectionManager
 from server.billing_service import BillingService
 from server.billing_service import calculate_open_time_estimate
-from server.rate_calculator import calculate_metered_time
+from server.pc_layout_repository import PCLayoutRepository
+from server.rate_eligibility import validate_rate_for_station_and_context
 from server.rate_repository import RateRepository
 from server.schemas import (
     ClientCommand,
@@ -26,7 +28,10 @@ from server.schemas import (
 )
 from server.prepared_session_repository import PreparedSessionRepository, payment_from_json, payment_to_json
 from server.session_repository import SessionRepository
-from server.admin_settings_service import get_runtime_expiration_grace_seconds
+from server.admin_settings_service import (
+    get_runtime_expiration_grace_seconds,
+    get_runtime_shop_timezone_display,
+)
 from server.time_utils import current_utc_time
 
 
@@ -43,6 +48,7 @@ class SessionService:
         billing_service: BillingService | None = None,
         member_repository: object | None = None,
         prepared_session_repository: PreparedSessionRepository | None = None,
+        pc_layout_repository: PCLayoutRepository | None = None,
     ) -> None:
         self.repository = repository
         self.rate_repository = rate_repository
@@ -52,6 +58,14 @@ class SessionService:
         self.billing_service = billing_service
         self.member_repository = member_repository
         self.prepared_session_repository = prepared_session_repository
+        self.pc_layout_repository = pc_layout_repository or PCLayoutRepository()
+
+    def is_vip_pc(self, pc_name: str) -> bool:
+        """Station classification source of truth: pc_layouts.is_vip.
+        A PC with no layout row yet (e.g. freshly registered, not configured
+        in Setup/Layout) safely defaults to Standard."""
+        layout = self.pc_layout_repository.get_layout(pc_name)
+        return bool(layout.is_vip) if layout is not None else False
 
     def require_available_client(self, pc_name: str) -> PCRecord:
         pc = self.pc_registry.get(pc_name)
@@ -118,6 +132,7 @@ class SessionService:
         custom_seconds: int | None,
         amount: Decimal | None,
         custom_field_name: str,
+        is_vip_station: bool,
     ) -> tuple[int, str | None, str | None, Decimal]:
         selected_inputs = [
             rate_id is not None,
@@ -136,19 +151,29 @@ class SessionService:
                 raise HTTPException(status_code=409, detail="Rate is inactive or missing")
             if rate.rate_type != "package":
                 raise HTTPException(status_code=400, detail="rate_id must reference a package")
+            # Authoritative station/eligibility gate -- enforced here so
+            # every caller (start, add-time, prepared/offline) is covered by
+            # a single choke point regardless of what the dashboard sent.
+            validate_rate_for_station_and_context(
+                rate,
+                is_vip_station=is_vip_station,
+                is_member_context=False,
+                now_utc=current_utc_time(),
+                timezone_name=get_runtime_shop_timezone_display(),
+            )
             return rate.duration_seconds, rate.rate_id, rate.name, rate.price
 
         if amount is not None:
-            metered_rate = self.rate_repository.get_active_metered_rate()
-            if metered_rate is None:
-                raise HTTPException(status_code=409, detail="Active metered rate is missing")
-
-            calculated = calculate_metered_time(amount, metered_rate)
-            return (
-                calculated.duration_seconds,
-                metered_rate.rate_id,
-                f"{calculated.rate_name} ({calculated.rate_snapshot})",
-                calculated.amount,
+            # Enter Amount relied on the active metered rate purely as a
+            # money-to-time conversion table. Metered/Open Time pricing is
+            # permanently retired for active use, so this path is retired
+            # with it -- new sessions must use a package or member balance.
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Enter Amount sessions are no longer offered. "
+                    "Start a package or member-balance session instead."
+                ),
             )
 
         if custom_seconds is None or custom_seconds <= 0:
@@ -169,6 +194,17 @@ class SessionService:
         request: PreparedSessionStartRequest,
         actor_user_id: str | None = None,
     ) -> PreparedSessionResponse:
+        if request.session_mode == "open_time":
+            # Permanently retired for new customer use, including prepared/
+            # offline (wake-then-start) sessions. Rejected before any
+            # prepared session state is created.
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Open Time sessions are no longer offered. "
+                    "Start a package or member-balance session instead."
+                ),
+            )
         repository = self.require_prepared_repository()
         pc_name = request.pc_name.strip()
         if not pc_name:
@@ -196,6 +232,7 @@ class SessionService:
                     request.duration_seconds,
                     request.amount,
                     "duration_seconds",
+                    is_vip_station=self.is_vip_pc(pc_name),
                 )
             )
             if amount > Decimal("0.00") and request.payment is None:
@@ -214,13 +251,18 @@ class SessionService:
             self.member_repository.verify_member_pin(member.member_id, request.member_pin)  # type: ignore[attr-defined]
             member_name_snapshot = member.full_name
             member_open_play = request.duration_seconds is None
-            duration_seconds = request.duration_seconds or member.time_balance_seconds
-            if duration_seconds <= 0:
-                raise HTTPException(status_code=409, detail="Member has no available time balance")
-            if member.time_balance_seconds < duration_seconds:
-                raise HTTPException(status_code=409, detail="Insufficient member time balance")
-        elif request.session_mode == "open_time":
-            duration_seconds = None
+            if self.is_vip_pc(pc_name):
+                duration_seconds, _preview_vip, _preview_standard = split_vip_session(
+                    member.vip_balance_seconds, member.time_balance_seconds, request.duration_seconds
+                )
+                if duration_seconds <= 0:
+                    raise HTTPException(status_code=409, detail="Member has no available time balance")
+            else:
+                duration_seconds = request.duration_seconds or member.time_balance_seconds
+                if duration_seconds <= 0:
+                    raise HTTPException(status_code=409, detail="Member has no available time balance")
+                if member.time_balance_seconds < duration_seconds:
+                    raise HTTPException(status_code=409, detail="Insufficient member time balance")
         else:
             raise HTTPException(status_code=400, detail="Unsupported session mode")
 
@@ -345,12 +387,33 @@ class SessionService:
             if self.member_repository is None or session.member_id is None:
                 raise HTTPException(status_code=500, detail="Member reservation service is unavailable")
             member = self.member_repository.require_usable_member(session.member_id)  # type: ignore[attr-defined]
-            self.member_repository.create_reservation(  # type: ignore[attr-defined]
-                member,
-                session.session_id,
-                session.total_seconds,
-                starting.prepared_by_user_id,
-            )
+            if session.station_type == "vip":
+                # Re-derive the split from the member's balance *now* rather
+                # than trusting a value frozen at prepare time, which may be
+                # stale after the wake/reconnect wait. The session's
+                # total_seconds (frozen at prepare time) is used as a cap:
+                # if the member's balance can no longer cover it, this fails
+                # the same way an insufficient Standard reservation already
+                # does below, rather than silently under-reserving.
+                effective, vip_part, standard_part = split_vip_session(
+                    member.vip_balance_seconds, member.time_balance_seconds, session.total_seconds
+                )
+                if effective < session.total_seconds:
+                    raise HTTPException(status_code=409, detail="Insufficient member time balance")
+                self.member_repository.create_reservation(  # type: ignore[attr-defined]
+                    member,
+                    session.session_id,
+                    standard_part,
+                    starting.prepared_by_user_id,
+                    reserved_vip_seconds=vip_part,
+                )
+            else:
+                self.member_repository.create_reservation(  # type: ignore[attr-defined]
+                    member,
+                    session.session_id,
+                    session.total_seconds,
+                    starting.prepared_by_user_id,
+                )
         elif session.session_mode == "prepaid" and self.billing_service is not None:
             payment = payment_from_json(starting.payment_json)
             if payment is not None and session.total_amount > Decimal("0.00"):
@@ -496,6 +559,7 @@ class SessionService:
             additional_amount=Decimal("0.00"),
             total_amount=prepared.amount or Decimal("0.00"),
             session_mode=prepared.session_mode,
+            station_type="vip" if self.is_vip_pc(prepared.pc_name) else "standard",
             created_by_user_id=prepared.prepared_operator_id or prepared.prepared_by_user_id,
             member_id=prepared.member_id,
             member_name_snapshot=prepared.member_name_snapshot,
@@ -713,13 +777,23 @@ class SessionService:
             if self.member_repository is None or session.member_id is None:
                 raise HTTPException(status_code=500, detail="Member reservation service is unavailable")
             actual_elapsed_seconds = max(0, int((ended_at - session.started_at).total_seconds()))
-            consumed_seconds, transaction = self.member_repository.finalize_reservation_usage(  # type: ignore[attr-defined]
+            is_vip_station = session.station_type == "vip"
+            standard_consumed, vip_consumed = self.member_repository.finalize_reservation_usage(  # type: ignore[attr-defined]
                 session.member_id,
                 session.session_id,
                 actual_elapsed_seconds,
                 actor_user_id,
+                is_vip_station=is_vip_station,
             )
             member = self.member_repository.get_member(session.member_id)  # type: ignore[attr-defined]
+            # Real seconds actually played: for a VIP-PC session this is
+            # VIP-1:1 seconds plus the real-time equivalent of whatever
+            # Standard-balance seconds were drawn at 2:1 -- always an exact
+            # recombination since standard_consumed is only ever produced
+            # (by finalize_vip_usage) as an even multiple of 2.
+            used_real_seconds = (
+                vip_consumed + standard_consumed // 2 if is_vip_station else standard_consumed
+            )
             update_values.update(
                 {
                     "ended_reason": (
@@ -728,15 +802,21 @@ class SessionService:
                         else ended_reason
                     ),
                     "actual_elapsed_seconds": actual_elapsed_seconds,
-                    "billed_seconds": consumed_seconds,
-                    "total_seconds": consumed_seconds,
+                    "billed_seconds": used_real_seconds,
+                    "total_seconds": used_real_seconds,
                     "member_balance_after_seconds": (
-                        transaction.balance_after_seconds
-                        if transaction is not None
-                        else member.time_balance_seconds if member is not None else session.member_balance_after_seconds
+                        member.time_balance_seconds if member is not None else session.member_balance_after_seconds
                     ),
                 }
             )
+            if is_vip_station:
+                update_values.update(
+                    {
+                        "vip_seconds_consumed": vip_consumed,
+                        "standard_seconds_consumed_at_vip_rate": standard_consumed,
+                        "conversion_applied": standard_consumed > 0,
+                    }
+                )
 
         updated_session = session.model_copy(update=update_values)
         self.repository.update_session(updated_session)
@@ -754,11 +834,18 @@ class SessionService:
         amount: Decimal | None = None,
         actor_user_id: str | None = None,
     ) -> SessionCommandResponse:
+        cleaned_pc_name = pc_name.strip()
+        is_vip_station = self.is_vip_pc(cleaned_pc_name)
         duration_seconds, resolved_rate_id, rate_name_snapshot, base_amount = (
-            self.resolve_session_package(rate_id, duration_seconds, amount, "duration_seconds")
+            self.resolve_session_package(
+                rate_id,
+                duration_seconds,
+                amount,
+                "duration_seconds",
+                is_vip_station=is_vip_station,
+            )
         )
 
-        cleaned_pc_name = pc_name.strip()
         self.require_available_client(cleaned_pc_name)
 
         if self.repository.get_active_session_for_pc(cleaned_pc_name) is not None:
@@ -787,6 +874,7 @@ class SessionService:
             additional_amount=Decimal("0.00"),
             total_amount=base_amount,
             session_mode="prepaid",
+            station_type="vip" if is_vip_station else "standard",
             created_by_user_id=actor_user_id,
         )
         self.repository.create_session(session)
@@ -852,10 +940,6 @@ class SessionService:
         amount: Decimal | None = None,
         actor_user_id: str | None = None,
     ) -> SessionCommandResponse:
-        seconds, resolved_rate_id, rate_name_snapshot, amount = (
-            self.resolve_session_package(rate_id, seconds, amount, "seconds")
-        )
-
         session = self.repository.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -866,6 +950,19 @@ class SessionService:
             raise HTTPException(status_code=400, detail="Open-time sessions do not support add time")
         if session.session_mode == "member_balance":
             raise HTTPException(status_code=400, detail="Use member balance to add time to this session")
+
+        # The PC's station never changes mid-session, so resolving against
+        # its current layout here is what naturally prevents adding a VIP
+        # package to a Standard session (or vice versa).
+        seconds, resolved_rate_id, rate_name_snapshot, amount = (
+            self.resolve_session_package(
+                rate_id,
+                seconds,
+                amount,
+                "seconds",
+                is_vip_station=self.is_vip_pc(session.pc_name),
+            )
+        )
 
         self.require_available_client(session.pc_name)
         now = current_utc_time()
@@ -952,12 +1049,19 @@ class SessionService:
         if self.billing_service is None:
             raise HTTPException(status_code=500, detail="Billing service is unavailable")
 
+        cleaned_pc_name = pc_name.strip()
+        is_vip_station = self.is_vip_pc(cleaned_pc_name)
         duration_seconds, resolved_rate_id, rate_name_snapshot, base_amount = (
-            self.resolve_session_package(rate_id, duration_seconds, amount, "duration_seconds")
+            self.resolve_session_package(
+                rate_id,
+                duration_seconds,
+                amount,
+                "duration_seconds",
+                is_vip_station=is_vip_station,
+            )
         )
         self.billing_service.validate_payment_for_amount(payment, base_amount)
 
-        cleaned_pc_name = pc_name.strip()
         self.require_available_client(cleaned_pc_name)
         if self.repository.get_active_session_for_pc(cleaned_pc_name) is not None:
             raise HTTPException(
@@ -985,6 +1089,7 @@ class SessionService:
             additional_amount=Decimal("0.00"),
             total_amount=base_amount,
             session_mode="prepaid",
+            station_type="vip" if is_vip_station else "standard",
             created_by_user_id=actor_user_id,
         )
         self.repository.create_session(session)
@@ -1065,11 +1170,6 @@ class SessionService:
         if self.billing_service is None:
             raise HTTPException(status_code=500, detail="Billing service is unavailable")
 
-        seconds, resolved_rate_id, rate_name_snapshot, amount_due = (
-            self.resolve_session_package(rate_id, seconds, amount, "seconds")
-        )
-        self.billing_service.validate_payment_for_amount(payment, amount_due)
-
         session = self.repository.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -1080,6 +1180,17 @@ class SessionService:
             raise HTTPException(status_code=400, detail="Open-time sessions do not support add time")
         if session.session_mode == "member_balance":
             raise HTTPException(status_code=400, detail="Use member balance to add time to this session")
+
+        seconds, resolved_rate_id, rate_name_snapshot, amount_due = (
+            self.resolve_session_package(
+                rate_id,
+                seconds,
+                amount,
+                "seconds",
+                is_vip_station=self.is_vip_pc(session.pc_name),
+            )
+        )
+        self.billing_service.validate_payment_for_amount(payment, amount_due)
 
         now = current_utc_time()
         self.require_available_client(session.pc_name)
@@ -1165,86 +1276,19 @@ class SessionService:
         pc_name: str,
         actor_user_id: str | None = None,
     ) -> SessionCommandResponse:
-        cleaned_pc_name = pc_name.strip()
-        self.require_available_client(cleaned_pc_name)
-        if self.repository.get_active_session_for_pc(cleaned_pc_name) is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"{cleaned_pc_name} already has an active session",
-            )
-        metered_rate = self.rate_repository.get_active_metered_rate()
-        if metered_rate is None:
-            raise HTTPException(status_code=409, detail="Active metered rate is missing")
+        """Permanently retired for new customer use.
 
-        now = current_utc_time()
-        session = SessionRecord(
-            session_id=str(uuid4()),
-            pc_name=cleaned_pc_name,
-            status="active",
-            started_at=now,
-            scheduled_end_at=now,
-            ended_at=None,
-            original_seconds=0,
-            added_seconds=0,
-            total_seconds=0,
-            amount_paid=None,
-            ended_reason=None,
-            created_at=now,
-            base_amount=Decimal("0.00"),
-            additional_amount=Decimal("0.00"),
-            total_amount=Decimal("0.00"),
-            session_mode="open_time",
-            settlement_pending=True,
-            rate_id=metered_rate.rate_id,
-            rate_name_snapshot=(
-                f"{metered_rate.name}: {metered_rate.price} per "
-                f"{metered_rate.duration_seconds}s"
+        Historical open_time sessions, finalization (finalize_ended_session's
+        open_time branch, compute_open_time_final_amount), settlement, and
+        billing all remain fully functional for sessions that already exist
+        -- only the ability to start a new one is removed.
+        """
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Open Time sessions are no longer offered. "
+                "Start a package or member-balance session instead."
             ),
-            metered_rate_price_snapshot=metered_rate.price,
-            metered_rate_duration_seconds_snapshot=metered_rate.duration_seconds,
-            created_by_user_id=actor_user_id,
-        )
-        self.repository.create_session(session)
-        self.create_event(
-            session.session_id,
-            "open_time_started",
-            performed_by_user_id=actor_user_id,
-        )
-        command = self.create_command(
-            "start_session",
-            {
-                "session_id": session.session_id,
-                "session_mode": "open_time",
-                "started_at": session.started_at.isoformat(),
-            },
-        )
-        try:
-            acknowledgements = await self.send_required_command(cleaned_pc_name, command)
-        except Exception as error:
-            failed_session = session.model_copy(
-                update={
-                    "status": "failed",
-                    "ended_at": current_utc_time(),
-                    "ended_reason": "command_failed",
-                    "settlement_pending": False,
-                }
-            )
-            self.repository.update_session(failed_session)
-            self.create_event(
-                session.session_id,
-                "command_failed",
-                message=str(error),
-                performed_by_user_id=actor_user_id,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail=f"Open-time start command failed: {error}",
-            ) from error
-
-        return SessionCommandResponse(
-            session=session,
-            command=command,
-            acknowledgements=acknowledgements,
         )
 
     async def start_member_session(
@@ -1282,15 +1326,35 @@ class SessionService:
                 detail="Member already has an active session",
             )
         session_id = str(uuid4())
-        reserved_seconds = duration_seconds or member.time_balance_seconds
-        if reserved_seconds <= 0:
-            raise HTTPException(status_code=409, detail="Member has no available time balance")
-        self.member_repository.create_reservation(  # type: ignore[attr-defined]
-            member,
-            session_id,
-            reserved_seconds,
-            actor_user_id,
-        )
+        is_vip_station = self.is_vip_pc(cleaned_pc_name)
+        if is_vip_station:
+            # VIP balance first, 1:1; Standard balance converts at 2:1 for
+            # any remainder. reserved_seconds here ends up expressed in
+            # Standard-balance seconds (already 2x real seconds) -- the
+            # same unit member_time_reservations.reserved_seconds has
+            # always used, so no reservation schema/semantics change.
+            reserved_seconds, reserved_vip_seconds, reserved_standard_seconds = split_vip_session(
+                member.vip_balance_seconds, member.time_balance_seconds, duration_seconds
+            )
+            if reserved_seconds <= 0:
+                raise HTTPException(status_code=409, detail="Member has no available time balance")
+            self.member_repository.create_reservation(  # type: ignore[attr-defined]
+                member,
+                session_id,
+                reserved_standard_seconds,
+                actor_user_id,
+                reserved_vip_seconds=reserved_vip_seconds,
+            )
+        else:
+            reserved_seconds = duration_seconds or member.time_balance_seconds
+            if reserved_seconds <= 0:
+                raise HTTPException(status_code=409, detail="Member has no available time balance")
+            self.member_repository.create_reservation(  # type: ignore[attr-defined]
+                member,
+                session_id,
+                reserved_seconds,
+                actor_user_id,
+            )
         now = current_utc_time()
         session = SessionRecord(
             session_id=session_id,
@@ -1309,6 +1373,7 @@ class SessionService:
             additional_amount=Decimal("0.00"),
             total_amount=Decimal("0.00"),
             session_mode="member_balance",
+            station_type="vip" if is_vip_station else "standard",
             created_by_user_id=actor_user_id,
             member_id=member.member_id,
             member_code_snapshot=member.member_code,
@@ -1499,8 +1564,32 @@ class SessionService:
 
         self.require_available_client(session.pc_name)
         member = self.member_repository.require_usable_member(member_id)  # type: ignore[attr-defined]
-        if member.time_balance_seconds < session.total_seconds + seconds:
-            raise HTTPException(status_code=409, detail="Insufficient member time balance")
+        is_vip_station = session.station_type == "vip"
+        additional_vip_seconds = 0
+        additional_standard_seconds = seconds
+        if is_vip_station:
+            # `seconds` is additional REAL seconds requested (same meaning
+            # as on a Standard PC). Draw from whatever VIP balance this
+            # reservation hasn't already claimed first, then Standard at
+            # 2:1 for any remainder -- all-or-nothing, same as the Standard
+            # check below: if the full request can't be covered, reject
+            # rather than silently granting a partial extension.
+            reservation_totals = self.member_repository.get_active_reservation_totals(  # type: ignore[attr-defined]
+                member_id, session.session_id
+            )
+            if reservation_totals is None:
+                raise HTTPException(status_code=404, detail="Active member reservation not found")
+            reserved_standard, reserved_vip = reservation_totals
+            remaining_vip = member.vip_balance_seconds - reserved_vip
+            remaining_standard = member.time_balance_seconds - reserved_standard
+            effective_additional, additional_vip_seconds, additional_standard_seconds = split_vip_session(
+                remaining_vip, remaining_standard, seconds
+            )
+            if effective_additional < seconds:
+                raise HTTPException(status_code=409, detail="Insufficient member time balance")
+        else:
+            if member.time_balance_seconds < session.total_seconds + seconds:
+                raise HTTPException(status_code=409, detail="Insufficient member time balance")
         now = current_utc_time()
         scheduled_end_at = (
             now + timedelta(seconds=seconds)
@@ -1530,11 +1619,12 @@ class SessionService:
                 detail=f"Member add-time command failed before reservation changed: {error}",
             ) from error
 
-        reserved_seconds = self.member_repository.extend_reservation(  # type: ignore[attr-defined]
+        next_reserved_standard, next_reserved_vip = self.member_repository.extend_reservation(  # type: ignore[attr-defined]
             member,
             session.session_id,
-            seconds,
+            additional_standard_seconds,
             actor_user_id,
+            additional_vip_seconds=additional_vip_seconds,
         )
         updated_session = session.model_copy(
             update={
@@ -1552,7 +1642,12 @@ class SessionService:
             session.session_id,
             "time_added_during_grace" if is_grace_rescue else "time_added",
             seconds=seconds,
-            message=f"Member balance reservation extended to {reserved_seconds} seconds.",
+            message=(
+                f"Member balance reservation extended to {next_reserved_standard} Standard + "
+                f"{next_reserved_vip} VIP seconds."
+                if is_vip_station
+                else f"Member balance reservation extended to {next_reserved_standard} seconds."
+            ),
             performed_by_user_id=actor_user_id,
         )
         if is_grace_rescue:

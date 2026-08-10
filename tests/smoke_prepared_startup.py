@@ -2,8 +2,11 @@ import asyncio
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
+
+from fastapi import HTTPException
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -16,7 +19,9 @@ from server.rate_repository import RateRepository
 from server.schemas import (
     CommandAcknowledgement,
     PCRecord,
+    PaymentCreateRequest,
     PreparedSessionStartRequest,
+    SessionRecord,
 )
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
@@ -94,13 +99,110 @@ def test_cancel_prepared_session_creates_no_charge(temp_directory: str) -> None:
     prepared = service.prepare_offline_session(
         PreparedSessionStartRequest(
             pc_name="PC-02",
-            session_mode="open_time",
+            session_mode="prepaid",
+            duration_seconds=1800,
         ),
         "cashier-user",
     ).prepared_session
     cancelled = service.cancel_prepared_session(prepared.prepared_session_id, "cashier-user")
     assert cancelled.prepared_session.status == "cancelled"
     assert session_repository.get_active_session_for_pc("PC-02") is None
+
+
+def test_prepared_open_time_is_rejected(temp_directory: str) -> None:
+    service, session_repository, prepared_repository = create_service(
+        Path(temp_directory) / "prepared-open-time.sqlite3"
+    )
+    try:
+        service.prepare_offline_session(
+            PreparedSessionStartRequest(
+                pc_name="PC-02",
+                session_mode="open_time",
+            ),
+            "cashier-user",
+        )
+    except HTTPException as error:
+        assert error.status_code == 410
+    else:
+        raise AssertionError("Prepared Open Time sessions must be rejected")
+    # No prepared session state was created before the rejection.
+    assert prepared_repository.get_active_for_pc("PC-02") is None
+    assert session_repository.get_active_session_for_pc("PC-02") is None
+
+
+def test_start_open_time_session_is_rejected(temp_directory: str) -> None:
+    service, session_repository, _ = create_service(
+        Path(temp_directory) / "start-open-time.sqlite3"
+    )
+    try:
+        asyncio.run(service.start_open_time_session("PC-02"))
+    except HTTPException as error:
+        assert error.status_code == 410
+    else:
+        raise AssertionError("Open Time session starts must be rejected")
+    assert session_repository.get_active_session_for_pc("PC-02") is None
+
+
+def test_historical_open_time_session_can_finalize_and_settle(temp_directory: str) -> None:
+    """An open_time session that already existed before Open Time was
+    retired (e.g. still active across the upgrade) must still be capable of
+    ending, calculating its final amount, and settling normally -- only the
+    ability to start a *new* one was removed."""
+    service, session_repository, _ = create_service(
+        Path(temp_directory) / "historical-open-time.sqlite3"
+    )
+    started_at = datetime.now(timezone.utc) - timedelta(seconds=610)
+    historical_session = SessionRecord(
+        session_id="historical-open-time-session",
+        pc_name="PC-02",
+        status="active",
+        started_at=started_at,
+        scheduled_end_at=started_at,
+        original_seconds=0,
+        added_seconds=0,
+        total_seconds=0,
+        amount_paid=None,
+        ended_reason=None,
+        created_at=started_at,
+        base_amount=Decimal("0.00"),
+        additional_amount=Decimal("0.00"),
+        total_amount=Decimal("0.00"),
+        session_mode="open_time",
+        settlement_pending=True,
+        rate_id="rate-regular-metered",
+        rate_name_snapshot="Regular Rate: 1.00 per 300s",
+        metered_rate_price_snapshot=Decimal("1.00"),
+        metered_rate_duration_seconds_snapshot=300,
+        station_type="standard",
+    )
+    session_repository.create_session(historical_session)
+
+    ended = asyncio.run(service.end_session("historical-open-time-session"))
+    assert ended.session.status == "settlement_pending"
+    assert ended.session.session_mode == "open_time"
+    # 610 elapsed seconds against a 300-second metered unit rounds up to 3
+    # units (900 billed seconds) at 1.00 each.
+    assert ended.session.billed_seconds == 900
+    assert ended.session.final_computed_amount == Decimal("3.00")
+    assert ended.session.total_amount == Decimal("3.00")
+
+    assert service.billing_service is not None
+    billing = service.billing_service.record_payment(
+        "historical-open-time-session",
+        PaymentCreateRequest(
+            payment_method="cash",
+            amount=Decimal("3.00"),
+            cash_received=Decimal("5.00"),
+        ),
+    )
+    assert billing.session.status == "completed"
+    assert billing.balance_due == Decimal("0.00")
+    assert billing.payment_status == "paid"
+
+    settled = session_repository.get_session("historical-open-time-session")
+    assert settled is not None
+    assert settled.status == "completed"
+    assert settled.settlement_pending is False
 
 
 def test_seeded_layout_does_not_create_registered_dashboard_pcs(temp_directory: str) -> None:
@@ -139,6 +241,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
         test_prepare_fixed_time_activates_on_reconnect(temp_directory)
         test_cancel_prepared_session_creates_no_charge(temp_directory)
+        test_prepared_open_time_is_rejected(temp_directory)
+        test_start_open_time_session_is_rejected(temp_directory)
+        test_historical_open_time_session_can_finalize_and_settle(temp_directory)
         test_seeded_layout_does_not_create_registered_dashboard_pcs(temp_directory)
     print("Prepared startup smoke test passed.")
 

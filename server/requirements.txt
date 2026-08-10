@@ -1,3 +1,7 @@
 fastapi==0.139.2
 uvicorn==0.51.0
 websockets==16.1.1
+# Windows does not ship an IANA timezone database the way Linux/macOS do;
+# zoneinfo.ZoneInfo needs this package to resolve any timezone name (e.g.
+# Asia/Manila) on a Windows deployment. Required by server/rate_eligibility.py.
+tzdata==2026.3

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from server.balance_conversion import STANDARD_SECONDS_PER_VIP_SECOND, finalize_vip_usage
 from server.billing_service import money
 from server.database import get_connection
 from server.payment_repository import PaymentRepository
@@ -74,6 +75,7 @@ def row_to_member(row: Any) -> MemberRecord:
         requires_account_setup=requires_setup or not bool(username and has_pin),
         status=row["status"],
         time_balance_seconds=row["time_balance_seconds"],
+        vip_balance_seconds=row["vip_balance_seconds"] if "vip_balance_seconds" in keys else 0,
         joined_at=datetime.fromisoformat(row["joined_at"]),
         expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None,
         created_by_user_id=row["created_by_user_id"],
@@ -89,6 +91,7 @@ def row_to_product(row: Any) -> MembershipProductRecord:
         price=Decimal(row["price"]),
         time_seconds=row["time_seconds"],
         product_type=row["product_type"],
+        balance_type=row["balance_type"] if "balance_type" in row.keys() else "standard",
         is_active=bool(row["is_active"]),
         sort_order=row["sort_order"],
         created_at=datetime.fromisoformat(row["created_at"]),
@@ -101,6 +104,7 @@ def row_to_transaction(row: Any) -> MemberTimeTransactionRecord:
         transaction_id=row["transaction_id"],
         member_id=row["member_id"],
         transaction_type=row["transaction_type"],
+        balance_type=row["balance_type"] if "balance_type" in row.keys() else "standard",
         seconds_delta=row["seconds_delta"],
         balance_before_seconds=row["balance_before_seconds"],
         balance_after_seconds=row["balance_after_seconds"],
@@ -634,7 +638,14 @@ class MemberRepository:
         related_session_id: str | None = None,
         related_payment_id: str | None = None,
         notes: str | None = None,
+        balance_type: str = "standard",
+        connection: sqlite3.Connection | None = None,
     ) -> MemberTimeTransactionRecord:
+        """Credits/debits exactly one balance (Standard or VIP -- never
+        both) and records one ledger row for it. When `connection` is
+        supplied, the update/insert join the caller's transaction (no
+        commit/close here) so this can be made atomic with, e.g., the
+        payment that funds it -- see MemberRepository.purchase()."""
         zero_delta_types = {
             "session_reservation_created",
             "session_reservation_released",
@@ -643,31 +654,34 @@ class MemberRepository:
             raise HTTPException(status_code=400, detail="Balance change cannot be zero")
         now = current_utc_time()
         transaction_id = str(uuid4())
-        with get_connection() as connection:
-            row = connection.execute(
-                "SELECT time_balance_seconds FROM members WHERE member_id = ?",
+        balance_column = "vip_balance_seconds" if balance_type == "vip" else "time_balance_seconds"
+
+        def _apply(active_connection: sqlite3.Connection) -> tuple[int, int]:
+            row = active_connection.execute(
+                f"SELECT {balance_column} FROM members WHERE member_id = ?",
                 (member_id,),
             ).fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="Member not found")
-            before = int(row["time_balance_seconds"])
+            before = int(row[balance_column])
             after = before + seconds_delta
             if after < 0:
                 raise HTTPException(status_code=409, detail="Insufficient member time balance")
-            connection.execute(
-                """
+            active_connection.execute(
+                f"""
                 UPDATE members
-                SET time_balance_seconds = ?, updated_at = ?
+                SET {balance_column} = ?, updated_at = ?
                 WHERE member_id = ?
                 """,
                 (after, now.isoformat(), member_id),
             )
-            connection.execute(
+            active_connection.execute(
                 """
                 INSERT INTO member_time_transactions (
                     transaction_id,
                     member_id,
                     transaction_type,
+                    balance_type,
                     seconds_delta,
                     balance_before_seconds,
                     balance_after_seconds,
@@ -678,12 +692,13 @@ class MemberRepository:
                     performed_by_user_id,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     transaction_id,
                     member_id,
                     transaction_type,
+                    balance_type,
                     seconds_delta,
                     before,
                     after,
@@ -695,8 +710,33 @@ class MemberRepository:
                     now.isoformat(),
                 ),
             )
-        transaction = self.list_ledger(member_id)[-1]
-        return transaction
+            return before, after
+
+        if connection is not None:
+            # Shared, not-yet-committed transaction: a fresh connection
+            # (e.g. via list_ledger) would not see this row yet, so build
+            # the record directly from the values just written instead of
+            # re-querying.
+            before, after = _apply(connection)
+            return MemberTimeTransactionRecord(
+                transaction_id=transaction_id,
+                member_id=member_id,
+                transaction_type=transaction_type,
+                balance_type=balance_type,
+                seconds_delta=seconds_delta,
+                balance_before_seconds=before,
+                balance_after_seconds=after,
+                amount_paid=amount_paid,
+                related_session_id=related_session_id,
+                related_payment_id=related_payment_id,
+                notes=notes,
+                performed_by_user_id=actor_user_id,
+                created_at=now,
+            )
+
+        with get_connection() as owned_connection:
+            _apply(owned_connection)
+        return self.list_ledger(member_id)[-1]
 
     def has_active_reservation(self, member_id: str) -> bool:
         with get_connection() as connection:
@@ -716,11 +756,23 @@ class MemberRepository:
         session_id: str,
         reserved_seconds: int,
         actor_user_id: str | None,
+        reserved_vip_seconds: int = 0,
     ) -> None:
-        if reserved_seconds <= 0:
+        """reserved_seconds is always expressed in Standard-balance seconds
+        (unchanged meaning) -- on a VIP PC this is already the 2:1-converted
+        amount (see server.balance_conversion.split_vip_session), so this
+        function never needs to know the station type itself. Balance is
+        NOT decremented here (see finalize_reservation_usage for why); this
+        only checks availability and claims the single active-reservation
+        slot for the member."""
+        if reserved_seconds < 0 or reserved_vip_seconds < 0:
+            raise HTTPException(status_code=400, detail="Reserved time must not be negative")
+        if reserved_seconds == 0 and reserved_vip_seconds == 0:
             raise HTTPException(status_code=400, detail="Reserved time must be positive")
         if member.time_balance_seconds < reserved_seconds:
             raise HTTPException(status_code=409, detail="Insufficient member time balance")
+        if member.vip_balance_seconds < reserved_vip_seconds:
+            raise HTTPException(status_code=409, detail="Insufficient member VIP balance")
         now = current_utc_time()
         with get_connection() as connection:
             try:
@@ -732,12 +784,21 @@ class MemberRepository:
                         session_id,
                         reserved_seconds,
                         consumed_seconds,
+                        reserved_vip_seconds,
+                        consumed_vip_seconds,
                         status,
                         created_at
                     )
-                    VALUES (?, ?, ?, ?, 0, 'active', ?)
+                    VALUES (?, ?, ?, ?, 0, ?, 0, 'active', ?)
                     """,
-                    (str(uuid4()), member.member_id, session_id, reserved_seconds, now.isoformat()),
+                    (
+                        str(uuid4()),
+                        member.member_id,
+                        session_id,
+                        reserved_seconds,
+                        reserved_vip_seconds,
+                        now.isoformat(),
+                    ),
                 )
             except sqlite3.IntegrityError as error:
                 raise HTTPException(
@@ -750,8 +811,25 @@ class MemberRepository:
             0,
             actor_user_id,
             related_session_id=session_id,
-            notes=f"Reserved up to {reserved_seconds} seconds",
+            notes=f"Reserved up to {reserved_seconds} Standard + {reserved_vip_seconds} VIP seconds",
         )
+
+    def get_active_reservation_totals(self, member_id: str, session_id: str) -> tuple[int, int] | None:
+        """Returns (reserved_seconds, reserved_vip_seconds) for the
+        member's active reservation on this session, or None if there is
+        none. Used to compute how much headroom remains before an Add Time
+        extension on a VIP-PC session."""
+        with get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT reserved_seconds, reserved_vip_seconds FROM member_time_reservations
+                WHERE member_id = ? AND session_id = ? AND status = 'active'
+                """,
+                (member_id, session_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return int(row["reserved_seconds"]), int(row["reserved_vip_seconds"])
 
     def extend_reservation(
         self,
@@ -759,8 +837,12 @@ class MemberRepository:
         session_id: str,
         additional_seconds: int,
         actor_user_id: str | None,
-    ) -> int:
-        if additional_seconds <= 0:
+        additional_vip_seconds: int = 0,
+    ) -> tuple[int, int]:
+        """Returns (next_reserved_seconds, next_reserved_vip_seconds)."""
+        if additional_seconds < 0 or additional_vip_seconds < 0:
+            raise HTTPException(status_code=400, detail="Additional reserved time must not be negative")
+        if additional_seconds == 0 and additional_vip_seconds == 0:
             raise HTTPException(status_code=400, detail="Additional reserved time must be positive")
         with get_connection() as connection:
             row = connection.execute(
@@ -773,15 +855,18 @@ class MemberRepository:
             if row is None:
                 raise HTTPException(status_code=404, detail="Active member reservation not found")
             next_reserved = row["reserved_seconds"] + additional_seconds
+            next_reserved_vip = row["reserved_vip_seconds"] + additional_vip_seconds
             if member.time_balance_seconds < next_reserved:
                 raise HTTPException(status_code=409, detail="Insufficient member time balance")
+            if member.vip_balance_seconds < next_reserved_vip:
+                raise HTTPException(status_code=409, detail="Insufficient member VIP balance")
             connection.execute(
                 """
                 UPDATE member_time_reservations
-                SET reserved_seconds = ?
+                SET reserved_seconds = ?, reserved_vip_seconds = ?
                 WHERE reservation_id = ?
                 """,
-                (next_reserved, row["reservation_id"]),
+                (next_reserved, next_reserved_vip, row["reservation_id"]),
             )
         self.apply_balance_delta(
             member.member_id,
@@ -789,9 +874,9 @@ class MemberRepository:
             0,
             actor_user_id,
             related_session_id=session_id,
-            notes=f"Extended reservation by {additional_seconds} seconds",
+            notes=f"Extended reservation by {additional_seconds} Standard + {additional_vip_seconds} VIP seconds",
         )
-        return next_reserved
+        return next_reserved, next_reserved_vip
 
     def release_reservation(
         self,
@@ -834,7 +919,22 @@ class MemberRepository:
         session_id: str,
         actual_elapsed_seconds: int,
         actor_user_id: str | None,
-    ) -> tuple[int, MemberTimeTransactionRecord | None]:
+        is_vip_station: bool = False,
+    ) -> tuple[int, int]:
+        """Deducts balance for exactly the real time actually played,
+        capped at the reservation -- never the full reservation itself.
+        Returns (standard_seconds_consumed, vip_seconds_consumed).
+
+        Idempotent: a reservation already 'finalized' or 'released' returns
+        its previously recorded consumption (or zero) without touching
+        either balance again, so a repeated call (retry, reconnect race,
+        double force-end) can never double-deduct.
+
+        On a VIP-PC session (is_vip_station=True), consumption is computed
+        by server.balance_conversion.finalize_vip_usage: VIP balance first,
+        Standard balance for any real-time remainder at 2:1. On a Standard
+        PC, consumption stays the original 1:1 behavior, unchanged.
+        """
         finalized_at = current_utc_time()
         with get_connection() as connection:
             row = connection.execute(
@@ -847,33 +947,33 @@ class MemberRepository:
             if row is None:
                 raise HTTPException(status_code=404, detail="Member reservation not found")
             if row["status"] == "finalized":
-                return row["consumed_seconds"], None
+                return int(row["consumed_seconds"]), int(row["consumed_vip_seconds"])
             if row["status"] == "released":
-                return 0, None
+                return 0, 0
 
-            consumed_seconds = max(
-                0,
-                min(int(actual_elapsed_seconds), int(row["reserved_seconds"])),
-            )
+            reserved_standard = int(row["reserved_seconds"])
+            reserved_vip = int(row["reserved_vip_seconds"])
+
+            if is_vip_station:
+                reserved_effective_seconds = reserved_vip + reserved_standard // STANDARD_SECONDS_PER_VIP_SECOND
+                vip_consumed, standard_consumed = finalize_vip_usage(
+                    actual_elapsed_seconds, reserved_effective_seconds, reserved_vip
+                )
+            else:
+                vip_consumed = 0
+                standard_consumed = max(0, min(int(actual_elapsed_seconds), reserved_standard))
+
             connection.execute(
                 """
                 UPDATE member_time_reservations
-                SET status = 'finalized', consumed_seconds = ?, finalized_at = ?
+                SET status = 'finalized', consumed_seconds = ?, consumed_vip_seconds = ?, finalized_at = ?
                 WHERE reservation_id = ?
                 """,
-                (consumed_seconds, finalized_at.isoformat(), row["reservation_id"]),
+                (standard_consumed, vip_consumed, finalized_at.isoformat(), row["reservation_id"]),
             )
-        transaction = (
+
+        if standard_consumed <= 0 and vip_consumed <= 0:
             self.apply_balance_delta(
-                member_id,
-                "session_usage_finalized",
-                -consumed_seconds,
-                actor_user_id,
-                related_session_id=session_id,
-                notes=f"Finalized actual member usage: {consumed_seconds} seconds",
-            )
-            if consumed_seconds > 0
-            else self.apply_balance_delta(
                 member_id,
                 "session_reservation_released",
                 0,
@@ -881,8 +981,35 @@ class MemberRepository:
                 related_session_id=session_id,
                 notes="Released unused member reservation with no usage",
             )
-        )
-        return consumed_seconds, transaction
+            return standard_consumed, vip_consumed
+
+        # Two independent ledger entries when both pools were drawn on --
+        # each balance's deduction is recorded against its own balance_type,
+        # never combined into a single ambiguous row.
+        if vip_consumed > 0:
+            self.apply_balance_delta(
+                member_id,
+                "session_usage_finalized",
+                -vip_consumed,
+                actor_user_id,
+                related_session_id=session_id,
+                notes=f"Finalized actual member usage: {vip_consumed} VIP seconds",
+                balance_type="vip",
+            )
+        if standard_consumed > 0:
+            self.apply_balance_delta(
+                member_id,
+                "session_usage_finalized",
+                -standard_consumed,
+                actor_user_id,
+                related_session_id=session_id,
+                notes=(
+                    f"Finalized actual member usage: {standard_consumed} Standard seconds"
+                    + (" (2:1 VIP conversion)" if is_vip_station else "")
+                ),
+                balance_type="standard",
+            )
+        return standard_consumed, vip_consumed
 
     def purchase(
         self,
@@ -960,16 +1087,23 @@ class MemberRepository:
             status="completed",
             created_at=current_utc_time(),
         )
-        self.payment_repository.create_payment(payment)
-        transaction = self.apply_balance_delta(
-            member.member_id,
-            "membership_purchase" if product.product_type == "initial_membership" else "promo_topup",
-            product.time_seconds,
-            actor.user_id,
-            amount_paid=product.price,
-            related_payment_id=payment.payment_id,
-            notes=product.name,
-        )
+        # Atomic: the payment and the balance it funds are recorded in a
+        # single SQLite transaction. If either step fails, nothing commits
+        # -- there is no window where money/sale exists without the
+        # matching balance credit, or vice versa.
+        with get_connection() as connection:
+            self.payment_repository.create_payment(payment, connection=connection)
+            transaction = self.apply_balance_delta(
+                member.member_id,
+                "membership_purchase" if product.product_type == "initial_membership" else "promo_topup",
+                product.time_seconds,
+                actor.user_id,
+                amount_paid=product.price,
+                related_payment_id=payment.payment_id,
+                notes=product.name,
+                balance_type=product.balance_type,
+                connection=connection,
+            )
         updated_member = self.get_member(member_id)
         if updated_member is None:
             raise HTTPException(status_code=500, detail="Member disappeared after purchase")
@@ -1005,6 +1139,14 @@ class MemberRepository:
         original_transaction = self.get_transaction_by_payment_id(payment_id)
         if original_transaction is None:
             raise HTTPException(status_code=409, detail="Payment is not a member purchase")
+        # Owner-confirmed rule: VIP promo purchases are non-refundable, full
+        # stop, regardless of usage state. This is distinct from an atomic
+        # purchase failing before it ever completes (handled entirely by
+        # MemberRepository.purchase()'s single-transaction commit/rollback,
+        # which never leaves a completed payment needing a refund) -- this
+        # check only ever runs against an already-completed VIP purchase.
+        if original_transaction.balance_type == "vip":
+            raise HTTPException(status_code=409, detail="VIP promo purchases are non-refundable.")
         member = self.get_member(original_transaction.member_id)
         if member is None:
             raise HTTPException(status_code=404, detail="Member not found")

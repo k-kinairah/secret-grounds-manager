@@ -5,7 +5,7 @@ import { createRate, fetchRates, updateRate, updateRateStatus } from "@/lib/api"
 import { saveRateProfile } from "@/lib/rateActions";
 import { emptyRateForm, rateToForm, type RateFormState } from "@/lib/rateForm";
 import { formatMoney, formatRateDuration } from "@/lib/time";
-import type { RateProfile } from "@/lib/types";
+import type { PackageStationScope, RateProfile } from "@/lib/types";
 import styles from "@/app/rates/rates.module.css";
 
 type MessageKind = "success" | "error";
@@ -13,6 +13,30 @@ type MessageKind = "success" | "error";
 interface StatusMessage {
   kind: MessageKind;
   text: string;
+}
+
+function stationScopeLabel(scope: PackageStationScope): string {
+  switch (scope) {
+    case "vip":
+      return "VIP";
+    case "any":
+      return "Any Station";
+    case "standard":
+    default:
+      return "Standard";
+  }
+}
+
+function formatClockTime(value: string): string {
+  const [hourText, minuteText] = value.split(":");
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    return value;
+  }
+  const period = hour < 12 ? "AM" : "PM";
+  const displayHour = hour % 12 === 0 ? 12 : hour % 12;
+  return `${displayHour}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
 export function RatesManager() {
@@ -23,7 +47,9 @@ export function RatesManager() {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [pendingRateId, setPendingRateId] = useState<string | null>(null);
-  const meteredRate = rates.find((rate) => rate.rate_type === "metered") ?? null;
+  // Metered/Open Time rates are permanently retired for active use. Admins
+  // can no longer create or reactivate one through this UI -- the backend
+  // independently rejects both regardless of what the dashboard sends.
   const packageRates = rates.filter((rate) => rate.rate_type === "package");
 
   async function refresh(options: { clearMessage?: boolean } = {}) {
@@ -99,11 +125,7 @@ export function RatesManager() {
     }
   }
 
-  const formTitle = editingRateId
-    ? form.rateType === "metered"
-      ? "Edit Metered Rate"
-      : "Edit Package"
-    : "Create Package";
+  const formTitle = editingRateId ? "Edit Package" : "Create Package";
 
   return (
     <>
@@ -123,9 +145,7 @@ export function RatesManager() {
         <div className={styles.panel}>
           <h2>{formTitle}</h2>
           <p className={styles.panelText}>
-            {form.rateType === "metered"
-              ? "Configure how much money buys how much time."
-              : "Configure fixed packages for cashier session starts and extensions."}
+            Configure fixed packages for cashier session starts and extensions.
           </p>
           <div className={styles.form}>
             <label className={styles.field}>
@@ -136,7 +156,7 @@ export function RatesManager() {
               />
             </label>
             <label className={styles.field}>
-              {form.rateType === "metered" ? "Time minutes" : "Duration minutes"}
+              Duration minutes
               <input
                 min="1"
                 onChange={(event) => setForm({ ...form, minutes: event.target.value })}
@@ -145,7 +165,7 @@ export function RatesManager() {
               />
             </label>
             <label className={styles.field}>
-              {form.rateType === "metered" ? "Amount" : "Price"}
+              Price
               <input
                 inputMode="decimal"
                 onChange={(event) => setForm({ ...form, price: event.target.value })}
@@ -153,16 +173,27 @@ export function RatesManager() {
                 value={form.price}
               />
             </label>
-            {form.rateType === "package" ? (
-              <label className={styles.field}>
-                Sort order
-                <input
-                  onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
-                  type="number"
-                  value={form.sortOrder}
-                />
-              </label>
-            ) : null}
+            <label className={styles.field}>
+              Sort order
+              <input
+                onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
+                type="number"
+                value={form.sortOrder}
+              />
+            </label>
+            <label className={styles.field}>
+              Station
+              <select
+                onChange={(event) =>
+                  setForm({ ...form, stationScope: event.target.value as PackageStationScope })
+                }
+                value={form.stationScope}
+              >
+                <option value="standard">Standard</option>
+                <option value="vip">VIP</option>
+                <option value="any">Any Station</option>
+              </select>
+            </label>
             <div className={styles.actions}>
               <button className={styles.button} disabled={isSaving} onClick={saveRate}>
                 {isSaving ? "Saving..." : "Save Rate"}
@@ -184,56 +215,6 @@ export function RatesManager() {
         </div>
 
         <div className={styles.panelWide}>
-          <div className={styles.sectionHeader}>
-            <div>
-              <h2>Regular Metered Rate</h2>
-              <p className={styles.panelText}>Used when the cashier enters an amount.</p>
-            </div>
-          </div>
-          {isLoading ? (
-            <div className={styles.loadingCard}>Loading metered rate...</div>
-          ) : meteredRate === null ? (
-            <div className={styles.emptyState}>No metered rate configured.</div>
-          ) : (
-            <article className={styles.meteredCard}>
-              <div>
-                <span
-                  className={
-                    meteredRate.is_active
-                      ? `${styles.statusBadge} ${styles.statusActive}`
-                      : `${styles.statusBadge} ${styles.statusDisabled}`
-                  }
-                >
-                  {meteredRate.is_active ? "Enabled" : "Disabled"}
-                </span>
-                <h3>{meteredRate.name}</h3>
-                <p>
-                  {formatMoney(meteredRate.price)} buys{" "}
-                  {formatRateDuration(meteredRate.duration_seconds)}
-                </p>
-              </div>
-              <div className={styles.cardActions}>
-                <button
-                  className={styles.secondaryButton}
-                  onClick={() => editRate(meteredRate)}
-                  type="button"
-                >
-                  Edit
-                </button>
-                {!meteredRate.is_active ? (
-                  <button
-                    className={styles.secondaryButton}
-                    disabled={pendingRateId === meteredRate.rate_id}
-                    onClick={() => toggleRate(meteredRate)}
-                    type="button"
-                  >
-                    Enable
-                  </button>
-                ) : null}
-              </div>
-            </article>
-          )}
-
           <div className={styles.sectionHeader}>
             <div>
               <h2>Packages</h2>
@@ -265,12 +246,22 @@ export function RatesManager() {
                       {rate.is_active ? "Enabled" : "Disabled"}
                     </span>
                     <span className={styles.orderPill}>Order {rate.sort_order}</span>
+                    <span className={styles.orderPill}>{stationScopeLabel(rate.station_scope)}</span>
                   </div>
                   <h3>{rate.name}</h3>
                   <div className={styles.rateMeta}>
                     <span>{formatRateDuration(rate.duration_seconds)}</span>
                     <strong>{formatMoney(rate.price)}</strong>
                   </div>
+                  {rate.guest_only || (rate.eligible_start_local_time && rate.eligible_end_local_time) ? (
+                    <p className={styles.panelText}>
+                      {rate.guest_only ? "Guest only" : null}
+                      {rate.guest_only && rate.eligible_start_local_time ? " · " : null}
+                      {rate.eligible_start_local_time && rate.eligible_end_local_time
+                        ? `Available ${formatClockTime(rate.eligible_start_local_time)}–${formatClockTime(rate.eligible_end_local_time)} local time`
+                        : null}
+                    </p>
+                  ) : null}
                   <div className={styles.cardActions}>
                     <button
                       className={styles.secondaryButton}

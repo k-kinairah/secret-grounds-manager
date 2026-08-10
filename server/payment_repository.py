@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -49,9 +50,18 @@ def row_to_payment(row: Any) -> PaymentRecord:
 class PaymentRepository:
     """SQLite persistence boundary for auditable session payments."""
 
-    def create_payment(self, payment: PaymentRecord) -> PaymentRecord:
-        with get_connection() as connection:
-            connection.execute(
+    def create_payment(
+        self,
+        payment: PaymentRecord,
+        connection: sqlite3.Connection | None = None,
+    ) -> PaymentRecord:
+        """Inserts the payment row. When `connection` is supplied, the
+        insert joins the caller's transaction (no commit/close here) so a
+        payment and whatever it funds can be made atomic together -- see
+        MemberRepository.purchase()."""
+
+        def _insert(active_connection: sqlite3.Connection) -> None:
+            active_connection.execute(
                 """
                 INSERT INTO payments (
                     payment_id,
@@ -98,6 +108,12 @@ class PaymentRepository:
                     payment.created_at.isoformat(),
                 ),
             )
+
+        if connection is not None:
+            _insert(connection)
+        else:
+            with get_connection() as owned_connection:
+                _insert(owned_connection)
 
         return payment
 

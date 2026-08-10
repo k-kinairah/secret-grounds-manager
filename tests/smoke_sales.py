@@ -19,6 +19,7 @@ def main() -> None:
         from server.main import (
             build_sales_report,
             create_member,
+            create_rate,
             export_sales_report,
             get_sales_report,
             get_dashboard_today_sales,
@@ -40,6 +41,7 @@ def main() -> None:
             MemberPurchaseRequest,
             PCRegistration,
             PaymentCreateRequest,
+            RateProfileCreate,
             ShiftOpenRequest,
             StartSessionRequest,
             UserCreateRequest,
@@ -83,8 +85,30 @@ def main() -> None:
             ]
 
         session_service.send_required_command = acknowledge_command
+
+        # Enter Amount is retired; sales-report exercising now uses fixed
+        # package rates carrying the same dollar amounts as before.
+        sales_rate = create_rate(
+            RateProfileCreate(
+                name="Sales Report Test Package",
+                duration_seconds=6000,
+                price=Decimal("100.00"),
+                rate_type="package",
+                sort_order=1,
+            )
+        )
+        due_rate = create_rate(
+            RateProfileCreate(
+                name="Sales Report Due Package",
+                duration_seconds=4800,
+                price=Decimal("80.00"),
+                rate_type="package",
+                sort_order=2,
+            )
+        )
+
         started = asyncio.run(
-            start_session(StartSessionRequest(pc_name="PC-SALES", amount=Decimal("100.00")))
+            start_session(StartSessionRequest(pc_name="PC-SALES", rate_id=sales_rate.rate_id))
         )
         session_id = started.session.session_id
         cash_payment = record_payment(
@@ -121,7 +145,7 @@ def main() -> None:
         )
 
         unsettled = asyncio.run(
-            start_session(StartSessionRequest(pc_name="PC-DUE", amount=Decimal("80.00")), cashier)
+            start_session(StartSessionRequest(pc_name="PC-DUE", rate_id=due_rate.rate_id), cashier)
         )
         session_repository.update_session(
             unsettled.session.model_copy(

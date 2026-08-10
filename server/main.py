@@ -71,6 +71,7 @@ from server.schemas import (
     MemberStatusUpdate,
     MemberTimeTransactionRecord,
     MemberUpdateRequest,
+    MemberVipPlayablePreview,
     PasswordResetRequest,
     PreparedSessionResponse,
     PreparedSessionStartRequest,
@@ -124,6 +125,7 @@ from server.schemas import (
     UserUpdateRequest,
 )
 from server.admin_settings_service import AdminSettingsService
+from server.balance_conversion import split_vip_session
 from server.auth import (
     AUTH_COOKIE_NAME,
     auth_session_repository,
@@ -145,7 +147,6 @@ from server.billing_service import BillingService
 from server.member_repository import MemberRepository
 from server.operator_repository import OperatorRepository
 from server.payment_repository import PaymentRepository
-from server.rate_calculator import calculate_metered_time
 from server.remote_command_repository import PCMetadataRepository, RemoteCommandRepository
 from server.pc_layout_repository import OperatorStateRepository, PCLayoutRepository
 from server.prepared_session_repository import PreparedSessionRepository
@@ -191,6 +192,7 @@ session_service = SessionService(
     billing_service=billing_service,
     member_repository=member_repository,
     prepared_session_repository=prepared_session_repository,
+    pc_layout_repository=pc_layout_repository,
 )
 OFFLINE_AFTER_SECONDS = 15
 MONITOR_INTERVAL_SECONDS = 5
@@ -668,6 +670,47 @@ def get_member(
     if member is None:
         raise HTTPException(status_code=404, detail="Member not found")
     return member
+
+
+@app.get("/members/{member_id}/vip-preview", response_model=MemberVipPlayablePreview)
+def get_member_vip_preview(
+    member_id: str,
+    pc_name: str,
+    duration_seconds: int | None = None,
+    _: object = Depends(require_role("cashier")),
+) -> MemberVipPlayablePreview:
+    """Dashboard-only preview of playable real time for this member on this
+    PC. Server remains authoritative at actual session start/add-time --
+    this never reserves or mutates anything."""
+    member = member_repository.get_member(member_id)
+    if member is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    is_vip_station = session_service.is_vip_pc(pc_name)
+    if not is_vip_station:
+        playable_seconds = (
+            member.time_balance_seconds
+            if duration_seconds is None
+            else min(duration_seconds, member.time_balance_seconds)
+        )
+        return MemberVipPlayablePreview(
+            is_vip_station=False,
+            playable_seconds=max(0, playable_seconds),
+            vip_seconds=0,
+            standard_seconds=0,
+            standard_real_seconds_equivalent=0,
+        )
+
+    effective, vip_part, standard_part = split_vip_session(
+        member.vip_balance_seconds, member.time_balance_seconds, duration_seconds
+    )
+    return MemberVipPlayablePreview(
+        is_vip_station=True,
+        playable_seconds=effective,
+        vip_seconds=vip_part,
+        standard_seconds=standard_part,
+        standard_real_seconds_equivalent=standard_part // 2,
+    )
 
 
 @app.post("/members", response_model=MemberRecord)
@@ -3047,25 +3090,33 @@ def get_rates(
     return rate_repository.list_rates(include_inactive=include_inactive)
 
 
-@app.get("/rates/metered", response_model=RateProfile)
+@app.get("/rates/metered")
 def get_metered_rate(
     _: object = Depends(require_role("cashier")),
 ) -> RateProfile:
-    rate = rate_repository.get_active_metered_rate()
-    if rate is None:
-        raise HTTPException(status_code=404, detail="Active metered rate is missing")
-    return rate
+    # Metered/Open Time customer operation is permanently retired. Existing
+    # metered rate rows remain in the database for historical session
+    # settlement (see compute_open_time_final_amount), but are no longer
+    # exposed for active/normal use through this endpoint.
+    raise HTTPException(
+        status_code=410,
+        detail="Metered/Open Time rate lookup is permanently retired.",
+    )
 
 
-@app.post("/rates/calculate-time", response_model=CalculatedTimeResponse)
+@app.post("/rates/calculate-time")
 def calculate_time(
     request: CalculateTimeRequest,
     _: object = Depends(require_role("cashier")),
 ) -> CalculatedTimeResponse:
-    rate = rate_repository.get_active_metered_rate()
-    if rate is None:
-        raise HTTPException(status_code=409, detail="Active metered rate is missing")
-    return calculate_metered_time(request.amount, rate)
+    # Enter Amount / metered-rate time calculation is permanently retired.
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Enter Amount sessions are no longer offered. "
+            "Start a package or member-balance session instead."
+        ),
+    )
 
 
 @app.post("/rates", response_model=RateProfile)

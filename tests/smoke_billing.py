@@ -18,6 +18,7 @@ def main() -> None:
         from server.database import initialize_database
         from server.main import (
             add_time_to_session,
+            create_rate,
             get_session_billing,
             pc_registry,
             record_payment,
@@ -30,6 +31,7 @@ def main() -> None:
             AddTimeRequest,
             PCRegistration,
             PaymentCreateRequest,
+            RateProfileCreate,
             StartSessionRequest,
             VoidPaymentRequest,
         )
@@ -49,9 +51,31 @@ def main() -> None:
 
         session_service.send_required_command = acknowledge_command
 
+        # Enter Amount (money-to-time via the metered rate) is retired;
+        # billing behavior is now exercised through fixed package rates
+        # carrying the same dollar amounts the test already relies on.
+        starting_rate = create_rate(
+            RateProfileCreate(
+                name="Billing Test Package",
+                duration_seconds=6000,
+                price=Decimal("20.00"),
+                rate_type="package",
+                sort_order=1,
+            )
+        )
+        addon_rate = create_rate(
+            RateProfileCreate(
+                name="Billing Test Add-On",
+                duration_seconds=1500,
+                price=Decimal("5.00"),
+                rate_type="package",
+                sort_order=2,
+            )
+        )
+
         started = asyncio.run(
             start_session(
-                StartSessionRequest(pc_name="PC-BILL", amount=Decimal("20.00"))
+                StartSessionRequest(pc_name="PC-BILL", rate_id=starting_rate.rate_id)
             )
         )
         session_id = started.session.session_id
@@ -125,7 +149,7 @@ def main() -> None:
             raise AssertionError("Payment amount above balance should be rejected")
 
         updated = asyncio.run(
-            add_time_to_session(session_id, AddTimeRequest(amount=Decimal("5.00")))
+            add_time_to_session(session_id, AddTimeRequest(rate_id=addon_rate.rate_id))
         )
         assert updated.session.additional_amount == Decimal("5.00")
         billing_after_add = get_session_billing(session_id)

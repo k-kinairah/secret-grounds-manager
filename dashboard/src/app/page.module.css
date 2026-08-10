@@ -2742,6 +2742,33 @@
   color: #fecdd3;
 }
 
+.memberBalanceTypeBadge {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 950;
+  justify-content: center;
+  letter-spacing: 0.04em;
+  margin-left: 6px;
+  padding: 3px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.memberBalanceType-standard {
+  background: rgba(148, 163, 184, 0.16);
+  border-color: rgba(148, 163, 184, 0.34);
+  color: #e2e8f0;
+}
+
+.memberBalanceType-vip {
+  background: rgba(253, 224, 71, 0.18);
+  border-color: rgba(253, 224, 71, 0.42);
+  color: #fde047;
+}
+
 .memberStatus-locked {
   background: rgba(249, 115, 22, 0.16);
   border-color: rgba(249, 115, 22, 0.4);

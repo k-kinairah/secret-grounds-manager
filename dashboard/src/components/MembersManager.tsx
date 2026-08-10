@@ -152,31 +152,39 @@ function describeActivity(transaction: MemberTimeTransaction): {
   detail: string;
   amount: string | null;
   isTechnical: boolean;
+  balanceLabel: "Standard" | "VIP";
 } {
   const delta = Math.abs(transaction.seconds_delta);
   const balance = formatMemberBalance(transaction.balance_after_seconds);
+  // Historical rows recorded before balance_type existed are always
+  // 'standard' in the API response (the backend backfills them, never the
+  // client) -- so old Standard transactions never get relabeled as VIP.
+  const balanceLabel: "Standard" | "VIP" = transaction.balance_type === "vip" ? "VIP" : "Standard";
 
   switch (transaction.transaction_type) {
     case "membership_purchase":
       return {
         title: "Membership Purchased",
-        detail: `Added ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
+        detail: `Added ${formatNaturalDuration(delta)} of Standard time. New Standard balance: ${balance}.`,
         amount: transaction.amount_paid,
-        isTechnical: false
+        isTechnical: false,
+        balanceLabel
       };
     case "promo_topup":
       return {
-        title: "Member Promo Purchased",
-        detail: `Added ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
+        title: balanceLabel === "VIP" ? "VIP Promo Purchased" : "Member Promo Purchased",
+        detail: `Added ${formatNaturalDuration(delta)} of ${balanceLabel} time. New ${balanceLabel} balance: ${balance}.`,
         amount: transaction.amount_paid,
-        isTechnical: false
+        isTechnical: false,
+        balanceLabel
       };
     case "purchase_refund":
       return {
         title: "Purchase Refunded",
-        detail: `Removed ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
+        detail: `Removed ${formatNaturalDuration(delta)} of ${balanceLabel} time. New ${balanceLabel} balance: ${balance}.`,
         amount: transaction.amount_paid,
-        isTechnical: false
+        isTechnical: false,
+        balanceLabel
       };
     case "session_usage_finalized":
       return {
@@ -186,42 +194,48 @@ function describeActivity(transaction: MemberTimeTransaction): {
             ? `No time deducted. Balance remains ${balance}.`
             : `Used ${formatNaturalDuration(delta)}. Remaining balance: ${balance}.`,
         amount: null,
-        isTechnical: false
+        isTechnical: false,
+        balanceLabel
       };
     case "session_refund":
       return {
         title: "Time Returned",
         detail: `Returned ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
         amount: null,
-        isTechnical: false
+        isTechnical: false,
+        balanceLabel
       };
     case "manual_adjustment":
       return {
         title: "Manual Balance Adjustment",
         detail: `Adjusted by ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
         amount: null,
-        isTechnical: false
+        isTechnical: false,
+        balanceLabel
       };
     case "expiration_adjustment":
       return {
         title: "Expired Time Adjustment",
         detail: `Adjusted ${formatNaturalDuration(delta)}. New balance: ${balance}.`,
         amount: null,
-        isTechnical: false
+        isTechnical: false,
+        balanceLabel
       };
     case "session_reservation_released":
       return {
         title: "Session Reservation Released",
         detail: `Held time was released. Balance: ${balance}.`,
         amount: null,
-        isTechnical: true
+        isTechnical: true,
+        balanceLabel
       };
     default:
       return {
         title: "Session Reservation",
         detail: `Temporarily held ${formatNaturalDuration(delta)}. Balance: ${balance}.`,
         amount: null,
-        isTechnical: true
+        isTechnical: true,
+        balanceLabel
       };
   }
 }
@@ -596,12 +610,16 @@ export function MembersManager() {
       });
       setSelectedMember(response.member);
       setLedger(await fetchMemberLedger(selectedMember.member_id));
+      const isVipPurchase = response.product.balance_type === "vip";
+      const newBalanceText = isVipPurchase
+        ? `New VIP balance: ${formatMemberBalance(response.member.vip_balance_seconds)}.`
+        : `New Standard balance: ${formatMemberBalance(response.member.time_balance_seconds)}.`;
       pushToast(
-        "Member time added successfully",
+        isVipPurchase ? "VIP time added successfully" : "Member time added successfully",
         "success",
         memberPaymentMethod === "cash"
-          ? `Member: ${response.member.username ?? response.member.full_name}. Package: ${response.product.name}. Amount due: ${formatMoney(response.payment.amount)}. Cash received: ${formatMoney(response.payment.cash_received ?? "0.00")}. Change: ${formatMoney(response.payment.change_given ?? "0.00")}. New balance: ${formatMemberBalance(response.member.time_balance_seconds)}.`
-          : `Member: ${response.member.username ?? response.member.full_name}. Package: ${response.product.name}. Amount due: ${formatMoney(response.payment.amount)}. Reference: ${response.payment.reference_number ?? "Recorded"}. New balance: ${formatMemberBalance(response.member.time_balance_seconds)}.`
+          ? `Member: ${response.member.username ?? response.member.full_name}. Package: ${response.product.name}. Amount due: ${formatMoney(response.payment.amount)}. Cash received: ${formatMoney(response.payment.cash_received ?? "0.00")}. Change: ${formatMoney(response.payment.change_given ?? "0.00")}. ${newBalanceText}`
+          : `Member: ${response.member.username ?? response.member.full_name}. Package: ${response.product.name}. Amount due: ${formatMoney(response.payment.amount)}. Reference: ${response.payment.reference_number ?? "Recorded"}. ${newBalanceText}`
       );
       memberPurchaseKeyRef.current = createIdempotencyKey();
       setMemberPaymentValue("");
@@ -876,9 +894,16 @@ export function MembersManager() {
                   </div>
 
                   <div className={styles.memberCardStat}>
-                    <span>Balance</span>
+                    <span>Standard Time</span>
                     <strong className={styles.memberBalance}>
                       {formatMemberBalance(member.time_balance_seconds)}
+                    </strong>
+                  </div>
+
+                  <div className={styles.memberCardStat}>
+                    <span>VIP Time</span>
+                    <strong className={styles.memberBalance}>
+                      {formatMemberBalance(member.vip_balance_seconds)}
                     </strong>
                   </div>
 
@@ -1219,8 +1244,12 @@ export function MembersManager() {
                     </strong>
                   </div>
                   <div className={styles.detailRow}>
-                    <span>Current balance</span>
+                    <span>Standard Time</span>
                     <strong>{formatMemberBalance(selectedMember.time_balance_seconds)}</strong>
+                  </div>
+                  <div className={styles.detailRow}>
+                    <span>VIP Time</span>
+                    <strong>{formatMemberBalance(selectedMember.vip_balance_seconds)}</strong>
                   </div>
                   <div className={styles.detailRow}>
                     <span>Last activity</span>
@@ -1252,8 +1281,12 @@ export function MembersManager() {
                   }}
                 >
                   <div className={styles.memberBalanceHero}>
-                    <span>Balance</span>
+                    <span>Standard Time</span>
                     <strong>{formatMemberBalance(selectedMember.time_balance_seconds)}</strong>
+                  </div>
+                  <div className={styles.memberBalanceHero}>
+                    <span>VIP Time</span>
+                    <strong>{formatMemberBalance(selectedMember.vip_balance_seconds)}</strong>
                   </div>
                   <div className={styles.memberProductGrid}>
                     {activeProducts.map((product) => (
@@ -1267,9 +1300,17 @@ export function MembersManager() {
                         onClick={() => setSelectedProductId(product.product_id)}
                         type="button"
                       >
-                        <span className={styles.rateTitle}>{product.name}</span>
+                        <span className={styles.rateTitle}>
+                          {product.name}
+                          {product.balance_type === "vip" ? (
+                            <span className={`${styles.memberBalanceTypeBadge} ${styles["memberBalanceType-vip"]}`}>
+                              VIP
+                            </span>
+                          ) : null}
+                        </span>
                         <span className={styles.rateDuration}>
-                          Adds {formatMemberBalance(product.time_seconds)}
+                          Adds {formatMemberBalance(product.time_seconds)} of{" "}
+                          {product.balance_type === "vip" ? "VIP" : "Standard"} time
                         </span>
                         <span className={styles.ratePrice}>{formatMoney(product.price)}</span>
                       </button>
@@ -1277,14 +1318,23 @@ export function MembersManager() {
                   </div>
                   {selectedProduct ? (
                     <div className={styles.memberBalancePreview}>
-                      <span>Balance preview</span>
+                      <span>{selectedProduct.balance_type === "vip" ? "VIP" : "Standard"} balance preview</span>
                       <strong>
-                        {formatMemberBalance(selectedMember.time_balance_seconds)} +{" "}
-                        {formatMemberBalance(selectedProduct.time_seconds)} ={" "}
-                        {formatMemberBalance(
-                          selectedMember.time_balance_seconds + selectedProduct.time_seconds
-                        )}
+                        {selectedProduct.balance_type === "vip"
+                          ? `${formatMemberBalance(selectedMember.vip_balance_seconds)} + ${formatMemberBalance(
+                              selectedProduct.time_seconds
+                            )} = ${formatMemberBalance(
+                              selectedMember.vip_balance_seconds + selectedProduct.time_seconds
+                            )}`
+                          : `${formatMemberBalance(selectedMember.time_balance_seconds)} + ${formatMemberBalance(
+                              selectedProduct.time_seconds
+                            )} = ${formatMemberBalance(
+                              selectedMember.time_balance_seconds + selectedProduct.time_seconds
+                            )}`}
                       </strong>
+                      {selectedProduct.balance_type === "vip" ? (
+                        <small>VIP promo purchases are non-refundable.</small>
+                      ) : null}
                     </div>
                   ) : null}
                   <div className={styles.memberPaymentGrid}>
@@ -1453,12 +1503,25 @@ export function MembersManager() {
                     canRefundPurchases &&
                     Boolean(transaction.related_payment_id) &&
                     !refundedPaymentIds.has(transaction.related_payment_id ?? "") &&
+                    // VIP promo purchases are non-refundable -- the backend
+                    // rejects this regardless, but the action is hidden
+                    // here too so a cashier is never offered it at all.
+                    transaction.balance_type !== "vip" &&
                     (transaction.transaction_type === "membership_purchase" ||
                       transaction.transaction_type === "promo_topup");
                   return (
                   <div className={styles.memberActivityRow} key={transaction.transaction_id}>
                     <div>
                       <strong>{activity.title}</strong>
+                      <span
+                        className={`${styles.memberBalanceTypeBadge} ${
+                          activity.balanceLabel === "VIP"
+                            ? styles["memberBalanceType-vip"]
+                            : styles["memberBalanceType-standard"]
+                        }`}
+                      >
+                        {activity.balanceLabel}
+                      </span>
                       <span>{formatDateTime(transaction.created_at)}</span>
                     </div>
                     <div className={styles.memberActivityDetail}>

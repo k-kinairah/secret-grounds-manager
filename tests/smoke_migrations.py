@@ -269,6 +269,176 @@ def create_old_database(database_path: Path) -> None:
             """,
             (now,),
         )
+
+        # Pre-Stage-0 shape of the member/rate tables: no vip_balance_seconds,
+        # no balance_type, no station_scope/guest_only/member_eligible/
+        # eligibility columns, no reserved_vip_seconds/consumed_vip_seconds.
+        # This is what the already-deployed production database looks like
+        # today, including a row already sitting under the 'member-promo'
+        # id with a price an owner could plausibly have edited away from
+        # the confirmed P50 default.
+        connection.execute(
+            """
+            CREATE TABLE members (
+                member_id TEXT PRIMARY KEY,
+                member_code TEXT NOT NULL UNIQUE,
+                username TEXT,
+                full_name TEXT NOT NULL,
+                phone_number TEXT,
+                pin_hash TEXT,
+                status TEXT NOT NULL CHECK (status IN ('active', 'inactive')),
+                time_balance_seconds INTEGER NOT NULL CHECK (time_balance_seconds >= 0),
+                joined_at TEXT NOT NULL,
+                expires_at TEXT,
+                created_by_user_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO members (
+                member_id, member_code, username, full_name, phone_number,
+                pin_hash, status, time_balance_seconds, joined_at, created_at, updated_at
+            )
+            VALUES (
+                'member-old-1', 'SG-OLD0001', 'oldmember', 'Old Member', NULL,
+                'hash', 'active', 4321, ?, ?, ?
+            )
+            """,
+            (now, now, now),
+        )
+        connection.execute(
+            """
+            CREATE TABLE rate_profiles (
+                rate_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                duration_seconds INTEGER NOT NULL CHECK (duration_seconds > 0),
+                price TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                rate_type TEXT NOT NULL DEFAULT 'package' CHECK (
+                    rate_type IN ('metered', 'package')
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO rate_profiles (
+                rate_id, name, duration_seconds, price, is_active, sort_order,
+                rate_type, created_at, updated_at
+            )
+            VALUES (
+                'rate-30-minutes', '30 Minutes', 1800, '0.00', 1, 10,
+                'package', ?, ?
+            )
+            """,
+            (now, now),
+        )
+        connection.execute(
+            """
+            CREATE TABLE membership_products (
+                product_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                price TEXT NOT NULL,
+                time_seconds INTEGER NOT NULL CHECK (time_seconds > 0),
+                product_type TEXT NOT NULL CHECK (
+                    product_type IN ('initial_membership', 'member_topup')
+                ),
+                is_active INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO membership_products (
+                product_id, name, price, time_seconds, product_type,
+                is_active, sort_order, created_at, updated_at
+            )
+            VALUES
+                ('membership-fee', 'Membership Fee', '100.00', 21600, 'initial_membership', 1, 10, ?, ?),
+                ('member-promo', 'Member Promo (owner-edited)', '75.00', 18000, 'member_topup', 1, 20, ?, ?)
+            """,
+            (now, now, now, now),
+        )
+        connection.execute(
+            """
+            CREATE TABLE member_time_transactions (
+                transaction_id TEXT PRIMARY KEY,
+                member_id TEXT NOT NULL,
+                transaction_type TEXT NOT NULL CHECK (
+                    transaction_type IN (
+                        'membership_purchase',
+                        'promo_topup',
+                        'purchase_refund',
+                        'session_reservation_created',
+                        'session_usage_finalized',
+                        'session_reservation_released',
+                        'session_reservation',
+                        'session_refund',
+                        'manual_adjustment',
+                        'expiration_adjustment'
+                    )
+                ),
+                seconds_delta INTEGER NOT NULL,
+                balance_before_seconds INTEGER NOT NULL,
+                balance_after_seconds INTEGER NOT NULL CHECK (balance_after_seconds >= 0),
+                amount_paid TEXT,
+                related_session_id TEXT,
+                related_payment_id TEXT,
+                notes TEXT,
+                performed_by_user_id TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO member_time_transactions (
+                transaction_id, member_id, transaction_type, seconds_delta,
+                balance_before_seconds, balance_after_seconds, created_at
+            )
+            VALUES (
+                'txn-old-1', 'member-old-1', 'membership_purchase', 21600,
+                0, 21600, ?
+            )
+            """,
+            (now,),
+        )
+        connection.execute(
+            """
+            CREATE TABLE member_time_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                member_id TEXT NOT NULL,
+                session_id TEXT NOT NULL UNIQUE,
+                reserved_seconds INTEGER NOT NULL CHECK (reserved_seconds > 0),
+                consumed_seconds INTEGER NOT NULL DEFAULT 0 CHECK (consumed_seconds >= 0),
+                status TEXT NOT NULL CHECK (status IN ('active', 'finalized', 'released')),
+                created_at TEXT NOT NULL,
+                finalized_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO member_time_reservations (
+                reservation_id, member_id, session_id, reserved_seconds,
+                consumed_seconds, status, created_at, finalized_at
+            )
+            VALUES (
+                'reservation-old-1', 'member-old-1', 'session-completed', 1800,
+                1800, 'finalized', ?, ?
+            )
+            """,
+            (now, now),
+        )
         connection.commit()
     finally:
         connection.close()
@@ -305,6 +475,75 @@ def main() -> None:
             ).fetchone()["status"]
             assert stranded_status == "settlement_pending"
 
+            # Standard/VIP snapshot columns: every pre-existing session
+            # (including the one that just went through the state-machine
+            # rebuild) is correctly backfilled as Standard with no
+            # conversion, since VIP consumption did not exist before now.
+            for session_id in ("session-active", "session-stranded", "session-completed"):
+                row = connection.execute(
+                    "SELECT station_type, conversion_applied, vip_seconds_consumed, "
+                    "standard_seconds_consumed_at_vip_rate FROM sessions WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                assert row["station_type"] == "standard"
+                assert row["conversion_applied"] == 0
+                assert row["vip_seconds_consumed"] is None
+                assert row["standard_seconds_consumed_at_vip_rate"] is None
+
+            # members: existing balance untouched, new VIP balance defaults to 0.
+            member_row = connection.execute(
+                "SELECT time_balance_seconds, vip_balance_seconds FROM members WHERE member_id = 'member-old-1'"
+            ).fetchone()
+            assert member_row["time_balance_seconds"] == 4321
+            assert member_row["vip_balance_seconds"] == 0
+
+            # rate_profiles: existing rate untouched, new columns default to
+            # the Standard/guest/member-eligible/no-window baseline.
+            rate_row = connection.execute(
+                "SELECT price, station_scope, guest_only, member_eligible, "
+                "eligible_start_local_time, eligible_end_local_time "
+                "FROM rate_profiles WHERE rate_id = 'rate-30-minutes'"
+            ).fetchone()
+            assert rate_row["price"] == "0.00"
+            assert rate_row["station_scope"] == "standard"
+            assert rate_row["guest_only"] == 0
+            assert rate_row["member_eligible"] == 1
+            assert rate_row["eligible_start_local_time"] is None
+            assert rate_row["eligible_end_local_time"] is None
+
+            # membership_products: existing prices (including the
+            # deliberately "owner-edited" member-promo row) are untouched;
+            # both default to the Standard balance type.
+            fee_row = connection.execute(
+                "SELECT price, time_seconds, balance_type FROM membership_products WHERE product_id = 'membership-fee'"
+            ).fetchone()
+            assert fee_row["price"] == "100.00"
+            assert fee_row["time_seconds"] == 21600
+            assert fee_row["balance_type"] == "standard"
+            promo_row = connection.execute(
+                "SELECT price, time_seconds, balance_type FROM membership_products WHERE product_id = 'member-promo'"
+            ).fetchone()
+            assert promo_row["price"] == "75.00"
+            assert promo_row["time_seconds"] == 18000
+            assert promo_row["balance_type"] == "standard"
+
+            # member_time_transactions: existing ledger row backfilled Standard.
+            txn_row = connection.execute(
+                "SELECT balance_type FROM member_time_transactions WHERE transaction_id = 'txn-old-1'"
+            ).fetchone()
+            assert txn_row["balance_type"] == "standard"
+
+            # member_time_reservations: existing reservation untouched, new
+            # VIP reservation columns default to 0.
+            reservation_row = connection.execute(
+                "SELECT reserved_seconds, consumed_seconds, reserved_vip_seconds, consumed_vip_seconds "
+                "FROM member_time_reservations WHERE reservation_id = 'reservation-old-1'"
+            ).fetchone()
+            assert reservation_row["reserved_seconds"] == 1800
+            assert reservation_row["consumed_seconds"] == 1800
+            assert reservation_row["reserved_vip_seconds"] == 0
+            assert reservation_row["consumed_vip_seconds"] == 0
+
             connection.execute(
                 "UPDATE sessions SET status = 'ending' WHERE session_id = 'session-active'"
             )
@@ -338,6 +577,92 @@ def main() -> None:
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         finally:
             connection.close()
+
+        # seed_required_default_pricing() is not yet wired into
+        # initialize_database() (see server/database.py), but it must be
+        # safe to run repeatedly against an already-configured shop: create
+        # only what's missing, by fixed id, and never touch an existing row
+        # -- including the pre-existing 'membership-fee'/'member-promo'
+        # rows and the "owner-edited" member-promo price seeded above.
+        from server.database import get_connection, seed_required_default_pricing
+
+        with get_connection() as connection:
+            seed_required_default_pricing(connection)
+
+        with get_connection() as connection:
+            rate_count_after_first_seed = connection.execute(
+                "SELECT COUNT(*) FROM rate_profiles"
+            ).fetchone()[0]
+            product_count_after_first_seed = connection.execute(
+                "SELECT COUNT(*) FROM membership_products"
+            ).fetchone()[0]
+
+            for rate_id, expected_price, expected_duration in [
+                ("rate-standard-guest-5", "5.00", 1200),
+                ("rate-standard-guest-10", "10.00", 2400),
+                ("rate-standard-guest-15", "15.00", 3600),
+                ("rate-standard-midnight-promo", "10.00", 3600),
+                ("rate-vip-guest-1hr", "30.00", 3600),
+            ]:
+                row = connection.execute(
+                    "SELECT price, duration_seconds FROM rate_profiles WHERE rate_id = ?",
+                    (rate_id,),
+                ).fetchone()
+                assert row is not None, f"{rate_id} was not created"
+                assert row["price"] == expected_price
+                assert row["duration_seconds"] == expected_duration
+
+            midnight_row = connection.execute(
+                "SELECT station_scope, guest_only, member_eligible, "
+                "eligible_start_local_time, eligible_end_local_time "
+                "FROM rate_profiles WHERE rate_id = 'rate-standard-midnight-promo'"
+            ).fetchone()
+            assert midnight_row["station_scope"] == "standard"
+            assert midnight_row["guest_only"] == 1
+            assert midnight_row["member_eligible"] == 0
+            assert midnight_row["eligible_start_local_time"] == "00:00"
+            assert midnight_row["eligible_end_local_time"] == "05:00"
+
+            vip_guest_row = connection.execute(
+                "SELECT station_scope FROM rate_profiles WHERE rate_id = 'rate-vip-guest-1hr'"
+            ).fetchone()
+            assert vip_guest_row["station_scope"] == "vip"
+
+            for product_id, expected_price, expected_seconds, expected_balance_type in [
+                ("member-topup-100", "100.00", 28800, "standard"),
+                ("vip-promo-250", "250.00", 36000, "vip"),
+            ]:
+                row = connection.execute(
+                    "SELECT price, time_seconds, balance_type FROM membership_products WHERE product_id = ?",
+                    (product_id,),
+                ).fetchone()
+                assert row is not None, f"{product_id} was not created"
+                assert row["price"] == expected_price
+                assert row["time_seconds"] == expected_seconds
+                assert row["balance_type"] == expected_balance_type
+
+            # The pre-existing, "owner-edited" member-promo row must remain
+            # exactly as it was -- never reset back to the confirmed P50/4h
+            # default just because that default shares its id.
+            promo_row = connection.execute(
+                "SELECT price, time_seconds FROM membership_products WHERE product_id = 'member-promo'"
+            ).fetchone()
+            assert promo_row["price"] == "75.00"
+            assert promo_row["time_seconds"] == 18000
+
+        # Re-running must never duplicate a row.
+        with get_connection() as connection:
+            seed_required_default_pricing(connection)
+
+        with get_connection() as connection:
+            rate_count_after_second_seed = connection.execute(
+                "SELECT COUNT(*) FROM rate_profiles"
+            ).fetchone()[0]
+            product_count_after_second_seed = connection.execute(
+                "SELECT COUNT(*) FROM membership_products"
+            ).fetchone()[0]
+            assert rate_count_after_second_seed == rate_count_after_first_seed
+            assert product_count_after_second_seed == product_count_after_first_seed
 
         print("Migration smoke test passed.")
 

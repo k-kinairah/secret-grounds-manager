@@ -1,18 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "@/app/page.module.css";
-import { fetchMembers } from "@/lib/api";
-import { calculatePreviewSeconds } from "@/lib/sessionSelection";
+import { fetchMemberVipPreview, fetchMembers } from "@/lib/api";
 import { formatMoney, formatNaturalDuration, formatRateDuration, minutesToSeconds } from "@/lib/time";
-import type { CurrentUser, MemberRecord, MemberSessionSelection, PaymentMethod, PcSummary, PrepaidSessionSelection, RateProfile } from "@/lib/types";
+import type {
+  CurrentUser,
+  MemberRecord,
+  MemberSessionSelection,
+  MemberVipPlayablePreview,
+  PaymentMethod,
+  PcSummary,
+  PrepaidSessionSelection,
+  RateProfile
+} from "@/lib/types";
 
 type DialogMode = "start" | "add";
-type SelectionTab = "amount" | "packages" | "member" | "open_time";
-type SessionSelection = PrepaidSessionSelection | MemberSessionSelection | { sessionMode: "open_time" };
+type SelectionTab = "packages" | "member";
+type SessionSelection = PrepaidSessionSelection | MemberSessionSelection;
 
 interface SessionDialogProps {
   mode: DialogMode;
   pc: PcSummary;
-  meteredRate: RateProfile | null;
   packageRates: RateProfile[];
   isLoading: boolean;
   onCancel: () => void;
@@ -20,8 +27,6 @@ interface SessionDialogProps {
   currentOperator?: CurrentUser | null;
   operators?: CurrentUser[];
 }
-
-const quickAmounts = ["5.00", "10.00", "20.00", "50.00"];
 
 function createIdempotencyKey() {
   return globalThis.crypto?.randomUUID?.() ?? `session-payment-${Date.now()}-${Math.random()}`;
@@ -42,15 +47,13 @@ function getChangeState(amount: string, cashReceived: string): { label: string; 
 export function SessionDialog({
   mode,
   pc,
-  meteredRate,
   packageRates,
   isLoading,
   onCancel,
   onConfirm,
   currentOperator
 }: SessionDialogProps) {
-  const [activeTab, setActiveTab] = useState<SelectionTab>("amount");
-  const [amount, setAmount] = useState("");
+  const [activeTab, setActiveTab] = useState<SelectionTab>("packages");
   const [selectedRateId, setSelectedRateId] = useState<string | "custom">(
     packageRates[0]?.rate_id ?? "custom"
   );
@@ -66,22 +69,13 @@ export function SessionDialog({
   const [validationError, setValidationError] = useState("");
   const [useMemberCap, setUseMemberCap] = useState(false);
   const [memberMinutes, setMemberMinutes] = useState("60");
-  const amountRef = useRef<HTMLInputElement | null>(null);
+  const [vipPreview, setVipPreview] = useState<MemberVipPlayablePreview | null>(null);
   const cashRef = useRef<HTMLInputElement | null>(null);
   const referenceRef = useRef<HTMLInputElement | null>(null);
   const idempotencyKeyRef = useRef(createIdempotencyKey());
   const title = mode === "start" ? `Start ${pc.pc_name}` : `Add time to ${pc.pc_name}`;
-  const previewSeconds = useMemo(
-    () => calculatePreviewSeconds(amount, meteredRate),
-    [amount, meteredRate]
-  );
   const selectedPackage = packageRates.find((rate) => rate.rate_id === selectedRateId);
-  const selectedPaymentAmount =
-    activeTab === "amount"
-      ? amount
-      : selectedRateId === "custom"
-        ? "0.00"
-        : selectedPackage?.price ?? "0.00";
+  const selectedPaymentAmount = selectedRateId === "custom" ? "0.00" : selectedPackage?.price ?? "0.00";
   const changeState = getChangeState(selectedPaymentAmount, cashReceived);
   const selectedMember = members.find((member) => member.member_id === selectedMemberId) ?? null;
   const memberDurationMinutes = Number(memberMinutes || "0");
@@ -119,6 +113,36 @@ export function SessionDialog({
     };
   }, [memberQuery, selectedMemberId]);
 
+  useEffect(() => {
+    let isMounted = true;
+    if (!pc.is_vip || !selectedMemberId) {
+      const timeoutId = window.setTimeout(() => {
+        if (isMounted) {
+          setVipPreview(null);
+        }
+      }, 0);
+      return () => {
+        isMounted = false;
+        window.clearTimeout(timeoutId);
+      };
+    }
+    const cap = useMemberCap && memberDurationSeconds > 0 ? memberDurationSeconds : undefined;
+    fetchMemberVipPreview(selectedMemberId, pc.pc_name, cap)
+      .then((preview) => {
+        if (isMounted) {
+          setVipPreview(preview);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setVipPreview(null);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [pc.is_vip, pc.pc_name, selectedMemberId, useMemberCap, memberDurationSeconds]);
+
   function buildPayment(paymentAmount: string) {
     return {
       payment_method: paymentMethod,
@@ -134,7 +158,6 @@ export function SessionDialog({
     const amountValue = Number(paymentAmount);
     if (!Number.isFinite(amountValue) || amountValue < 0) {
       setValidationError("Enter a valid payment amount.");
-      amountRef.current?.focus();
       return false;
     }
     if (amountValue === 0) {
@@ -171,12 +194,6 @@ export function SessionDialog({
     if (isLoading) {
       return;
     }
-    if (activeTab === "open_time") {
-      setValidationError("");
-      onConfirm({ sessionMode: "open_time" });
-      return;
-    }
-
     if (activeTab === "member") {
       if (
         !selectedMember ||
@@ -197,14 +214,6 @@ export function SessionDialog({
         durationSeconds: useMemberCap ? memberDurationSeconds : undefined,
         memberPin
       });
-      return;
-    }
-
-    if (activeTab === "amount") {
-      if (!validatePayment(amount)) {
-        return;
-      }
-      onConfirm({ amount, payment: buildPayment(amount) });
       return;
     }
 
@@ -241,15 +250,6 @@ export function SessionDialog({
         </div>
         <div className={styles.tabList} role="tablist" aria-label="Session selection method">
           <button
-            aria-selected={activeTab === "amount"}
-            className={`${styles.tabButton} ${activeTab === "amount" ? styles.tabActive : ""}`}
-            onClick={() => setActiveTab("amount")}
-            role="tab"
-            type="button"
-          >
-            Enter Amount
-          </button>
-          <button
             aria-selected={activeTab === "packages"}
             className={`${styles.tabButton} ${activeTab === "packages" ? styles.tabActive : ""}`}
             onClick={() => setActiveTab("packages")}
@@ -267,33 +267,9 @@ export function SessionDialog({
           >
             Member
           </button>
-          {mode === "start" ? (
-            <button
-              aria-selected={activeTab === "open_time"}
-              className={`${styles.tabButton} ${activeTab === "open_time" ? styles.tabActive : ""}`}
-              onClick={() => setActiveTab("open_time")}
-              role="tab"
-              type="button"
-            >
-              Open Time
-            </button>
-          ) : null}
         </div>
 
-        {activeTab === "open_time" ? (
-          <div className={styles.amountPreview} role="tabpanel">
-            <span>Open Time</span>
-            <strong>Charges are calculated from actual usage when the session ends.</strong>
-            <span>Current regular rate</span>
-            <strong>
-              {meteredRate
-                ? `${formatMoney(meteredRate.price)} = ${formatRateDuration(
-                    meteredRate.duration_seconds
-                  )}`
-                : "No active metered rate"}
-            </strong>
-          </div>
-        ) : activeTab === "member" ? (
+        {activeTab === "member" ? (
           <div className={styles.amountPanel} role="tabpanel">
             <label className={styles.field}>
               Search username
@@ -329,7 +305,7 @@ export function SessionDialog({
               />
             </label>
             <div className={styles.amountPreview}>
-              <span>Member Open Time</span>
+              <span>Member Balance</span>
               <strong>Only the time actually used will be deducted.</strong>
             </div>
             <label className={styles.field}>
@@ -365,6 +341,24 @@ export function SessionDialog({
                 </label>
               </>
             ) : null}
+            {pc.is_vip ? (
+              <div className={styles.amountPreview}>
+                <span>Playable on VIP</span>
+                <strong>
+                  {!selectedMember
+                    ? "Select a member"
+                    : vipPreview
+                      ? `${formatNaturalDuration(vipPreview.playable_seconds)}${
+                          vipPreview.playable_seconds > 0
+                            ? ` (${formatNaturalDuration(vipPreview.vip_seconds)} VIP + ${formatNaturalDuration(
+                                vipPreview.standard_seconds
+                              )} Standard)`
+                            : ""
+                        }${vipPreview.playable_seconds <= 0 ? " -- insufficient balance" : ""}`
+                      : "Calculating..."}
+                </strong>
+              </div>
+            ) : null}
             <div className={styles.amountPreview}>
               <span>Balance preview</span>
               <strong>
@@ -381,44 +375,6 @@ export function SessionDialog({
                         selectedMember.time_balance_seconds
                       )}. Session can continue until ended or balance is exhausted.`
                   : "Select a member"}
-              </strong>
-            </div>
-          </div>
-        ) : activeTab === "amount" ? (
-          <div className={styles.amountPanel} role="tabpanel">
-            <label className={styles.moneyField}>
-              Amount
-              <span>
-                ₱
-                <input
-                  ref={amountRef}
-                  inputMode="decimal"
-                  onChange={(event) => setAmount(event.target.value)}
-                  placeholder="20.00"
-                  value={amount}
-                />
-              </span>
-            </label>
-            <div className={styles.quickAmountRow}>
-              {quickAmounts.map((quickAmount) => (
-                <button key={quickAmount} onClick={() => setAmount(quickAmount)} type="button">
-                  {formatMoney(quickAmount)}
-                </button>
-              ))}
-            </div>
-            <div className={styles.amountPreview}>
-              <span>Active base rate</span>
-              <strong>
-                {meteredRate
-                  ? `${formatMoney(meteredRate.price)} = ${formatRateDuration(
-                      meteredRate.duration_seconds
-                    )}`
-                  : "No active metered rate"}
-              </strong>
-              <span>Preview</span>
-              <strong>
-                Amount: {amount ? formatMoney(amount) : formatMoney(0)} · Time:{" "}
-                {previewSeconds ? formatRateDuration(previewSeconds) : "Enter an amount"}
               </strong>
             </div>
           </div>
@@ -445,7 +401,7 @@ export function SessionDialog({
           </div>
         )}
 
-        {activeTab !== "open_time" && activeTab !== "member" ? (
+        {activeTab !== "member" ? (
           <div className={styles.paymentBox}>
             <label className={styles.field}>
               Payment method

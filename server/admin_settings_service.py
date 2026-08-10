@@ -346,3 +346,7 @@ class AdminSettingsService:
 
 def get_runtime_expiration_grace_seconds() -> int:
     return AdminSettingsService().get_settings().sessions.expiration_grace_seconds
+
+
+def get_runtime_shop_timezone_display() -> str:
+    return AdminSettingsService().get_settings().general.timezone_display

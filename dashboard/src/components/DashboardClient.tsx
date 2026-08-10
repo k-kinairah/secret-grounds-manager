@@ -18,11 +18,11 @@ import {
   retryPreparedWake,
   updatePcLayout,
   startMemberSession,
-  startOpenTimeSession,
   startPrepaidSession,
   addMemberTime,
   addPrepaidTime
 } from "@/lib/api";
+import { getPackageRatesForPc } from "@/lib/packageEligibility";
 import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
 import { calculateOpenTimeEstimate, secondsFromScheduledEnd } from "@/lib/time";
 import type { CurrentUser, MessageSeverity, PcLayoutSlot, PcSummary, RateProfile } from "@/lib/types";
@@ -192,14 +192,6 @@ export function DashboardClient() {
     }
     return Array.from(groups.entries());
   }, [layoutSlots]);
-  const meteredRate = useMemo(
-    () => rates.find((rate) => rate.rate_type === "metered" && rate.is_active) ?? null,
-    [rates]
-  );
-  const packageRates = useMemo(
-    () => rates.filter((rate) => rate.rate_type === "package" && rate.is_active),
-    [rates]
-  );
 
   async function runAction(action: () => Promise<unknown>, successMessage: string) {
     setIsMutating(true);
@@ -553,16 +545,9 @@ export function DashboardClient() {
             void runAction(
               () =>
                 "sessionMode" in selection
-                  ? selection.sessionMode === "open_time"
-                    ? dialog.pc.connection_status === "offline"
-                      ? prepareStartupSession(dialog.pc.pc_name, {
-                          sessionMode: "open_time",
-                          operatorId: currentUser?.user_id
-                        })
-                      : startOpenTimeSession(dialog.pc.pc_name)
-                    : dialog.pc.connection_status === "offline"
-                      ? prepareStartupSession(dialog.pc.pc_name, selection)
-                      : startMemberSession(dialog.pc.pc_name, selection)
+                  ? dialog.pc.connection_status === "offline"
+                    ? prepareStartupSession(dialog.pc.pc_name, selection)
+                    : startMemberSession(dialog.pc.pc_name, selection)
                   : dialog.pc.connection_status === "offline"
                     ? prepareStartupSession(dialog.pc.pc_name, {
                         ...selection,
@@ -575,8 +560,7 @@ export function DashboardClient() {
             )
           }
           pc={dialog.pc}
-          meteredRate={meteredRate}
-          packageRates={packageRates}
+          packageRates={getPackageRatesForPc(rates, dialog.pc)}
           currentOperator={currentUser}
         />
       ) : null}
@@ -596,16 +580,13 @@ export function DashboardClient() {
             void runAction(
               () =>
                 "sessionMode" in selection
-                  ? selection.sessionMode === "member_balance"
-                    ? addMemberTime(currentPc.active_session_id as string, selection)
-                    : Promise.reject(new Error("Open-time sessions do not support add time."))
+                  ? addMemberTime(currentPc.active_session_id as string, selection)
                   : addPrepaidTime(currentPc.active_session_id as string, selection),
               `${currentPc.pc_name} time updated.`
             );
           }}
           pc={dialog.pc}
-          meteredRate={meteredRate}
-          packageRates={packageRates}
+          packageRates={getPackageRatesForPc(rates, dialog.pc)}
         />
       ) : null}
 

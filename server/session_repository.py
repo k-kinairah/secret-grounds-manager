@@ -78,6 +78,18 @@ def row_to_session(row: Any) -> SessionRecord:
             else None
         ),
         customer_locked=bool(row["customer_locked"]) if "customer_locked" in row.keys() else False,
+        station_type=row["station_type"] if "station_type" in row.keys() else "standard",
+        vip_seconds_consumed=(
+            row["vip_seconds_consumed"] if "vip_seconds_consumed" in row.keys() else None
+        ),
+        standard_seconds_consumed_at_vip_rate=(
+            row["standard_seconds_consumed_at_vip_rate"]
+            if "standard_seconds_consumed_at_vip_rate" in row.keys()
+            else None
+        ),
+        conversion_applied=(
+            bool(row["conversion_applied"]) if "conversion_applied" in row.keys() else False
+        ),
     )
 
 
@@ -139,9 +151,13 @@ class SessionRepository:
                     member_balance_after_seconds,
                     grace_started_at,
                     shutdown_at,
-                    customer_locked
+                    customer_locked,
+                    station_type,
+                    vip_seconds_consumed,
+                    standard_seconds_consumed_at_vip_rate,
+                    conversion_applied
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.session_id,
@@ -178,6 +194,10 @@ class SessionRepository:
                     datetime_to_storage(session.grace_started_at),
                     datetime_to_storage(session.shutdown_at),
                     1 if session.customer_locked else 0,
+                    session.station_type,
+                    session.vip_seconds_consumed,
+                    session.standard_seconds_consumed_at_vip_rate,
+                    1 if session.conversion_applied else 0,
                 ),
             )
 
@@ -327,7 +347,11 @@ class SessionRepository:
                     member_balance_after_seconds = ?,
                     grace_started_at = ?,
                     shutdown_at = ?,
-                    customer_locked = ?
+                    customer_locked = ?,
+                    station_type = ?,
+                    vip_seconds_consumed = ?,
+                    standard_seconds_consumed_at_vip_rate = ?,
+                    conversion_applied = ?
                 WHERE session_id = ?
                 """,
                 (
@@ -364,6 +388,10 @@ class SessionRepository:
                     datetime_to_storage(session.grace_started_at),
                     datetime_to_storage(session.shutdown_at),
                     1 if session.customer_locked else 0,
+                    session.station_type,
+                    session.vip_seconds_consumed,
+                    session.standard_seconds_consumed_at_vip_rate,
+                    1 if session.conversion_applied else 0,
                     session.session_id,
                 ),
             )

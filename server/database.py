@@ -269,6 +269,9 @@ SESSION_STATUS_VALUES = (
 )
 
 
+STANDARD_OR_VIP_VALUES = ("standard", "vip")
+
+
 SESSION_COLUMN_DEFINITIONS = {
     "session_id": "TEXT PRIMARY KEY",
     "pc_name": "TEXT NOT NULL",
@@ -303,6 +306,10 @@ SESSION_COLUMN_DEFINITIONS = {
     "grace_started_at": "TEXT",
     "shutdown_at": "TEXT",
     "customer_locked": "INTEGER NOT NULL DEFAULT 0",
+    "station_type": "TEXT NOT NULL DEFAULT 'standard'",
+    "vip_seconds_consumed": "INTEGER",
+    "standard_seconds_consumed_at_vip_rate": "INTEGER",
+    "conversion_applied": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -314,6 +321,8 @@ SESSION_COLUMN_DEFAULT_SELECTS = {
     "session_mode": "'prepaid'",
     "settlement_pending": "0",
     "customer_locked": "0",
+    "station_type": "'standard'",
+    "conversion_applied": "0",
 }
 
 
@@ -607,6 +616,78 @@ def ensure_member_transactions_accept_purchase_refund(connection: sqlite3.Connec
         connection.execute(f"PRAGMA foreign_keys = {int(original_foreign_keys)}")
 
 
+def ensure_member_time_reservations_allow_zero_standard(connection: sqlite3.Connection) -> None:
+    """A VIP-only reservation (the member's VIP balance alone covers the
+    whole session) legitimately has reserved_seconds == 0 for its Standard
+    side. The original CHECK (reserved_seconds > 0) -- written before VIP
+    reservations existed -- rejects that. Relaxes it to >= 0, matching
+    consumed_seconds' existing bound, while preserving every row and index."""
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'member_time_reservations'"
+    ).fetchone()
+    table_sql = row["sql"] if row is not None else None
+    if table_sql is None or "CHECK (reserved_seconds > 0)" not in table_sql:
+        return
+
+    index_rows = connection.execute(
+        """
+        SELECT sql FROM sqlite_master
+        WHERE type = 'index' AND tbl_name = 'member_time_reservations' AND sql IS NOT NULL
+        """
+    ).fetchall()
+    index_sql_statements = [index_row["sql"] for index_row in index_rows]
+
+    original_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    connection.commit()
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute("BEGIN")
+    try:
+        connection.execute("ALTER TABLE member_time_reservations RENAME TO member_time_reservations_old")
+        connection.execute(
+            """
+            CREATE TABLE member_time_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                member_id TEXT NOT NULL,
+                session_id TEXT NOT NULL UNIQUE,
+                reserved_seconds INTEGER NOT NULL CHECK (reserved_seconds >= 0),
+                consumed_seconds INTEGER NOT NULL DEFAULT 0 CHECK (consumed_seconds >= 0),
+                reserved_vip_seconds INTEGER NOT NULL DEFAULT 0,
+                consumed_vip_seconds INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL CHECK (status IN ('active', 'finalized', 'released')),
+                created_at TEXT NOT NULL,
+                finalized_at TEXT,
+                FOREIGN KEY (member_id) REFERENCES members(member_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO member_time_reservations (
+                reservation_id, member_id, session_id, reserved_seconds, consumed_seconds,
+                reserved_vip_seconds, consumed_vip_seconds, status, created_at, finalized_at
+            )
+            SELECT
+                reservation_id, member_id, session_id, reserved_seconds, consumed_seconds,
+                reserved_vip_seconds, consumed_vip_seconds, status, created_at, finalized_at
+            FROM member_time_reservations_old
+            """
+        )
+        connection.execute("DROP TABLE member_time_reservations_old")
+        for index_sql in index_sql_statements:
+            connection.execute(index_sql)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {int(original_foreign_keys)}")
+
+    violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError("member_time_reservations migration left invalid foreign key references")
+
+
 def ensure_sessions_accept_state_machine_statuses(connection: sqlite3.Connection) -> None:
     row = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'"
@@ -822,6 +903,172 @@ def seed_default_membership_products(connection: sqlite3.Connection) -> None:
     )
 
 
+# Owner-confirmed default pricing. Each row has a fixed, permanent id.
+# seed_required_default_pricing() inserts a row only when that exact id is
+# still absent -- unlike seed_default_rates/seed_default_membership_products
+# above (which only ever run once, against a completely empty table), this
+# is designed to run on every startup against an already-configured shop
+# without ever duplicating a row or overwriting a price/duration an owner
+# has since edited under one of these ids.
+REQUIRED_DEFAULT_RATES = [
+    # (rate_id, name, duration_seconds, price, sort_order, station_scope,
+    #  guest_only, member_eligible, eligible_start_local_time, eligible_end_local_time)
+    (
+        "rate-standard-guest-5", "Standard Guest - P5 (20 Minutes)", 20 * 60, "5.00", 1,
+        "standard", 0, 1, None, None,
+    ),
+    (
+        "rate-standard-guest-10", "Standard Guest - P10 (40 Minutes)", 40 * 60, "10.00", 2,
+        "standard", 0, 1, None, None,
+    ),
+    (
+        "rate-standard-guest-15", "Standard Guest - P15 (1 Hour)", 60 * 60, "15.00", 3,
+        "standard", 0, 1, None, None,
+    ),
+    (
+        "rate-standard-midnight-promo", "Standard Midnight Promo", 60 * 60, "10.00", 4,
+        "standard", 1, 0, "00:00", "05:00",
+    ),
+    (
+        "rate-vip-guest-1hr", "VIP Guest - P30 (1 Hour)", 60 * 60, "30.00", 5,
+        "vip", 0, 1, None, None,
+    ),
+]
+
+REQUIRED_DEFAULT_MEMBERSHIP_PRODUCTS = [
+    # (product_id, name, price, time_seconds, product_type, balance_type, sort_order, is_active)
+    ("membership-fee", "Membership Fee", "100.00", 6 * 60 * 60, "initial_membership", "standard", 10, 1),
+    ("member-promo", "Standard Top-up", "50.00", 4 * 60 * 60, "member_topup", "standard", 20, 1),
+    ("member-topup-100", "Standard Top-up", "100.00", 8 * 60 * 60, "member_topup", "standard", 30, 1),
+    # Stage 3 implements and tests VIP balance purchase/credit, so this
+    # seeds active for any shop installing fresh from this point on. A shop
+    # upgrading from a Stage 2 install (where this was seeded inactive) is
+    # handled separately by activate_vip_promo_product_if_untouched below,
+    # since this insert is skipped once the row already exists.
+    ("vip-promo-250", "VIP Member Promo", "250.00", 10 * 60 * 60, "member_topup", "vip", 40, 1),
+]
+
+
+def seed_required_default_pricing(connection: sqlite3.Connection) -> None:
+    """Idempotently create the owner-confirmed default rates/products.
+
+    Per-item idempotency by fixed id: a row is inserted only when that exact
+    id does not already exist. This never overwrites an owner-edited price
+    or duration (including the pre-existing 'membership-fee'/'member-promo'
+    defaults, which already satisfy the confirmed Create Account and P50
+    top-up rules and are intentionally left untouched), and re-running this
+    on every startup can never create a duplicate or reactivate a row an
+    owner has since disabled (an existing id is always skipped, never
+    updated).
+    """
+    now = current_utc_time().isoformat()
+
+    for (
+        rate_id,
+        name,
+        duration_seconds,
+        price,
+        sort_order,
+        station_scope,
+        guest_only,
+        member_eligible,
+        eligible_start_local_time,
+        eligible_end_local_time,
+    ) in REQUIRED_DEFAULT_RATES:
+        existing = connection.execute(
+            "SELECT 1 FROM rate_profiles WHERE rate_id = ?",
+            (rate_id,),
+        ).fetchone()
+        if existing is not None:
+            continue
+        connection.execute(
+            """
+            INSERT INTO rate_profiles (
+                rate_id, name, duration_seconds, price, is_active, sort_order,
+                rate_type, station_scope, guest_only, member_eligible,
+                eligible_start_local_time, eligible_end_local_time,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, 1, ?, 'package', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rate_id,
+                name,
+                duration_seconds,
+                price,
+                sort_order,
+                station_scope,
+                guest_only,
+                member_eligible,
+                eligible_start_local_time,
+                eligible_end_local_time,
+                now,
+                now,
+            ),
+        )
+
+    for (
+        product_id,
+        name,
+        price,
+        time_seconds,
+        product_type,
+        balance_type,
+        sort_order,
+        is_active,
+    ) in REQUIRED_DEFAULT_MEMBERSHIP_PRODUCTS:
+        existing = connection.execute(
+            "SELECT 1 FROM membership_products WHERE product_id = ?",
+            (product_id,),
+        ).fetchone()
+        if existing is not None:
+            continue
+        connection.execute(
+            """
+            INSERT INTO membership_products (
+                product_id, name, price, time_seconds, product_type,
+                balance_type, is_active, sort_order, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                product_id,
+                name,
+                price,
+                time_seconds,
+                product_type,
+                balance_type,
+                is_active,
+                sort_order,
+                now,
+                now,
+            ),
+        )
+
+
+def activate_vip_promo_product_if_untouched(connection: sqlite3.Connection) -> None:
+    """One-time Stage 2 -> Stage 3 transition.
+
+    vip-promo-250 was seeded inactive in Stage 2 because the purchase/credit
+    logic did not exist yet (see REQUIRED_DEFAULT_MEMBERSHIP_PRODUCTS).
+    Stage 3 implements and tests that logic, so this activates it -- but
+    only if nobody has touched the row since it was seeded (updated_at
+    still equals created_at). Once active, is_active=1 means this WHERE
+    clause never matches again, so an owner who later disables the product
+    is never silently overridden by a future restart re-running this.
+    """
+    connection.execute(
+        """
+        UPDATE membership_products
+        SET is_active = 1, updated_at = ?
+        WHERE product_id = 'vip-promo-250'
+          AND is_active = 0
+          AND updated_at = created_at
+        """,
+        (current_utc_time().isoformat(),),
+    )
+
+
 def seed_default_pc_layouts(connection: sqlite3.Connection) -> None:
     existing_count = connection.execute(
         "SELECT COUNT(*) FROM pc_layouts"
@@ -991,6 +1238,11 @@ def initialize_database() -> None:
                 rate_type TEXT NOT NULL DEFAULT 'package' CHECK (
                     rate_type IN ('metered', 'package')
                 ),
+                station_scope TEXT NOT NULL DEFAULT 'standard',
+                guest_only INTEGER NOT NULL DEFAULT 0,
+                member_eligible INTEGER NOT NULL DEFAULT 1,
+                eligible_start_local_time TEXT,
+                eligible_end_local_time TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -1001,6 +1253,39 @@ def initialize_database() -> None:
             "rate_profiles",
             "rate_type",
             "TEXT NOT NULL DEFAULT 'package'",
+        )
+        # Standard/VIP package scoping (see server/balance_conversion.py).
+        # Metered/Open Time rates are retired for active use -- these
+        # columns are only ever meaningful for rate_type='package' rows.
+        add_column_if_missing(
+            connection,
+            "rate_profiles",
+            "station_scope",
+            "TEXT NOT NULL DEFAULT 'standard'",
+        )
+        add_column_if_missing(
+            connection,
+            "rate_profiles",
+            "guest_only",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        add_column_if_missing(
+            connection,
+            "rate_profiles",
+            "member_eligible",
+            "INTEGER NOT NULL DEFAULT 1",
+        )
+        add_column_if_missing(
+            connection,
+            "rate_profiles",
+            "eligible_start_local_time",
+            "TEXT",
+        )
+        add_column_if_missing(
+            connection,
+            "rate_profiles",
+            "eligible_end_local_time",
+            "TEXT",
         )
         connection.execute(
             """
@@ -1091,7 +1376,11 @@ def initialize_database() -> None:
                 settlement_pending INTEGER NOT NULL DEFAULT 0,
                 grace_started_at TEXT,
                 shutdown_at TEXT,
-                customer_locked INTEGER NOT NULL DEFAULT 0
+                customer_locked INTEGER NOT NULL DEFAULT 0,
+                station_type TEXT NOT NULL DEFAULT 'standard',
+                vip_seconds_consumed INTEGER,
+                standard_seconds_consumed_at_vip_rate INTEGER,
+                conversion_applied INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -1153,6 +1442,20 @@ def initialize_database() -> None:
         add_column_if_missing(connection, "sessions", "member_balance_before_seconds", "INTEGER")
         add_column_if_missing(connection, "sessions", "member_balance_after_seconds", "INTEGER")
         add_column_if_missing(connection, "sessions", "customer_locked", "INTEGER NOT NULL DEFAULT 0")
+        # Standard/VIP balance-source snapshot -- written once at session
+        # finalization from server/balance_conversion.py, never recomputed
+        # from current (drifted) member balances. Historical sessions from
+        # before this column existed are correctly backfilled as 'standard'
+        # with no conversion, since VIP consumption did not exist yet.
+        add_column_if_missing(connection, "sessions", "station_type", "TEXT NOT NULL DEFAULT 'standard'")
+        add_column_if_missing(connection, "sessions", "vip_seconds_consumed", "INTEGER")
+        add_column_if_missing(
+            connection,
+            "sessions",
+            "standard_seconds_consumed_at_vip_rate",
+            "INTEGER",
+        )
+        add_column_if_missing(connection, "sessions", "conversion_applied", "INTEGER NOT NULL DEFAULT 0")
         connection.execute(
             """
             UPDATE sessions
@@ -1413,6 +1716,7 @@ def initialize_database() -> None:
                 pin_locked_until TEXT,
                 status TEXT NOT NULL CHECK (status IN ('active', 'inactive')),
                 time_balance_seconds INTEGER NOT NULL CHECK (time_balance_seconds >= 0),
+                vip_balance_seconds INTEGER NOT NULL DEFAULT 0,
                 joined_at TEXT NOT NULL,
                 expires_at TEXT,
                 created_by_user_id TEXT,
@@ -1428,6 +1732,10 @@ def initialize_database() -> None:
         add_column_if_missing(connection, "members", "requires_account_setup", "INTEGER NOT NULL DEFAULT 1")
         add_column_if_missing(connection, "members", "pin_failed_attempts", "INTEGER NOT NULL DEFAULT 0")
         add_column_if_missing(connection, "members", "pin_locked_until", "TEXT")
+        # Separate, persistent VIP promo balance (server/balance_conversion.py).
+        # Existing members keep their time_balance_seconds (Standard balance)
+        # exactly as-is; VIP balance defaults to 0 for every existing member.
+        add_column_if_missing(connection, "members", "vip_balance_seconds", "INTEGER NOT NULL DEFAULT 0")
         connection.execute(
             """
             UPDATE members
@@ -1475,6 +1783,7 @@ def initialize_database() -> None:
                 notes TEXT,
                 performed_by_user_id TEXT,
                 created_at TEXT NOT NULL,
+                balance_type TEXT NOT NULL DEFAULT 'standard',
                 FOREIGN KEY (member_id) REFERENCES members(member_id),
                 FOREIGN KEY (related_session_id) REFERENCES sessions(session_id),
                 FOREIGN KEY (related_payment_id) REFERENCES payments(payment_id),
@@ -1484,14 +1793,19 @@ def initialize_database() -> None:
         )
         ensure_member_transactions_accept_reservation_events(connection)
         ensure_member_transactions_accept_purchase_refund(connection)
+        # Every historical ledger row predates VIP balance and is correctly
+        # backfilled as 'standard' by the column default.
+        add_column_if_missing(connection, "member_time_transactions", "balance_type", "TEXT NOT NULL DEFAULT 'standard'")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS member_time_reservations (
                 reservation_id TEXT PRIMARY KEY,
                 member_id TEXT NOT NULL,
                 session_id TEXT NOT NULL UNIQUE,
-                reserved_seconds INTEGER NOT NULL CHECK (reserved_seconds > 0),
+                reserved_seconds INTEGER NOT NULL CHECK (reserved_seconds >= 0),
                 consumed_seconds INTEGER NOT NULL DEFAULT 0 CHECK (consumed_seconds >= 0),
+                reserved_vip_seconds INTEGER NOT NULL DEFAULT 0,
+                consumed_vip_seconds INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL CHECK (status IN ('active', 'finalized', 'released')),
                 created_at TEXT NOT NULL,
                 finalized_at TEXT,
@@ -1500,6 +1814,12 @@ def initialize_database() -> None:
             )
             """
         )
+        # reserved_seconds/consumed_seconds remain the Standard-balance pair
+        # (unchanged meaning for Standard-PC sessions); the new vip_* pair is
+        # only ever populated for a VIP-PC session's reservation.
+        add_column_if_missing(connection, "member_time_reservations", "reserved_vip_seconds", "INTEGER NOT NULL DEFAULT 0")
+        add_column_if_missing(connection, "member_time_reservations", "consumed_vip_seconds", "INTEGER NOT NULL DEFAULT 0")
+        ensure_member_time_reservations_allow_zero_standard(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS membership_products (
@@ -1510,6 +1830,7 @@ def initialize_database() -> None:
                 product_type TEXT NOT NULL CHECK (
                     product_type IN ('initial_membership', 'member_topup')
                 ),
+                balance_type TEXT NOT NULL DEFAULT 'standard',
                 is_active INTEGER NOT NULL DEFAULT 1,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
@@ -1517,6 +1838,9 @@ def initialize_database() -> None:
             )
             """
         )
+        # Existing membership-fee/member-promo defaults predate VIP and are
+        # correctly backfilled as 'standard' by the column default.
+        add_column_if_missing(connection, "membership_products", "balance_type", "TEXT NOT NULL DEFAULT 'standard'")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS cashier_shifts (
@@ -1693,3 +2017,12 @@ def initialize_database() -> None:
         seed_default_membership_products(connection)
         seed_default_pc_layouts(connection)
         seed_family_operators(connection)
+        # Station/eligibility enforcement (server/rate_eligibility.py) is
+        # live as of Stage 2, so these owner-confirmed defaults are now safe
+        # to activate. Idempotent by fixed id -- see seed_required_default_pricing.
+        seed_required_default_pricing(connection)
+        # Stage 3: atomic purchase/credit + non-refundable enforcement are
+        # now implemented and tested, so the VIP promo product is safe to
+        # sell. See activate_vip_promo_product_if_untouched's docstring for
+        # why this never fights a later owner disable.
+        activate_vip_promo_product_if_untouched(connection)

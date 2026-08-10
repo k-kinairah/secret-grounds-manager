@@ -218,6 +218,8 @@ export interface RemoteCommandResponse {
   }>;
 }
 
+export type PackageStationScope = "standard" | "vip" | "any";
+
 export interface RateProfile {
   rate_id: string;
   name: string;
@@ -226,6 +228,11 @@ export interface RateProfile {
   rate_type: "metered" | "package";
   is_active: boolean;
   sort_order: number;
+  station_scope: PackageStationScope;
+  guest_only: boolean;
+  member_eligible: boolean;
+  eligible_start_local_time: string | null;
+  eligible_end_local_time: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -237,6 +244,7 @@ export interface RateProfileInput {
   rate_type?: "metered" | "package";
   sort_order: number;
   is_active?: boolean;
+  station_scope?: PackageStationScope;
 }
 
 export interface CalculatedTimeResponse {
@@ -691,6 +699,7 @@ export interface MemberRecord {
   requires_account_setup: boolean;
   status: "active" | "inactive";
   time_balance_seconds: number;
+  vip_balance_seconds: number;
   joined_at: string;
   expires_at: string | null;
   created_by_user_id: string | null;
@@ -704,6 +713,7 @@ export interface MembershipProduct {
   price: string;
   time_seconds: number;
   product_type: "initial_membership" | "member_topup";
+  balance_type: "standard" | "vip";
   is_active: boolean;
   sort_order: number;
   created_at: string;
@@ -724,6 +734,11 @@ export interface MemberTimeTransaction {
     | "session_refund"
     | "manual_adjustment"
     | "expiration_adjustment";
+  // Historical rows recorded before Stage 0 have no balance_type metadata
+  // at all in the API response's absence-sense -- but the backend always
+  // returns 'standard' for them (their fixed, correct backfilled value,
+  // never guessed client-side), so this is never optional here.
+  balance_type: "standard" | "vip";
   seconds_delta: number;
   balance_before_seconds: number;
   balance_after_seconds: number;
@@ -733,6 +748,14 @@ export interface MemberTimeTransaction {
   notes: string | null;
   performed_by_user_id: string | null;
   created_at: string;
+}
+
+export interface MemberVipPlayablePreview {
+  is_vip_station: boolean;
+  playable_seconds: number;
+  vip_seconds: number;
+  standard_seconds: number;
+  standard_real_seconds_equivalent: number;
 }
 
 export interface MemberPurchaseResponse {

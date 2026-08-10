@@ -59,6 +59,11 @@ def normalize_mac_address(value: str | None) -> str | None:
     return ":".join(normalized[index : index + 2].upper() for index in range(0, 12, 2))
 
 
+StandardOrVip = Literal["standard", "vip"]
+# Distinct from StandardOrVip: a package rate's *scope* can validly be sold
+# on both station types ("any"), which a session's own station_type or a
+# balance's balance_type never can.
+PackageStationScope = Literal["standard", "vip", "any"]
 RateType = Literal["metered", "package"]
 PaymentMethod = Literal["cash", "gcash", "maya", "other"]
 PaymentStatus = Literal["completed", "voided"]
@@ -658,6 +663,10 @@ class SessionRecord(BaseModel):
     grace_started_at: datetime | None = None
     shutdown_at: datetime | None = None
     customer_locked: bool = False
+    station_type: StandardOrVip = "standard"
+    vip_seconds_consumed: int | None = None
+    standard_seconds_consumed_at_vip_rate: int | None = None
+    conversion_applied: bool = False
 
 
 class SessionEventRecord(BaseModel):
@@ -866,6 +875,11 @@ class RateProfile(BaseModel):
     rate_type: RateType = "package"
     is_active: bool
     sort_order: int
+    station_scope: PackageStationScope = "standard"
+    guest_only: bool = False
+    member_eligible: bool = True
+    eligible_start_local_time: str | None = None
+    eligible_end_local_time: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -877,6 +891,7 @@ class RateProfileCreate(BaseModel):
     rate_type: RateType = "package"
     sort_order: int = 0
     is_active: bool = True
+    station_scope: PackageStationScope = "standard"
 
     @field_validator("price")
     @classmethod
@@ -890,6 +905,7 @@ class RateProfileUpdate(BaseModel):
     price: Decimal
     rate_type: RateType = "package"
     sort_order: int = 0
+    station_scope: PackageStationScope = "standard"
 
     @field_validator("price")
     @classmethod
@@ -1043,6 +1059,18 @@ class CashierShiftDetail(BaseModel):
     payments: list[PaymentRecord] = Field(default_factory=list)
 
 
+class MemberVipPlayablePreview(BaseModel):
+    """Dashboard preview only -- server remains authoritative at session
+    start/add-time regardless of what this returns (balances can change
+    between preview and the actual start request)."""
+
+    is_vip_station: bool
+    playable_seconds: int
+    vip_seconds: int
+    standard_seconds: int
+    standard_real_seconds_equivalent: int
+
+
 class MemberRecord(BaseModel):
     member_id: str
     member_code: str
@@ -1054,6 +1082,7 @@ class MemberRecord(BaseModel):
     requires_account_setup: bool = False
     status: MemberStatus
     time_balance_seconds: int
+    vip_balance_seconds: int = 0
     joined_at: datetime
     expires_at: datetime | None = None
     created_by_user_id: str | None = None
@@ -1136,6 +1165,7 @@ class MembershipProductRecord(BaseModel):
     price: Decimal
     time_seconds: int
     product_type: MembershipProductType
+    balance_type: StandardOrVip = "standard"
     is_active: bool
     sort_order: int
     created_at: datetime
@@ -1187,6 +1217,7 @@ class MemberTimeTransactionRecord(BaseModel):
     transaction_id: str
     member_id: str
     transaction_type: MemberTransactionType
+    balance_type: StandardOrVip = "standard"
     seconds_delta: int
     balance_before_seconds: int
     balance_after_seconds: int

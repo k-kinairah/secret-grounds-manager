@@ -1,5 +1,5 @@
 import { minutesToSeconds } from "./time";
-import type { RateProfile, RateProfileInput } from "./types";
+import type { PackageStationScope, RateProfile, RateProfileInput } from "./types";
 
 export interface RateFormState {
   name: string;
@@ -7,6 +7,7 @@ export interface RateFormState {
   price: string;
   rateType: "metered" | "package";
   sortOrder: string;
+  stationScope: PackageStationScope;
 }
 
 export const emptyRateForm: RateFormState = {
@@ -14,7 +15,8 @@ export const emptyRateForm: RateFormState = {
   minutes: "30",
   price: "0.00",
   rateType: "package",
-  sortOrder: "0"
+  sortOrder: "0",
+  stationScope: "standard"
 };
 
 export function rateToForm(rate: RateProfile): RateFormState {
@@ -23,7 +25,8 @@ export function rateToForm(rate: RateProfile): RateFormState {
     minutes: String(rate.duration_seconds / 60),
     price: rate.price,
     rateType: rate.rate_type,
-    sortOrder: String(rate.sort_order)
+    sortOrder: String(rate.sort_order),
+    stationScope: rate.station_scope
   };
 }
 
@@ -46,6 +49,7 @@ export function rateFormToInput(form: RateFormState): RateProfileInput {
     duration_seconds: minutesToSeconds(durationMinutes),
     price: form.price.trim(),
     rate_type: form.rateType,
-    sort_order: sortOrder
+    sort_order: sortOrder,
+    station_scope: form.stationScope
   };
 }

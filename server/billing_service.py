@@ -340,6 +340,18 @@ class BillingService:
         payment = self.payment_repository.get_payment(payment_id)
         if payment is None:
             raise HTTPException(status_code=404, detail="Payment not found")
+        if payment.session_id is None:
+            # This is a membership purchase (Standard or VIP), not a session
+            # payment -- voiding it here would flip its status without ever
+            # reversing the balance it credited (and, for a VIP promo, would
+            # bypass the non-refundable rule entirely). Reversing a
+            # membership purchase must go through
+            # MemberRepository.refund_purchase(), the only path that also
+            # reverses the matching balance atomically with the void.
+            raise HTTPException(
+                status_code=400,
+                detail="This is a membership purchase, not a session payment. Use the membership purchase refund endpoint instead.",
+            )
         if payment.status == "voided":
             raise HTTPException(status_code=409, detail="Payment is already voided")
 
