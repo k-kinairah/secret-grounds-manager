@@ -1078,6 +1078,29 @@ class CashierShiftDetail(BaseModel):
     payments: list[PaymentRecord] = Field(default_factory=list)
 
 
+class OperatorSaleSummary(BaseModel):
+    """Read-only projection for the main-dashboard Operator's Sale card
+    (not yet wired to the dashboard -- Stage 5 is API-only). Reflects the
+    CURRENT on-duty operator's CURRENT open shift, resolved the exact
+    same way payment attribution resolves it (server.main.
+    get_on_duty_operator). operator_sale is net of voided/refunded
+    payments; income-group attribution status never affects this number
+    -- a payment counts the moment cash/payment is received, pending or
+    not."""
+
+    has_open_shift: bool
+    operator_user_id: str | None = None
+    operator_name: str | None = None
+    shift_id: str | None = None
+    operator_sale: Decimal = Decimal("0.00")
+    cash_payments: Decimal = Decimal("0.00")
+    gcash_payments: Decimal = Decimal("0.00")
+    maya_payments: Decimal = Decimal("0.00")
+    other_payments: Decimal = Decimal("0.00")
+    voided_payments: Decimal = Decimal("0.00")
+    payment_count: int = 0
+
+
 class MemberVipPlayablePreview(BaseModel):
     """Dashboard preview only -- server remains authoritative at session
     start/add-time regardless of what this returns (balances can change

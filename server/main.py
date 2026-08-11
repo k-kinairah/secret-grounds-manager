@@ -78,6 +78,7 @@ from server.schemas import (
     PreparedSessionStartRequest,
     PreparedSessionActivationResponse,
     OnDutyOperatorRecord,
+    OperatorSaleSummary,
     OperatorAccessRecord,
     OperatorActivityRecord,
     OperatorCreateRequest,
@@ -1858,6 +1859,50 @@ def get_dashboard_today_sales(_: object = Depends(require_role("cashier"))) -> D
     return parse_money(row["total"] if row is not None else "0.00")
 
 
+@app.get("/dashboard/operator-sale", response_model=OperatorSaleSummary)
+def get_dashboard_operator_sale(_: object = Depends(require_role("cashier"))) -> OperatorSaleSummary:
+    """Read-only projection: how much has the CURRENT on-duty operator
+    collected during their CURRENT open shift. Resolves the on-duty
+    operator through the exact same lookup payment attribution uses
+    (get_on_duty_operator) -- never the calling browser's own cookie
+    user -- so this can never disagree with what payments are actually
+    being credited to. Reuses ShiftRepository.calculate_totals() as-is;
+    no second sales calculation is introduced here."""
+    on_duty = get_on_duty_operator()
+    if on_duty.operator is None:
+        return OperatorSaleSummary(has_open_shift=False)
+
+    shift = shift_repository.get_open_shift_for_user(on_duty.operator.user_id)
+    if shift is None:
+        return OperatorSaleSummary(
+            has_open_shift=False,
+            operator_user_id=on_duty.operator.user_id,
+            operator_name=on_duty.operator.display_name,
+        )
+
+    totals = shift_repository.calculate_totals(shift)
+    # gross_session_sales is already the SUM of only status='completed'
+    # payments -- calculate_totals() computes voided_payments as a
+    # disjoint bucket (status='voided'), never a subset of
+    # gross_session_sales. A voided payment is therefore already excluded
+    # the moment it's voided; subtracting voided_payments again here
+    # would double-count it. gross_session_sales is already the correct
+    # net-of-void figure, exposed as-is.
+    return OperatorSaleSummary(
+        has_open_shift=True,
+        operator_user_id=on_duty.operator.user_id,
+        operator_name=on_duty.operator.display_name,
+        shift_id=shift.shift_id,
+        operator_sale=totals.gross_session_sales,
+        cash_payments=totals.cash_payments,
+        gcash_payments=totals.gcash_payments,
+        maya_payments=totals.maya_payments,
+        other_payments=totals.other_payments,
+        voided_payments=totals.voided_payments,
+        payment_count=totals.payment_count,
+    )
+
+
 @app.post("/register", response_model=PCRegistrationResponse)
 def register_pc(pc: PCRegistration) -> PCRegistrationResponse:
     pc_name, ip_address = clean_pc_payload(pc.pc_name, pc.ip_address)
@@ -2404,8 +2449,20 @@ def get_known_pc_or_404(pc_name: str) -> PCRecord:
     )
 
 
+def get_on_duty_operator() -> OnDutyOperatorRecord:
+    """The single authoritative on-duty lookup. Both payment attribution
+    (get_on_duty_actor_user_id below) and the Operator's Sale read
+    (get_dashboard_operator_sale) call this exact function, so they can
+    never disagree about who is on duty -- they just differ in what they
+    do when nobody is: a payment write always needs some actor (falls
+    back to the browser's own cookie user), while a read that's about to
+    tell the whole shop "whose sales is this" must not silently
+    substitute whoever happens to be looking at the dashboard."""
+    return operator_state_repository.get_current(user_repository.get_user)
+
+
 def get_on_duty_actor_user_id(current_user: object) -> str | None:
-    current_operator = operator_state_repository.get_current(user_repository.get_user)
+    current_operator = get_on_duty_operator()
     if current_operator.operator is not None:
         return current_operator.operator.user_id
     return get_actor_user_id(current_user)
