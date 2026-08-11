@@ -2,11 +2,12 @@ from datetime import datetime
 from typing import Any
 
 from server.database import get_connection
-from server.schemas import OnDutyOperatorRecord, PCLayoutRecord, PCLayoutUpdate, UserPublic
+from server.schemas import IncomeGroupRecord, OnDutyOperatorRecord, PCLayoutRecord, PCLayoutUpdate, UserPublic
 from server.time_utils import current_utc_time
 
 
 def row_to_layout(row: Any, mac_address: str | None = None) -> PCLayoutRecord:
+    keys = row.keys()
     return PCLayoutRecord(
         pc_name=row["pc_name"],
         display_name=row["display_name"],
@@ -15,6 +16,17 @@ def row_to_layout(row: Any, mac_address: str | None = None) -> PCLayoutRecord:
         is_vip=bool(row["is_vip"]),
         is_enabled=bool(row["is_enabled"]),
         mac_address=mac_address,
+        income_group_id=row["income_group_id"] if "income_group_id" in keys else None,
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def row_to_income_group(row: Any) -> IncomeGroupRecord:
+    return IncomeGroupRecord(
+        income_group_id=row["income_group_id"],
+        name=row["name"],
+        is_active=bool(row["is_active"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
 
@@ -56,15 +68,16 @@ class PCLayoutRepository:
                 """
                 INSERT INTO pc_layouts (
                     pc_name, display_name, area_label, layout_order,
-                    is_vip, is_enabled, updated_at
+                    is_vip, is_enabled, income_group_id, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(pc_name) DO UPDATE SET
                     display_name = excluded.display_name,
                     area_label = excluded.area_label,
                     layout_order = excluded.layout_order,
                     is_vip = excluded.is_vip,
                     is_enabled = excluded.is_enabled,
+                    income_group_id = excluded.income_group_id,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -74,6 +87,7 @@ class PCLayoutRepository:
                     request.layout_order,
                     1 if request.is_vip else 0,
                     1 if request.is_enabled else 0,
+                    request.income_group_id,
                     now.isoformat(),
                 ),
             )
@@ -91,6 +105,25 @@ class PCLayoutRepository:
         if layout is None:
             raise RuntimeError("PC layout disappeared after save")
         return layout
+
+
+class IncomeGroupRepository:
+    """Read access to the shop's configured revenue-owner groups."""
+
+    def get_income_group(self, income_group_id: str) -> IncomeGroupRecord | None:
+        with get_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM income_groups WHERE income_group_id = ?",
+                (income_group_id,),
+            ).fetchone()
+        return row_to_income_group(row) if row is not None else None
+
+    def list_income_groups(self) -> list[IncomeGroupRecord]:
+        with get_connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM income_groups ORDER BY name ASC"
+            ).fetchall()
+        return [row_to_income_group(row) for row in rows]
 
 
 class OperatorStateRepository:

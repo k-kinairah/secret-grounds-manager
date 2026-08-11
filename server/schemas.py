@@ -448,6 +448,14 @@ class WakeCommandResponse(BaseModel):
     message: str
 
 
+class IncomeGroupRecord(BaseModel):
+    income_group_id: str
+    name: str
+    is_active: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+
 class PCLayoutRecord(BaseModel):
     pc_name: str
     display_name: str
@@ -456,6 +464,7 @@ class PCLayoutRecord(BaseModel):
     is_vip: bool = False
     is_enabled: bool = True
     mac_address: str | None = None
+    income_group_id: str | None = None
     updated_at: datetime
 
 
@@ -466,6 +475,10 @@ class PCLayoutUpdate(BaseModel):
     is_vip: bool = False
     is_enabled: bool = True
     mac_address: str | None = None
+    # Revenue-owner assignment -- deliberately independent of is_vip
+    # (Computer Type). None means "not yet assigned", not "unassigned"
+    # as a group of its own.
+    income_group_id: str | None = None
 
     @field_validator("mac_address")
     @classmethod
@@ -953,6 +966,12 @@ class PaymentRecord(BaseModel):
     void_reason: str | None = None
     status: PaymentStatus
     created_at: datetime
+    pc_name_snapshot: str | None = None
+    income_group_id_snapshot: str | None = None
+    income_group_name_snapshot: str | None = None
+    attribution_status: Literal["assigned", "pending"] = "assigned"
+    attribution_assigned_at: datetime | None = None
+    attribution_session_id: str | None = None
 
 
 class PaymentCreateRequest(BaseModel):

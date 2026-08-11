@@ -43,6 +43,7 @@ from server.schemas import (
     ForceEndSessionResponse,
     AdminOperatorLoginRequest,
     MessageCommandRequest,
+    IncomeGroupRecord,
     PCMacAddressUpdate,
     PCLayoutRecord,
     PCLayoutUpdate,
@@ -148,8 +149,9 @@ from server.billing_service import BillingService
 from server.member_repository import MemberRepository
 from server.operator_repository import OperatorRepository
 from server.payment_repository import PaymentRepository
+from server.income_attribution import resolve_pending_payments_for_configured_pc
 from server.remote_command_repository import PCMetadataRepository, RemoteCommandRepository
-from server.pc_layout_repository import OperatorStateRepository, PCLayoutRepository
+from server.pc_layout_repository import IncomeGroupRepository, OperatorStateRepository, PCLayoutRepository
 from server.prepared_session_repository import PreparedSessionRepository
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
@@ -159,6 +161,8 @@ from server.time_utils import current_utc_time
 from server.system_service import SystemService
 from server.version import APP_VERSION
 
+
+logger = logging.getLogger(__name__)
 
 pc_registry: dict[str, PCRecord] = {}
 recovery_flags: dict[str, dict[str, str]] = {}
@@ -179,6 +183,7 @@ member_repository = MemberRepository(payment_repository, shift_repository)
 remote_command_repository = RemoteCommandRepository()
 pc_metadata_repository = PCMetadataRepository()
 pc_layout_repository = PCLayoutRepository()
+income_group_repository = IncomeGroupRepository()
 operator_state_repository = OperatorStateRepository()
 operator_repository = OperatorRepository()
 prepared_session_repository = PreparedSessionRepository()
@@ -194,6 +199,8 @@ session_service = SessionService(
     member_repository=member_repository,
     prepared_session_repository=prepared_session_repository,
     pc_layout_repository=pc_layout_repository,
+    payment_repository=payment_repository,
+    income_group_repository=income_group_repository,
 )
 OFFLINE_AFTER_SECONDS = 15
 MONITOR_INTERVAL_SECONDS = 5
@@ -2599,15 +2606,49 @@ def list_pc_layouts(
     return pc_layout_repository.list_layouts(include_disabled)
 
 
+@app.get("/income-groups", response_model=list[IncomeGroupRecord])
+def list_income_groups(
+    _: object = Depends(require_owner),
+) -> list[IncomeGroupRecord]:
+    return income_group_repository.list_income_groups()
+
+
 @app.put("/pcs/{pc_name}/layout", response_model=PCLayoutRecord)
 def update_pc_layout(
     pc_name: str,
     request: PCLayoutUpdate,
     _: object = Depends(require_role("admin")),
 ) -> PCLayoutRecord:
+    cleaned_pc_name = pc_name.strip()
+    if request.income_group_id is not None:
+        income_group = income_group_repository.get_income_group(request.income_group_id)
+        if income_group is None:
+            raise HTTPException(status_code=400, detail="Unknown income group")
     if request.mac_address is not None:
-        pc_metadata_repository.set_mac_address(pc_name.strip(), request.mac_address)
-    return pc_layout_repository.upsert_layout(pc_name.strip(), request)
+        pc_metadata_repository.set_mac_address(cleaned_pc_name, request.mac_address)
+    layout = pc_layout_repository.upsert_layout(cleaned_pc_name, request)
+    if layout.income_group_id is not None:
+        # Loosely coupled by design (same posture as the member-session
+        # sweep): the layout save has already succeeded. A failure here
+        # must never undo or fail the layout change -- any payment that
+        # can't be resolved just stays pending for a later attempt.
+        try:
+            income_group = income_group_repository.get_income_group(layout.income_group_id)
+            if income_group is not None:
+                resolve_pending_payments_for_configured_pc(
+                    payment_repository,
+                    cleaned_pc_name,
+                    income_group.income_group_id,
+                    income_group.name,
+                    current_utc_time(),
+                )
+        except Exception:
+            logger.exception(
+                "Pending-attribution resolution failed after configuring %s -> %s",
+                cleaned_pc_name,
+                layout.income_group_id,
+            )
+    return layout
 
 
 @app.get("/operators", response_model=list[UserPublic])

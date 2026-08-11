@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
@@ -9,7 +10,9 @@ from server.balance_conversion import STANDARD_SECONDS_PER_VIP_SECOND, finalize_
 from server.connection_manager import ClientConnectionManager
 from server.billing_service import BillingService
 from server.billing_service import calculate_open_time_estimate
-from server.pc_layout_repository import PCLayoutRepository
+from server.income_attribution import sweep_pending_purchases_for_member
+from server.payment_repository import PaymentRepository
+from server.pc_layout_repository import IncomeGroupRepository, PCLayoutRepository
 from server.rate_eligibility import validate_rate_for_station_and_context
 from server.rate_repository import RateRepository
 from server.schemas import (
@@ -36,6 +39,9 @@ from server.admin_settings_service import (
 from server.time_utils import current_utc_time
 
 
+logger = logging.getLogger(__name__)
+
+
 class SessionService:
     """Production-facing session rules built on SQLite plus live WebSockets."""
 
@@ -50,6 +56,8 @@ class SessionService:
         member_repository: object | None = None,
         prepared_session_repository: PreparedSessionRepository | None = None,
         pc_layout_repository: PCLayoutRepository | None = None,
+        payment_repository: PaymentRepository | None = None,
+        income_group_repository: IncomeGroupRepository | None = None,
     ) -> None:
         self.repository = repository
         self.rate_repository = rate_repository
@@ -60,6 +68,8 @@ class SessionService:
         self.member_repository = member_repository
         self.prepared_session_repository = prepared_session_repository
         self.pc_layout_repository = pc_layout_repository or PCLayoutRepository()
+        self.payment_repository = payment_repository or PaymentRepository()
+        self.income_group_repository = income_group_repository or IncomeGroupRepository()
 
     def is_vip_pc(self, pc_name: str) -> bool:
         """Station classification source of truth: pc_layouts.is_vip.
@@ -1292,6 +1302,29 @@ class SessionService:
             ),
         )
 
+    def sweep_pending_purchase_attribution_for_new_session(
+        self,
+        member_id: str,
+        pc_name: str,
+        is_vip_station: bool,
+        session_id: str,
+        now: datetime,
+    ) -> int:
+        """Resolves this member's eligible 'PC not yet known' pending
+        purchases now that they have a PC (session_id/pc_name). See
+        income_attribution.sweep_pending_purchases_for_member for the
+        eligibility rule and idempotency guarantee."""
+        return sweep_pending_purchases_for_member(
+            self.payment_repository,
+            self.pc_layout_repository,
+            self.income_group_repository,
+            member_id,
+            pc_name,
+            is_vip_station,
+            session_id,
+            now,
+        )
+
     async def start_member_session(
         self,
         pc_name: str,
@@ -1383,6 +1416,21 @@ class SessionService:
             member_balance_after_seconds=member.time_balance_seconds,
         )
         self.repository.create_session(session)
+        # Session creation has already succeeded -- income attribution is a
+        # reporting concern, not a session-integrity concern. A failure
+        # here must never roll back or fail the (already valid) session;
+        # any purchase that fails to resolve simply stays pending and can
+        # self-heal on the member's next eligible session start.
+        try:
+            self.sweep_pending_purchase_attribution_for_new_session(
+                member.member_id, cleaned_pc_name, is_vip_station, session_id, now
+            )
+        except Exception:
+            logger.exception(
+                "Pending income-attribution sweep failed for member %s / session %s",
+                member.member_id,
+                session_id,
+            )
         self.create_event(
             session.session_id,
             "session_started",

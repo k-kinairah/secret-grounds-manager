@@ -6,6 +6,7 @@ import type {
   AdminSettingsResponse,
   CurrentUser,
   ForceEndSessionResponse,
+  IncomeGroup,
   MemberRecord,
   MemberPurchaseRefundResponse,
   MemberPurchaseResponse,
@@ -431,12 +432,19 @@ export async function updatePcLayout(
     is_vip: boolean;
     is_enabled: boolean;
     mac_address?: string | null;
+    income_group_id?: string | null;
   }
 ): Promise<PcLayoutSlot> {
   return requestJson<PcLayoutSlot>(`${getApiBaseUrl()}/pcs/${pcName}/layout`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
+  });
+}
+
+export async function fetchIncomeGroups(): Promise<IncomeGroup[]> {
+  return requestJson<IncomeGroup[]>(`${getApiBaseUrl()}/income-groups`, {
+    cache: "no-store"
   });
 }
 

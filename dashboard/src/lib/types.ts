@@ -115,6 +115,15 @@ export interface PcLayoutSlot {
   is_vip: boolean;
   is_enabled: boolean;
   mac_address: string | null;
+  income_group_id: string | null;
+  updated_at: string;
+}
+
+export interface IncomeGroup {
+  income_group_id: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
   updated_at: string;
 }
 

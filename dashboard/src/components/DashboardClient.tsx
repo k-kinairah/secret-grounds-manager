@@ -9,6 +9,7 @@ import {
   fetchDashboardTodaySales,
   fetchPcs,
   fetchCurrentUser,
+  fetchIncomeGroups,
   fetchPcLayouts,
   fetchRates,
   forceEndSession,
@@ -25,7 +26,7 @@ import {
 import { getPackageRatesForPc } from "@/lib/packageEligibility";
 import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
 import { calculateOpenTimeEstimate, secondsFromScheduledEnd } from "@/lib/time";
-import type { CurrentUser, MessageSeverity, PcLayoutSlot, PcSummary, RateProfile } from "@/lib/types";
+import type { CurrentUser, IncomeGroup, MessageSeverity, PcLayoutSlot, PcSummary, RateProfile } from "@/lib/types";
 import { DashboardSummary } from "./DashboardSummary";
 import { EndSessionDialog } from "./EndSessionDialog";
 import { PageTitleIcon } from "./PageTitleIcon";
@@ -56,6 +57,7 @@ export function DashboardClient() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [todaySales, setTodaySales] = useState<string | null>(null);
   const [layoutSlots, setLayoutSlots] = useState<PcLayoutSlot[]>([]);
+  const [incomeGroups, setIncomeGroups] = useState<IncomeGroup[]>([]);
   const [showSetupLayout, setShowSetupLayout] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
@@ -235,8 +237,9 @@ export function DashboardClient() {
   async function loadSetupLayout() {
     setIsMutating(true);
     try {
-      const slots = await fetchPcLayouts(true);
+      const [slots, groups] = await Promise.all([fetchPcLayouts(true), fetchIncomeGroups()]);
       setLayoutSlots(slots);
+      setIncomeGroups(groups);
       setShowSetupLayout(true);
       setMessage("Setup/Layout mode is showing configured slots. Unregistered slots are not counted in operations.");
     } catch (error) {
@@ -279,7 +282,8 @@ export function DashboardClient() {
         layout_order: slot.layout_order,
         is_vip: isVip,
         is_enabled: slot.is_enabled,
-        mac_address: slot.mac_address
+        mac_address: slot.mac_address,
+        income_group_id: slot.income_group_id
       });
       const slots = await fetchPcLayouts(true);
       setLayoutSlots(slots);
@@ -289,6 +293,37 @@ export function DashboardClient() {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Could not change this station's computer type.";
+      setMessage(errorMessage);
+      pushToast(errorMessage, "error");
+    } finally {
+      setIsMutating(false);
+    }
+  }
+
+  async function changeIncomeGroup(slot: PcLayoutSlot, incomeGroupId: string | null) {
+    if (slot.income_group_id === incomeGroupId) {
+      return;
+    }
+    setIsMutating(true);
+    try {
+      await updatePcLayout(slot.pc_name, {
+        display_name: slot.display_name,
+        area_label: slot.area_label,
+        layout_order: slot.layout_order,
+        is_vip: slot.is_vip,
+        is_enabled: slot.is_enabled,
+        mac_address: slot.mac_address,
+        income_group_id: incomeGroupId
+      });
+      const slots = await fetchPcLayouts(true);
+      setLayoutSlots(slots);
+      const groupName = incomeGroups.find((group) => group.income_group_id === incomeGroupId)?.name ?? "no group";
+      const message = `${slot.display_name} income is now attributed to ${groupName}.`;
+      setMessage(message);
+      pushToast(message, "success");
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Could not change this station's income group.";
       setMessage(errorMessage);
       pushToast(errorMessage, "error");
     } finally {
@@ -565,6 +600,28 @@ export function DashboardClient() {
                         </div>
                         <p className={styles.computerTypeHint}>
                           This determines which rates and member-balance rules apply to this station.
+                        </p>
+                      </div>
+                      <div className={styles.incomeGroupControl}>
+                        <label className={styles.incomeGroupLabel} htmlFor={`income-group-${slot.pc_name}`}>
+                          Income Group
+                        </label>
+                        <select
+                          className={styles.incomeGroupSelect}
+                          disabled={isMutating}
+                          id={`income-group-${slot.pc_name}`}
+                          onChange={(event) => void changeIncomeGroup(slot, event.target.value === "" ? null : event.target.value)}
+                          value={slot.income_group_id ?? ""}
+                        >
+                          <option value="">Not assigned</option>
+                          {incomeGroups.map((group) => (
+                            <option key={group.income_group_id} value={group.income_group_id}>
+                              {group.name}
+                            </option>
+                          ))}
+                        </select>
+                        <p className={styles.incomeGroupHint}>
+                          Determines which income group receives payments attributed to this station.
                         </p>
                       </div>
                       <div className={styles.setupSlotActions}>

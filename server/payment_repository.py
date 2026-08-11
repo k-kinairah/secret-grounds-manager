@@ -44,6 +44,24 @@ def row_to_payment(row: Any) -> PaymentRecord:
         void_reason=row["void_reason"],
         status=row["status"],
         created_at=datetime.fromisoformat(row["created_at"]),
+        pc_name_snapshot=row["pc_name_snapshot"] if "pc_name_snapshot" in keys else None,
+        income_group_id_snapshot=(
+            row["income_group_id_snapshot"] if "income_group_id_snapshot" in keys else None
+        ),
+        income_group_name_snapshot=(
+            row["income_group_name_snapshot"] if "income_group_name_snapshot" in keys else None
+        ),
+        attribution_status=(
+            row["attribution_status"] if "attribution_status" in keys else "assigned"
+        ),
+        attribution_assigned_at=(
+            datetime.fromisoformat(row["attribution_assigned_at"])
+            if "attribution_assigned_at" in keys and row["attribution_assigned_at"] is not None
+            else None
+        ),
+        attribution_session_id=(
+            row["attribution_session_id"] if "attribution_session_id" in keys else None
+        ),
     )
 
 
@@ -82,9 +100,15 @@ class PaymentRepository:
                     voided_at,
                     void_reason,
                     status,
-                    created_at
+                    created_at,
+                    pc_name_snapshot,
+                    income_group_id_snapshot,
+                    income_group_name_snapshot,
+                    attribution_status,
+                    attribution_assigned_at,
+                    attribution_session_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payment.payment_id,
@@ -106,6 +130,16 @@ class PaymentRepository:
                     payment.void_reason,
                     payment.status,
                     payment.created_at.isoformat(),
+                    payment.pc_name_snapshot,
+                    payment.income_group_id_snapshot,
+                    payment.income_group_name_snapshot,
+                    payment.attribution_status,
+                    (
+                        payment.attribution_assigned_at.isoformat()
+                        if payment.attribution_assigned_at is not None
+                        else None
+                    ),
+                    payment.attribution_session_id,
                 ),
             )
 
@@ -207,3 +241,106 @@ class PaymentRepository:
             )
 
         return updated
+
+    def assign_pending_known_pc_purchases_for_member(
+        self,
+        member_id: str,
+        include_vip: bool,
+        pc_name: str,
+        income_group_id_snapshot: str | None,
+        income_group_name_snapshot: str | None,
+        attribution_status: str,
+        attribution_assigned_at: datetime | None,
+        attribution_session_id: str | None,
+        connection: sqlite3.Connection | None = None,
+    ) -> int:
+        """Bulk-resolves this member's still-'PC not yet known' pending,
+        completed purchases (pc_name_snapshot IS NULL) whose balance type
+        is eligible for pc_name. Never touches a row that already has a
+        pc_name_snapshot (that row belongs to the PC-configuration
+        resolution path instead, not a member-session sweep) or a row
+        that is not both 'pending' and 'completed'. See
+        income_attribution.sweep_pending_purchases_for_member for the
+        eligibility/attribution decision this persists."""
+        balance_types = ("standard", "vip") if include_vip else ("standard",)
+        placeholders = ", ".join("?" for _ in balance_types)
+        query = f"""
+            UPDATE payments
+            SET pc_name_snapshot = ?,
+                income_group_id_snapshot = ?,
+                income_group_name_snapshot = ?,
+                attribution_status = ?,
+                attribution_assigned_at = ?,
+                attribution_session_id = ?
+            WHERE attribution_status = 'pending'
+              AND status = 'completed'
+              AND pc_name_snapshot IS NULL
+              AND payment_id IN (
+                  SELECT p.payment_id FROM payments p
+                  JOIN member_time_transactions mt ON mt.related_payment_id = p.payment_id
+                  WHERE mt.member_id = ?
+                    AND mt.transaction_type IN ('membership_purchase', 'promo_topup')
+                    AND mt.balance_type IN ({placeholders})
+              )
+        """
+        params = (
+            pc_name,
+            income_group_id_snapshot,
+            income_group_name_snapshot,
+            attribution_status,
+            attribution_assigned_at.isoformat() if attribution_assigned_at is not None else None,
+            attribution_session_id,
+            member_id,
+            *balance_types,
+        )
+
+        def _run(active_connection: sqlite3.Connection) -> int:
+            cursor = active_connection.execute(query, params)
+            return cursor.rowcount
+
+        if connection is not None:
+            return _run(connection)
+        with get_connection() as owned_connection:
+            return _run(owned_connection)
+
+    def assign_pending_payments_for_configured_pc(
+        self,
+        pc_name: str,
+        income_group_id_snapshot: str,
+        income_group_name_snapshot: str,
+        attribution_assigned_at: datetime,
+        connection: sqlite3.Connection | None = None,
+    ) -> int:
+        """Bulk-resolves completed, still-pending payments that already
+        know pc_name (pc_name_snapshot = pc_name) but had no income group
+        to assign at the time. Deliberately never touches pc_name_snapshot
+        or attribution_session_id, and only ever matches rows where
+        income_group_id_snapshot IS NULL, so an already-assigned payment
+        (and its historical group) is never rewritten by a later PC
+        reassignment."""
+        query = """
+            UPDATE payments
+            SET income_group_id_snapshot = ?,
+                income_group_name_snapshot = ?,
+                attribution_status = 'assigned',
+                attribution_assigned_at = ?
+            WHERE attribution_status = 'pending'
+              AND status = 'completed'
+              AND pc_name_snapshot = ?
+              AND income_group_id_snapshot IS NULL
+        """
+        params = (
+            income_group_id_snapshot,
+            income_group_name_snapshot,
+            attribution_assigned_at.isoformat(),
+            pc_name,
+        )
+
+        def _run(active_connection: sqlite3.Connection) -> int:
+            cursor = active_connection.execute(query, params)
+            return cursor.rowcount
+
+        if connection is not None:
+            return _run(connection)
+        with get_connection() as owned_connection:
+            return _run(owned_connection)

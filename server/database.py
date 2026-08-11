@@ -1095,6 +1095,73 @@ def activate_vip_promo_product_if_untouched(connection: sqlite3.Connection) -> N
     )
 
 
+DEFAULT_INCOME_GROUPS = [
+    ("united", "United"),
+    ("gene", "Gene"),
+    ("mama-lala", "Mama/Lala"),
+    ("tyrone", "Tyrone"),
+]
+
+
+def seed_default_income_groups(connection: sqlite3.Connection) -> None:
+    """Idempotent by fixed income_group_id (INSERT OR IGNORE) -- safe to
+    call on every startup, never duplicates rows, never overwrites a name
+    an owner may have edited later."""
+    now = current_utc_time().isoformat()
+    connection.executemany(
+        """
+        INSERT OR IGNORE INTO income_groups (
+            income_group_id, name, is_active, created_at, updated_at
+        )
+        VALUES (?, ?, 1, ?, ?)
+        """,
+        [(income_group_id, name, now, now) for income_group_id, name in DEFAULT_INCOME_GROUPS],
+    )
+
+
+# Initial shop mapping only (owner-confirmed PC-01..10 United, PC-11..12
+# Gene, PC-13..14 Mama/Lala, PC-15 Tyrone). This dict exists solely to seed
+# pc_layouts.income_group_id on first boot -- billing/payment/reporting
+# code must always read the live column, never this map, so reassigning a
+# PC's income group later never requires a code change.
+DEFAULT_PC_INCOME_GROUP_MAP = {
+    "PC-01": "united",
+    "PC-02": "united",
+    "PC-03": "united",
+    "PC-04": "united",
+    "PC-05": "united",
+    "PC-06": "united",
+    "PC-07": "united",
+    "PC-08": "united",
+    "PC-09": "united",
+    "PC-10": "united",
+    "PC-11": "gene",
+    "PC-12": "gene",
+    "PC-13": "mama-lala",
+    "PC-14": "mama-lala",
+    "PC-15": "tyrone",
+}
+
+
+def backfill_default_pc_income_groups(connection: sqlite3.Connection) -> None:
+    """One-time convenience seed for the shop's initial PC ownership
+    mapping. Only ever updates rows where income_group_id is still NULL,
+    so it never overwrites an admin-edited assignment, and only ever
+    targets the known default pc_name values, so custom/renamed PC rows
+    are left completely alone. Safe to call on every startup."""
+    connection.executemany(
+        """
+        UPDATE pc_layouts
+        SET income_group_id = ?
+        WHERE pc_name = ? AND income_group_id IS NULL
+        """,
+        [
+            (income_group_id, pc_name)
+            for pc_name, income_group_id in DEFAULT_PC_INCOME_GROUP_MAP.items()
+        ],
+    )
+
+
 def seed_default_pc_layouts(connection: sqlite3.Connection) -> None:
     existing_count = connection.execute(
         "SELECT COUNT(*) FROM pc_layouts"
@@ -1572,6 +1639,22 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS income_groups (
+                income_group_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        # Revenue-owner assignment for a station. Deliberately separate from
+        # is_vip (VIP/Standard billing classification) -- a PC's income
+        # group and its VIP status are independent concepts. Nullable so an
+        # unassigned PC is explicit, not defaulted into any group.
+        add_column_if_missing(connection, "pc_layouts", "income_group_id", "TEXT")
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS prepared_sessions (
                 prepared_session_id TEXT PRIMARY KEY,
                 pc_name TEXT NOT NULL,
@@ -1727,6 +1810,26 @@ def initialize_database() -> None:
         add_column_if_missing(connection, "payments", "voided_by_user_id", "TEXT")
         add_column_if_missing(connection, "payments", "voided_at", "TEXT")
         add_column_if_missing(connection, "payments", "void_reason", "TEXT")
+        # Income-group revenue attribution snapshot -- captured once, at
+        # write time, and never rewritten afterward (same append-only
+        # philosophy as member_name_snapshot/rate_name_snapshot elsewhere).
+        # Reassigning a PC's income_group_id later must never change what
+        # these columns say about a payment that already happened.
+        add_column_if_missing(connection, "payments", "pc_name_snapshot", "TEXT")
+        add_column_if_missing(connection, "payments", "income_group_id_snapshot", "TEXT")
+        add_column_if_missing(connection, "payments", "income_group_name_snapshot", "TEXT")
+        # 'assigned' | 'pending' (enforced in schemas.py, not a DB CHECK --
+        # matches the existing convention for columns added via
+        # add_column_if_missing, e.g. action_type above). Historical rows
+        # predating this migration default to 'assigned' with every
+        # snapshot column left NULL: that marks them as attribution-
+        # resolved (never eligible for a future pending-attribution sweep)
+        # without ever claiming they belong to one of the four income
+        # groups. Only 'pending' rows are ever swept, so 'assigned'+NULL is
+        # the only default that can't be mistaken for real group data.
+        add_column_if_missing(connection, "payments", "attribution_status", "TEXT NOT NULL DEFAULT 'assigned'")
+        add_column_if_missing(connection, "payments", "attribution_assigned_at", "TEXT")
+        add_column_if_missing(connection, "payments", "attribution_session_id", "TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS members (
@@ -2002,6 +2105,13 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_payments_pending_attribution
+            ON payments (attribution_status)
+            WHERE attribution_status = 'pending'
+            """
+        )
+        connection.execute(
+            """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_shift_per_user
             ON cashier_shifts (user_id)
             WHERE status = 'open'
@@ -2040,7 +2150,9 @@ def initialize_database() -> None:
         )
         seed_default_metered_rate(connection)
         seed_default_membership_products(connection)
+        seed_default_income_groups(connection)
         seed_default_pc_layouts(connection)
+        backfill_default_pc_income_groups(connection)
         seed_family_operators(connection)
         # Station/eligibility enforcement (server/rate_eligibility.py) is
         # live as of Stage 2, so these owner-confirmed defaults are now safe

@@ -4,7 +4,9 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from server.income_attribution import attribution_for_known_pc
 from server.payment_repository import PaymentRepository
+from server.pc_layout_repository import IncomeGroupRepository, PCLayoutRepository
 from server.schemas import (
     BillingPaymentStatus,
     BillingSummary,
@@ -64,11 +66,15 @@ class BillingService:
         payment_repository: PaymentRepository,
         shift_repository: ShiftRepository | None = None,
         user_repository: UserRepository | None = None,
+        pc_layout_repository: PCLayoutRepository | None = None,
+        income_group_repository: IncomeGroupRepository | None = None,
     ) -> None:
         self.session_repository = session_repository
         self.payment_repository = payment_repository
         self.shift_repository = shift_repository
         self.user_repository = user_repository or UserRepository()
+        self.pc_layout_repository = pc_layout_repository or PCLayoutRepository()
+        self.income_group_repository = income_group_repository or IncomeGroupRepository()
 
     def get_payment_shift_id(self, actor_user_id: str | None) -> str | None:
         if actor_user_id is None or self.shift_repository is None:
@@ -226,6 +232,17 @@ class BillingService:
             if not (request.reference_number or "").strip():
                 raise HTTPException(status_code=400, detail="Payment reference is required")
 
+        payment_created_at = current_utc_time()
+        # Session-linked payments always know their PC at payment time --
+        # income ownership is snapshotted now, once, and never re-derived
+        # from the live pc_layouts table later (see income_attribution.py).
+        attribution = attribution_for_known_pc(
+            self.pc_layout_repository,
+            self.income_group_repository,
+            billing.session.pc_name,
+            session_id,
+            payment_created_at,
+        )
         payment = PaymentRecord(
             payment_id=str(uuid4()),
             session_id=session_id,
@@ -242,7 +259,13 @@ class BillingService:
             recorded_by_user_id=actor_user_id,
             idempotency_key=request.idempotency_key,
             status="completed",
-            created_at=current_utc_time(),
+            created_at=payment_created_at,
+            pc_name_snapshot=attribution.pc_name_snapshot,
+            income_group_id_snapshot=attribution.income_group_id_snapshot,
+            income_group_name_snapshot=attribution.income_group_name_snapshot,
+            attribution_status=attribution.status,  # type: ignore[arg-type]
+            attribution_assigned_at=attribution.assigned_at,
+            attribution_session_id=attribution.session_id,
         )
         self.payment_repository.create_payment(payment)
         self.session_repository.add_event(

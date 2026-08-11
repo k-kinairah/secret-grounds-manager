@@ -10,8 +10,15 @@ from fastapi import HTTPException
 from server.balance_conversion import STANDARD_SECONDS_PER_VIP_SECOND, finalize_vip_usage
 from server.billing_service import money
 from server.database import get_connection
+from server.income_attribution import (
+    AttributionSnapshot,
+    attribution_for_known_pc,
+    attribution_pending_unknown_pc,
+    is_balance_type_usable_on_station,
+)
 from server.payment_repository import PaymentRepository
 from server.passwords import hash_password, verify_password
+from server.pc_layout_repository import IncomeGroupRepository, PCLayoutRepository
 from server.schemas import (
     MemberCreateRequest,
     MemberPurchaseRefundRequest,
@@ -29,6 +36,7 @@ from server.schemas import (
     PaymentRecord,
     UserRecord,
 )
+from server.session_repository import SessionRepository
 from server.shift_repository import ShiftRepository
 from server.time_utils import current_utc_time
 
@@ -124,9 +132,15 @@ class MemberRepository:
         self,
         payment_repository: PaymentRepository,
         shift_repository: ShiftRepository,
+        session_repository: SessionRepository | None = None,
+        pc_layout_repository: PCLayoutRepository | None = None,
+        income_group_repository: IncomeGroupRepository | None = None,
     ) -> None:
         self.payment_repository = payment_repository
         self.shift_repository = shift_repository
+        self.session_repository = session_repository or SessionRepository()
+        self.pc_layout_repository = pc_layout_repository or PCLayoutRepository()
+        self.income_group_repository = income_group_repository or IncomeGroupRepository()
 
     def list_members(self, query: str | None = None) -> list[MemberRecord]:
         search = f"%{(query or '').strip()}%"
@@ -1011,6 +1025,41 @@ class MemberRepository:
             )
         return standard_consumed, vip_consumed
 
+    def _resolve_purchase_attribution(
+        self,
+        member_id: str,
+        product: MembershipProductRecord,
+        now: datetime,
+    ) -> AttributionSnapshot:
+        """Decide immediate-vs-pending income attribution for a membership
+        purchase, without ever asking the cashier for a PC.
+
+        A purchase is attributed immediately only if the member already
+        has an active session AND that session's station can actually use
+        the balance type being purchased: Standard balance is usable on a
+        Standard or a VIP station (2:1 conversion), but VIP balance is
+        usable only on a VIP station. Attributing a VIP-only purchase to
+        a Standard PC just because the member happens to be playing there
+        would misattribute revenue -- it stays 'pending' instead, and
+        this method takes no part in choosing where it resolves later.
+        """
+        active_session = self.session_repository.get_active_member_session(member_id)
+        if active_session is None:
+            return attribution_pending_unknown_pc()
+
+        layout = self.pc_layout_repository.get_layout(active_session.pc_name)
+        is_vip_station = bool(layout.is_vip) if layout is not None else False
+        if not is_balance_type_usable_on_station(product.balance_type, is_vip_station):
+            return attribution_pending_unknown_pc()
+
+        return attribution_for_known_pc(
+            self.pc_layout_repository,
+            self.income_group_repository,
+            active_session.pc_name,
+            active_session.session_id,
+            now,
+        )
+
     def purchase(
         self,
         member_id: str,
@@ -1069,6 +1118,8 @@ class MemberRepository:
             if not (request.reference_number or "").strip():
                 raise HTTPException(status_code=400, detail="Payment reference is required")
 
+        payment_created_at = current_utc_time()
+        attribution = self._resolve_purchase_attribution(member.member_id, product, payment_created_at)
         payment = PaymentRecord(
             payment_id=str(uuid4()),
             session_id=None,
@@ -1085,7 +1136,13 @@ class MemberRepository:
             recorded_by_user_id=actor.user_id,
             idempotency_key=request.idempotency_key,
             status="completed",
-            created_at=current_utc_time(),
+            created_at=payment_created_at,
+            pc_name_snapshot=attribution.pc_name_snapshot,
+            income_group_id_snapshot=attribution.income_group_id_snapshot,
+            income_group_name_snapshot=attribution.income_group_name_snapshot,
+            attribution_status=attribution.status,  # type: ignore[arg-type]
+            attribution_assigned_at=attribution.assigned_at,
+            attribution_session_id=attribution.session_id,
         )
         # Atomic: the payment and the balance it funds are recorded in a
         # single SQLite transaction. If either step fails, nothing commits
