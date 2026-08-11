@@ -774,42 +774,19 @@ def ensure_sessions_accept_state_machine_statuses(connection: sqlite3.Connection
         raise RuntimeError("Session status migration left invalid foreign key references")
 
 
-def seed_default_rates(connection: sqlite3.Connection) -> None:
-    existing_count = connection.execute(
-        "SELECT COUNT(*) FROM rate_profiles"
-    ).fetchone()[0]
-    if existing_count:
-        return
-
-    now = __import__("datetime").datetime.now(
-        __import__("datetime").timezone.utc
-    ).isoformat()
-    defaults = [
-        ("rate-30-minutes", "30 Minutes", 30 * 60, "0.00", 1, 10, "package"),
-        ("rate-1-hour", "1 Hour", 60 * 60, "0.00", 1, 20, "package"),
-        ("rate-2-hours", "2 Hours", 2 * 60 * 60, "0.00", 1, 30, "package"),
-        ("rate-overnight", "Overnight", 8 * 60 * 60, "0.00", 1, 40, "package"),
-    ]
-    connection.executemany(
-        """
-        INSERT INTO rate_profiles (
-            rate_id,
-            name,
-            duration_seconds,
-            price,
-            is_active,
-            sort_order,
-            rate_type,
-            created_at,
-            updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [
-            (*rate, now, now)
-            for rate in defaults
-        ],
-    )
+# seed_default_rates() was removed here. It pre-dated the owner-confirmed
+# Standard/VIP pricing redesign and, on any database whose rate_profiles
+# table was still completely empty at first startup, inserted four ₱0.00
+# placeholder packages ("30 Minutes", "1 Hour", "2 Hours", "Overnight" --
+# ids rate-30-minutes/rate-1-hour/rate-2-hours/rate-overnight). Those rows
+# were never removed once seed_required_default_pricing() below became the
+# real source of default pricing, so a fresh install ended up with both the
+# obsolete ₱0 packages and the current owner-approved ones active at once.
+# seed_required_default_pricing() is now the single authoritative seeder for
+# default package pricing -- see deactivate_untouched_legacy_default_rates()
+# for the conservative, non-destructive handling of any database that
+# already has one of those four legacy rows from a prior run of the old
+# seeder.
 
 
 def seed_default_metered_rate(connection: sqlite3.Connection) -> None:
@@ -905,11 +882,11 @@ def seed_default_membership_products(connection: sqlite3.Connection) -> None:
 
 # Owner-confirmed default pricing. Each row has a fixed, permanent id.
 # seed_required_default_pricing() inserts a row only when that exact id is
-# still absent -- unlike seed_default_rates/seed_default_membership_products
-# above (which only ever run once, against a completely empty table), this
-# is designed to run on every startup against an already-configured shop
-# without ever duplicating a row or overwriting a price/duration an owner
-# has since edited under one of these ids.
+# still absent -- unlike seed_default_membership_products above (which only
+# ever runs once, against a completely empty table), this is designed to
+# run on every startup against an already-configured shop without ever
+# duplicating a row or overwriting a price/duration an owner has since
+# edited under one of these ids.
 REQUIRED_DEFAULT_RATES = [
     # (rate_id, name, duration_seconds, price, sort_order, station_scope,
     #  guest_only, member_eligible, eligible_start_local_time, eligible_end_local_time)
@@ -1043,6 +1020,55 @@ def seed_required_default_pricing(connection: sqlite3.Connection) -> None:
                 now,
                 now,
             ),
+        )
+
+
+# The four rows below are what the now-removed seed_default_rates() used to
+# insert on any pre-Stage-0 database whose rate_profiles table was still
+# completely empty at first startup. (rate_id, name, duration_seconds) --
+# the exact content that function wrote, used below to recognize a row as
+# still being that pristine placeholder rather than something an owner has
+# since repurposed.
+LEGACY_DEFAULT_RATE_PLACEHOLDERS = [
+    ("rate-30-minutes", "30 Minutes", 30 * 60),
+    ("rate-1-hour", "1 Hour", 60 * 60),
+    ("rate-2-hours", "2 Hours", 2 * 60 * 60),
+    ("rate-overnight", "Overnight", 8 * 60 * 60),
+]
+
+
+def deactivate_untouched_legacy_default_rates(connection: sqlite3.Connection) -> None:
+    """Conservative cleanup for a database that already has one of the four
+    legacy ₱0.00 placeholder packages from the old seed_default_rates()
+    (removed above; see the comment where it used to live).
+
+    A row is deactivated only when it is still exactly what that function
+    left behind: same id, same name, same duration, price still '0.00',
+    still a 'package', still active, and never edited since creation
+    (updated_at == created_at, the same one-time-transition guard used by
+    activate_vip_promo_product_if_untouched). Any row that fails even one of
+    those checks -- an owner renamed it, repriced it, changed its duration,
+    or already disabled it -- is left completely untouched; this can never
+    destroy owner-edited data. Deactivates rather than deletes, so any
+    historical session that still references one of these ids by rate_id
+    keeps resolving correctly. Once deactivated, is_active=0 means this
+    WHERE clause never matches that row again.
+    """
+    now = current_utc_time().isoformat()
+    for rate_id, name, duration_seconds in LEGACY_DEFAULT_RATE_PLACEHOLDERS:
+        connection.execute(
+            """
+            UPDATE rate_profiles
+            SET is_active = 0, updated_at = ?
+            WHERE rate_id = ?
+              AND name = ?
+              AND duration_seconds = ?
+              AND price = '0.00'
+              AND rate_type = 'package'
+              AND is_active = 1
+              AND updated_at = created_at
+            """,
+            (now, rate_id, name, duration_seconds),
         )
 
 
@@ -2012,7 +2038,6 @@ def initialize_database() -> None:
             WHERE rate_type = 'metered' AND is_active = 1
             """
         )
-        seed_default_rates(connection)
         seed_default_metered_rate(connection)
         seed_default_membership_products(connection)
         seed_default_pc_layouts(connection)
@@ -2020,7 +2045,14 @@ def initialize_database() -> None:
         # Station/eligibility enforcement (server/rate_eligibility.py) is
         # live as of Stage 2, so these owner-confirmed defaults are now safe
         # to activate. Idempotent by fixed id -- see seed_required_default_pricing.
+        # This is the single authoritative seeder for default package
+        # pricing; the old seed_default_rates() has been removed.
         seed_required_default_pricing(connection)
+        # Conservative, non-destructive cleanup for any database that still
+        # has one of the four obsolete ₱0 placeholders the old
+        # seed_default_rates() used to create -- see the function's
+        # docstring for exactly what "untouched" means here.
+        deactivate_untouched_legacy_default_rates(connection)
         # Stage 3: atomic purchase/credit + non-refundable enforcement are
         # now implemented and tested, so the VIP promo product is safe to
         # sell. See activate_vip_promo_product_if_untouched's docstring for

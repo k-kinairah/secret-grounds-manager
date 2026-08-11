@@ -88,7 +88,9 @@ def main() -> None:
         assert grace.shutdown_at is not None
         assert int((grace.shutdown_at - now).total_seconds()) == 120
 
-        one_hour = next(rate for rate in rate_repository.list_rates() if rate.name == "1 Hour")
+        one_hour = next(
+            rate for rate in rate_repository.list_rates() if rate.name == "Standard Guest - P15 (1 Hour)"
+        )
         rescue = asyncio.run(
             service.add_time(
                 session.session_id,

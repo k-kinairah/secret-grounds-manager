@@ -1071,6 +1071,24 @@ class MemberVipPlayablePreview(BaseModel):
     standard_real_seconds_equivalent: int
 
 
+class SessionBalanceSourceProjection(BaseModel):
+    """Dashboard-only read-time projection of which balance pool an active
+    member session is currently drawing from. Computed purely from the
+    persisted reservation snapshot, the session's snapshotted station_type,
+    and current elapsed time -- reusing balance_conversion.finalize_vip_usage
+    for the same math finalization will eventually apply. Never written or
+    persisted: polling this endpoint has no side effects on any balance."""
+
+    session_id: str
+    is_vip_station: bool
+    balance_source: StandardOrVip | None
+    vip_reserved_seconds: int
+    standard_reserved_seconds: int
+    standard_reserved_vip_equivalent_seconds: int
+    vip_consumed_estimate_seconds: int
+    standard_consumed_estimate_seconds: int
+
+
 class MemberRecord(BaseModel):
     member_id: str
     member_code: str
@@ -1394,6 +1412,7 @@ class SalesOperatorTransaction(BaseModel):
     voided_at: datetime | None = None
     void_reason: str | None = None
     related_reference: str | None = None
+    balance_type: StandardOrVip | None = None
 
 
 class SalesOperatorCollection(BaseModel):
@@ -1437,6 +1456,7 @@ class SalesRecentPayment(BaseModel):
     amount: Decimal
     status: PaymentStatus
     related_reference: str | None = None
+    balance_type: StandardOrVip | None = None
 
 
 class SalesOutstandingSettlement(BaseModel):

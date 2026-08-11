@@ -1495,7 +1495,7 @@ async function runAsyncAssertions() {
     assert.match(salesSource, /event\.key === "Escape"/);
     assert.match(salesSource, /triggerRefs\.current\[closingKey\]\?\.focus/);
     assert.match(salesSource, /Technical details/);
-    assert.match(salesSource, /Member Balance Purchase/);
+    assert.match(salesSource, /salesTypeLabel/);
     assert.match(salesSource, /Not yet used on a PC/);
     assert.match(salesSource, /Technical details/);
     assert.match(salesSource, /TransactionDetailsModal/);
@@ -1646,6 +1646,139 @@ async function runAsyncAssertions() {
     for (const name of ["Mama", "Neil", "Tyrone", "Rogene", "Rojan", "Bel", "Karen", "Admin"]) {
       assert.match(operatorConfigSource, new RegExp(name));
     }
+
+    // --- Stage 5: dashboard Standard/VIP pricing UX polish ---------------
+
+    // PC cards/tiles visibly identify Standard vs VIP, and operational
+    // status (customer lock, recovery, offline, etc.) is unaffected by
+    // station type -- station badges are purely decorative overlays.
+    const pcCardSource = readFileSync("src/components/PcCard.tsx", "utf8");
+    assert.match(pcCardSource, /standardBadge/);
+    assert.match(pcCardSource, />Standard</);
+    assert.match(pcCardSource, />VIP</);
+    const pcMonitorTileSourceForStage5 = readFileSync("src/components/PcMonitorTile.tsx", "utf8");
+    assert.match(pcMonitorTileSourceForStage5, /monitorStandardBadge/);
+    assert.match(pcMonitorTileSourceForStage5, /monitorVipBadge/);
+    // getPcMonitorPresentation and getPcCardTone never take is_vip as input
+    // at all -- proving station type structurally cannot influence which
+    // operational status badge/tone is shown, VIP or Standard.
+    const pcStatusSourceForStage5 = readFileSync("src/lib/pcStatus.ts", "utf8");
+    assert.doesNotMatch(pcStatusSourceForStage5, /pc\.is_vip/);
+    const vipCustomerLockedPc = makePc({
+      is_vip: true,
+      session_status: "active",
+      session_mode: "member_balance",
+      active_session_id: "session-vip-locked",
+      remaining_seconds: 600,
+      customer_locked: true
+    });
+    assert.deepEqual(
+      getPcMonitorPresentation(vipCustomerLockedPc),
+      { className: "monitorTileLocked", label: "Customer Locked" },
+      "Customer Locked must take priority over VIP station classification"
+    );
+    assert.equal(getPcCardTone(vipCustomerLockedPc), "active");
+
+    // Setup/Layout Computer Type control (item 2) actually mutates
+    // pc_layouts.is_vip through the existing PUT endpoint, with the
+    // required explanatory copy.
+    assert.match(dashboardSource, /changeStationType/);
+    assert.match(dashboardSource, /Computer Type/);
+    assert.match(
+      dashboardSource,
+      /This determines which rates and member-balance rules apply to this station\./
+    );
+    assert.match(dashboardSource, /computerTypeToggle/);
+
+    // Start Session: Midnight Promo card labeling is data-driven (derived
+    // from the rate's own name/eligibility window), never hardcoded, and
+    // shows the eligibility window + guest-only note.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /ratePromoLabel/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /ratePromoWindow/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /Guest only/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /formatClockTime/);
+    // Member tab clearly separates Standard Time / VIP Time balances and
+    // never phrases the Standard->VIP conversion as a raw multiplier.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /memberBalanceGrid/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, />Standard Time</);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, />VIP Time</);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /contributes/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /multiplier/i);
+
+    // Active VIP member session: balance-source projection is fetched from
+    // the server (never recomputed client-side), and both the "still on
+    // VIP" and "crossed into Standard" states are rendered distinctly --
+    // this is exactly what makes the VIP->Standard transition mid-session
+    // show up correctly as elapsed time crosses the boundary.
+    const pcDetailsSourceForStage5 = readFileSync("src/components/PcDetailsPanel.tsx", "utf8");
+    assert.match(pcDetailsSourceForStage5, /fetchSessionBalanceSource/);
+    assert.match(pcDetailsSourceForStage5, /Using VIP Time/);
+    assert.match(pcDetailsSourceForStage5, /Using Standard Time/);
+    assert.match(pcDetailsSourceForStage5, /Standard time is being used at the VIP conversion rate\./);
+    assert.match(pcDetailsSourceForStage5, /standard_reserved_vip_equivalent_seconds/);
+    assert.doesNotMatch(pcDetailsSourceForStage5, /STANDARD_SECONDS_PER_VIP_SECOND/);
+    assert.doesNotMatch(pcDetailsSourceForStage5, /standard_reserved_seconds\s*\/\s*2/);
+    assert.doesNotMatch(pcDetailsSourceForStage5, /Math\.floor\([^)]*standard[^)]*\/\s*2\)/i);
+    // Customer Locked stays visually prioritized in the details panel too --
+    // the VIP balance-status section is additive, not a replacement.
+    assert.match(
+      pcDetailsSourceForStage5,
+      /The member has locked this station; their session and timer continue/
+    );
+
+    // The projection endpoint is a pure GET -- polling it can never mutate
+    // session or balance state client- or server-side.
+    const apiSourceForStage5 = readFileSync("src/lib/api.ts", "utf8");
+    assert.match(
+      apiSourceForStage5,
+      /fetchSessionBalanceSource[\s\S]{0,200}cache: "no-store"/
+    );
+    assert.doesNotMatch(
+      apiSourceForStage5.slice(
+        apiSourceForStage5.indexOf("export async function fetchSessionBalanceSource"),
+        apiSourceForStage5.indexOf("export async function fetchSessionBalanceSource") + 320
+      ),
+      /method: "(POST|PUT|PATCH|DELETE)"/
+    );
+    const mainPySourceForStage5 = readFileSync("../server/main.py", "utf8");
+    assert.match(mainPySourceForStage5, /@app\.get\("\/sessions\/\{session_id\}\/balance-source"/);
+
+    // Members page: VIP promo product is explicitly marked VIP-only and
+    // non-refundable directly on the product card, not just in fine print.
+    const membersSourceForStage5 = readFileSync("src/components/MembersManager.tsx", "utf8");
+    assert.match(membersSourceForStage5, /VIP Only/);
+    assert.match(membersSourceForStage5, /Non-Refundable/);
+
+    // Rates page: station scope and Midnight-style eligibility windows are
+    // visually distinguishable, deprecated metered/Open Time UI stays gone.
+    const ratesManagerSourceForStage5 = readFileSync("src/components/RatesManager.tsx", "utf8");
+    assert.match(ratesManagerSourceForStage5, /stationScopeBadgeClassName/);
+    assert.match(ratesManagerSourceForStage5, /promoPill/);
+
+    // Session history: VIP breakdown is read from the persisted Stage 4
+    // session snapshot fields only -- never recomputed from the member's
+    // current wallet -- while a Standard history row stays uncluttered and
+    // historical Open Time rows still render through their original path.
+    const historyTableSourceForStage5 = readFileSync("src/components/HistoryTable.tsx", "utf8");
+    assert.match(historyTableSourceForStage5, /vipHistoryBadge/);
+    assert.match(historyTableSourceForStage5, /station_type === "vip"/);
+    assert.match(historyTableSourceForStage5, /vip_seconds_consumed/);
+    assert.match(historyTableSourceForStage5, /standard_seconds_consumed_at_vip_rate/);
+    assert.match(historyTableSourceForStage5, /conversion_applied/);
+    assert.match(historyTableSourceForStage5, /VIP Time Used/);
+    assert.match(historyTableSourceForStage5, /Standard Time Used/);
+    assert.doesNotMatch(historyTableSourceForStage5, /vip_balance_seconds/);
+    assert.match(historyTableSourceForStage5, /"Open Time"/);
+    assert.match(historyTableSourceForStage5, /session_mode === "open_time"/);
+
+    // Sales history: Standard top-ups and VIP promo purchases are visually
+    // distinguishable, VIP purchases flagged non-refundable, and this is
+    // labeling only -- underlying accounting totals are untouched.
+    const salesManagerSourceForStage5 = readFileSync("src/components/SalesManager.tsx", "utf8");
+    assert.match(salesManagerSourceForStage5, /salesTypeLabel/);
+    assert.match(salesManagerSourceForStage5, /"VIP Promo"/);
+    assert.match(salesManagerSourceForStage5, /"Standard Top-up"/);
+    assert.match(salesManagerSourceForStage5, /vipPurchaseBadge/);
 
     const loggedErrors: unknown[] = [];
     console.error = (...args: unknown[]) => {

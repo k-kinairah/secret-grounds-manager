@@ -98,6 +98,7 @@ from server.schemas import (
     ShiftCloseRequest,
     ShiftOpenRequest,
     SessionCommandResponse,
+    SessionBalanceSourceProjection,
     SessionRecord,
     SessionStateSummary,
     SalesOutstandingSettlement,
@@ -711,6 +712,17 @@ def get_member_vip_preview(
         standard_seconds=standard_part,
         standard_real_seconds_equivalent=standard_part // 2,
     )
+
+
+@app.get("/sessions/{session_id}/balance-source", response_model=SessionBalanceSourceProjection)
+def get_session_balance_source(
+    session_id: str,
+    _: object = Depends(require_role("cashier")),
+) -> SessionBalanceSourceProjection:
+    """Dashboard-only read of which balance pool an active member session is
+    currently drawing from. Pure projection from persisted reservation +
+    session state and current time -- polling this never mutates anything."""
+    return session_service.get_balance_source_projection(session_id)
 
 
 @app.post("/members", response_model=MemberRecord)
@@ -1339,7 +1351,8 @@ def build_sales_report(
                 s.member_code_snapshot,
                 m.full_name AS member_full_name,
                 m.member_code AS member_code,
-                mt.transaction_type AS member_transaction_type
+                mt.transaction_type AS member_transaction_type,
+                mt.balance_type AS member_balance_type
             FROM payments p
             LEFT JOIN sessions s ON s.session_id = p.session_id
             LEFT JOIN member_time_transactions mt ON mt.related_payment_id = p.payment_id
@@ -1374,7 +1387,8 @@ def build_sales_report(
                 s.member_code_snapshot,
                 m.full_name AS member_full_name,
                 m.member_code AS member_code,
-                mt.transaction_type AS member_transaction_type
+                mt.transaction_type AS member_transaction_type,
+                mt.balance_type AS member_balance_type
             FROM payments p
             LEFT JOIN sessions s ON s.session_id = p.session_id
             LEFT JOIN member_time_transactions mt ON mt.related_payment_id = p.payment_id
@@ -1498,6 +1512,7 @@ def build_sales_report(
                     amount=amount,
                     status=row["status"],
                     related_reference=row["session_id"] or row["payment_id"],
+                    balance_type=row["member_balance_type"],
                 )
             )
 
@@ -1578,6 +1593,7 @@ def build_sales_report(
                 voided_at=storage_datetime(row["voided_at"]) if row["voided_at"] is not None else None,
                 void_reason=row["void_reason"],
                 related_reference=row["session_id"] or row["payment_id"],
+                balance_type=row["member_balance_type"],
             )
         )
 

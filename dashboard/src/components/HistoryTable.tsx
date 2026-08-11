@@ -2,7 +2,7 @@
 
 import { memo, useEffect, useMemo, useState } from "react";
 import { fetchBilling, fetchHistory } from "@/lib/api";
-import { formatDateTime, formatMoney } from "@/lib/time";
+import { formatDateTime, formatMoney, formatNaturalDuration } from "@/lib/time";
 import type { BillingSummary, SessionRecord, SessionStatus } from "@/lib/types";
 import styles from "@/app/history/history.module.css";
 import { CloseButton } from "./CloseButton";
@@ -118,7 +118,10 @@ const HistoryRow = memo(function HistoryRow({
         <span>{session.member_name_snapshot ? "Member" : "Walk-in"}</span>
       </td>
       <td>
-        <strong>{sessionType(session)}</strong>
+        <strong>
+          {sessionType(session)}
+          {session.station_type === "vip" ? <span className={styles.vipHistoryBadge}>VIP</span> : null}
+        </strong>
         <span>{session.rate_name_snapshot ?? session.member_name_snapshot ?? "Regular"}</span>
       </td>
       <td>{formatDateTime(session.started_at)}</td>
@@ -294,7 +297,10 @@ export function HistoryTable() {
                     <strong>{session.pc_name}</strong>
                     <span className={`${styles.statusBadge} ${statusClassName[session.status]}`}>{readableStatus(session.status)}</span>
                   </div>
-                  <p>{customerName(session)} / {sessionType(session)}</p>
+                  <p>
+                    {customerName(session)} / {sessionType(session)}
+                    {session.station_type === "vip" ? <span className={styles.vipHistoryBadge}>VIP</span> : null}
+                  </p>
                   <p>{readableDuration(session.actual_elapsed_seconds ?? session.total_seconds, session.status === "active")} / {formatMoney(session.total_amount)}</p>
                   <button className={styles.tableButton} onClick={() => void openDetails(session)} type="button">View Details</button>
                 </article>
@@ -328,7 +334,32 @@ export function HistoryTable() {
                   <div><span>Ended</span><strong>{selectedSession.ended_at ? formatDateTime(selectedSession.ended_at) : "In progress"}</strong></div>
                   <div><span>Duration</span><strong>{readableDuration(selectedSession.actual_elapsed_seconds ?? selectedSession.total_seconds, selectedSession.status === "active")}</strong></div>
                   <div><span>Added Time</span><strong>{readableDuration(selectedSession.added_seconds)}</strong></div>
+                  {selectedSession.station_type === "vip" &&
+                  selectedSession.vip_seconds_consumed !== null &&
+                  selectedSession.standard_seconds_consumed_at_vip_rate !== null ? (
+                    <>
+                      <div>
+                        <span>VIP Time Used</span>
+                        <strong>{readableDuration(selectedSession.vip_seconds_consumed)}</strong>
+                      </div>
+                      <div>
+                        <span>Standard Time Used</span>
+                        <strong>{readableDuration(selectedSession.standard_seconds_consumed_at_vip_rate)}</strong>
+                      </div>
+                    </>
+                  ) : null}
                 </dl>
+                {selectedSession.station_type === "vip" && selectedSession.conversion_applied ? (
+                  <div className={styles.vipUsageBreakdown}>
+                    <p>
+                      {formatNaturalDuration(selectedSession.standard_seconds_consumed_at_vip_rate)} Standard provided{" "}
+                      {formatNaturalDuration(
+                        Math.floor((selectedSession.standard_seconds_consumed_at_vip_rate ?? 0) / 2)
+                      )}{" "}
+                      of VIP play.
+                    </p>
+                  </div>
+                ) : null}
               </section>
               <section>
                 <h3>Billing</h3>

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createRate, fetchRates, updateRate, updateRateStatus } from "@/lib/api";
 import { saveRateProfile } from "@/lib/rateActions";
 import { emptyRateForm, rateToForm, type RateFormState } from "@/lib/rateForm";
-import { formatMoney, formatRateDuration } from "@/lib/time";
+import { formatClockTime, formatMoney, formatRateDuration } from "@/lib/time";
 import type { PackageStationScope, RateProfile } from "@/lib/types";
 import styles from "@/app/rates/rates.module.css";
 
@@ -27,16 +27,16 @@ function stationScopeLabel(scope: PackageStationScope): string {
   }
 }
 
-function formatClockTime(value: string): string {
-  const [hourText, minuteText] = value.split(":");
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return value;
+function stationScopeBadgeClassName(scope: PackageStationScope): string {
+  switch (scope) {
+    case "vip":
+      return "stationScopeVip";
+    case "any":
+      return "stationScopeAny";
+    case "standard":
+    default:
+      return "stationScopeStandard";
   }
-  const period = hour < 12 ? "AM" : "PM";
-  const displayHour = hour % 12 === 0 ? 12 : hour % 12;
-  return `${displayHour}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
 export function RatesManager() {
@@ -246,7 +246,12 @@ export function RatesManager() {
                       {rate.is_active ? "Enabled" : "Disabled"}
                     </span>
                     <span className={styles.orderPill}>Order {rate.sort_order}</span>
-                    <span className={styles.orderPill}>{stationScopeLabel(rate.station_scope)}</span>
+                    <span className={`${styles.stationScopeBadge} ${styles[stationScopeBadgeClassName(rate.station_scope)]}`}>
+                      {stationScopeLabel(rate.station_scope)}
+                    </span>
+                    {rate.eligible_start_local_time && rate.eligible_end_local_time ? (
+                      <span className={styles.promoPill}>Promo</span>
+                    ) : null}
                   </div>
                   <h3>{rate.name}</h3>
                   <div className={styles.rateMeta}>

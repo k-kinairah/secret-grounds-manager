@@ -262,6 +262,41 @@
   color: #bfdbfe;
 }
 
+.stationScopeBadge {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 10px;
+}
+
+.stationScopeVip {
+  background: rgba(253, 224, 71, 0.16);
+  border: 1px solid rgba(253, 224, 71, 0.4);
+  color: #fde047;
+}
+
+.stationScopeStandard {
+  background: rgba(148, 163, 184, 0.13);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #cbd5e1;
+}
+
+.stationScopeAny {
+  background: rgba(45, 212, 191, 0.13);
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  color: #99f6e4;
+}
+
+.promoPill {
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.36);
+  border-radius: 999px;
+  color: #fbbf24;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 10px;
+}
+
 .loadingCard,
 .emptyState {
   align-items: center;

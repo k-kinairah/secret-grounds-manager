@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import styles from "@/app/page.module.css";
-import { clearCustomerLock, sendPcMessage, sendPowerCommand, updatePcMacAddress, wakePc } from "@/lib/api";
+import {
+  clearCustomerLock,
+  fetchSessionBalanceSource,
+  getPollingIntervalMs,
+  sendPcMessage,
+  sendPowerCommand,
+  updatePcMacAddress,
+  wakePc
+} from "@/lib/api";
 import { getPcActionAvailability } from "@/lib/pcStatus";
-import { formatDateTime, formatMoney, formatTimer } from "@/lib/time";
-import type { MessageSeverity, PcSummary, UserRole } from "@/lib/types";
+import { formatDateTime, formatMoney, formatNaturalDuration, formatTimer } from "@/lib/time";
+import type { MessageSeverity, PcSummary, SessionBalanceSourceProjection, UserRole } from "@/lib/types";
 import { CloseButton } from "./CloseButton";
 
 type IconName =
@@ -196,6 +204,36 @@ export function PcDetailsPanel({
   const isOpenTime = pc.session_mode === "open_time";
   const canResolve =
     pc.recovery_required && (currentUserRole === "owner" || currentUserRole === "admin");
+  const isVipMemberSession =
+    pc.is_vip && pc.session_mode === "member_balance" && isActiveSession && pc.active_session_id !== null;
+  const [balanceSource, setBalanceSource] = useState<SessionBalanceSourceProjection | null>(null);
+
+  useEffect(() => {
+    if (!isVipMemberSession || !pc.active_session_id) {
+      setBalanceSource(null);
+      return;
+    }
+    let isMounted = true;
+    function refreshBalanceSource() {
+      fetchSessionBalanceSource(pc.active_session_id as string)
+        .then((projection) => {
+          if (isMounted) {
+            setBalanceSource(projection);
+          }
+        })
+        .catch(() => {
+          if (isMounted) {
+            setBalanceSource(null);
+          }
+        });
+    }
+    refreshBalanceSource();
+    const intervalId = window.setInterval(refreshBalanceSource, getPollingIntervalMs());
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, [isVipMemberSession, pc.active_session_id]);
 
   useEffect(() => {
     if (variant === "dock") {
@@ -391,6 +429,47 @@ export function PcDetailsPanel({
                 </div>
               </dl>
             </section>
+
+            {isVipMemberSession ? (
+              <section className={styles.controlSection} aria-label="VIP balance status">
+                <h3>VIP Balance Status</h3>
+                {balanceSource ? (
+                  <>
+                    <p
+                      className={
+                        balanceSource.balance_source === "standard"
+                          ? styles.vipSourceStatusStandard
+                          : styles.vipSourceStatusVip
+                      }
+                    >
+                      {balanceSource.balance_source === "standard" ? "Using Standard Time" : "Using VIP Time"}
+                    </p>
+                    {balanceSource.balance_source === "standard" ? (
+                      <p className={styles.panelText}>
+                        Standard time is being used at the VIP conversion rate.
+                      </p>
+                    ) : null}
+                    <dl className={styles.compactDetailList}>
+                      <div className={styles.detailRow}>
+                        <span>Reserved for this session · VIP</span>
+                        <strong>{formatNaturalDuration(balanceSource.vip_reserved_seconds)}</strong>
+                      </div>
+                      {balanceSource.standard_reserved_seconds > 0 ? (
+                        <div className={styles.detailRow}>
+                          <span>Reserved for this session · Standard</span>
+                          <strong>
+                            {formatNaturalDuration(balanceSource.standard_reserved_seconds)} (
+                            {formatNaturalDuration(balanceSource.standard_reserved_vip_equivalent_seconds)} VIP play)
+                          </strong>
+                        </div>
+                      ) : null}
+                    </dl>
+                  </>
+                ) : (
+                  <p className={styles.panelText}>Loading balance status...</p>
+                )}
+              </section>
+            ) : null}
 
             <section className={styles.controlSection} aria-label="Billing summary">
               <h3>Billing</h3>

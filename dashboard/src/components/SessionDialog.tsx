@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import styles from "@/app/page.module.css";
 import { fetchMemberVipPreview, fetchMembers } from "@/lib/api";
-import { formatMoney, formatNaturalDuration, formatRateDuration, minutesToSeconds } from "@/lib/time";
+import { formatClockTime, formatMoney, formatNaturalDuration, formatRateDuration, minutesToSeconds } from "@/lib/time";
 import type {
   CurrentUser,
   MemberRecord,
@@ -287,7 +287,9 @@ export function SessionDialog({
               >
                 {members.map((member) => (
                   <option key={member.member_id} value={member.member_id}>
-                    {member.username} - {member.full_name} ({formatNaturalDuration(member.time_balance_seconds)})
+                    {member.username} - {member.full_name} (Std {formatNaturalDuration(
+                      member.time_balance_seconds
+                    )} · VIP {formatNaturalDuration(member.vip_balance_seconds)})
                   </option>
                 ))}
               </select>
@@ -304,6 +306,18 @@ export function SessionDialog({
                 value={memberPin}
               />
             </label>
+            {selectedMember ? (
+              <div className={styles.memberBalanceGrid}>
+                <div className={styles.amountPreview}>
+                  <span>Standard Time</span>
+                  <strong>{formatNaturalDuration(selectedMember.time_balance_seconds)}</strong>
+                </div>
+                <div className={styles.amountPreview}>
+                  <span>VIP Time</span>
+                  <strong>{formatNaturalDuration(selectedMember.vip_balance_seconds)}</strong>
+                </div>
+              </div>
+            ) : null}
             <div className={styles.amountPreview}>
               <span>Member Balance</span>
               <strong>Only the time actually used will be deducted.</strong>
@@ -348,15 +362,22 @@ export function SessionDialog({
                   {!selectedMember
                     ? "Select a member"
                     : vipPreview
-                      ? `${formatNaturalDuration(vipPreview.playable_seconds)}${
-                          vipPreview.playable_seconds > 0
-                            ? ` (${formatNaturalDuration(vipPreview.vip_seconds)} VIP + ${formatNaturalDuration(
-                                vipPreview.standard_seconds
-                              )} Standard)`
-                            : ""
-                        }${vipPreview.playable_seconds <= 0 ? " -- insufficient balance" : ""}`
+                      ? vipPreview.playable_seconds > 0
+                        ? formatNaturalDuration(vipPreview.playable_seconds)
+                        : "Insufficient balance for this VIP station"
                       : "Calculating..."}
                 </strong>
+                {selectedMember && vipPreview && vipPreview.playable_seconds > 0 ? (
+                  <div className={styles.vipPreviewBreakdown}>
+                    <span>VIP balance: {formatNaturalDuration(vipPreview.vip_seconds)}</span>
+                    {vipPreview.standard_seconds > 0 ? (
+                      <span>
+                        Standard balance: {formatNaturalDuration(vipPreview.standard_seconds)} contributes{" "}
+                        {formatNaturalDuration(vipPreview.standard_real_seconds_equivalent)} of VIP play
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             <div className={styles.amountPreview}>
@@ -381,22 +402,38 @@ export function SessionDialog({
         ) : (
           <div role="tabpanel">
             <div className={styles.optionGrid}>
-              {packageRates.map((rate) => (
-                <button
-                  className={`${styles.rateOption} ${
-                    selectedRateId === rate.rate_id ? styles.rateOptionSelected : ""
-                  }`}
-                  key={rate.rate_id}
-                  onClick={() => setSelectedRateId(rate.rate_id)}
-                  type="button"
-                >
-                  <span className={styles.rateTitle}>{rate.name}</span>
-                  <span className={styles.rateDuration}>
-                    {formatRateDuration(rate.duration_seconds)}
-                  </span>
-                  <span className={styles.ratePrice}>{formatMoney(rate.price)}</span>
-                </button>
-              ))}
+              {packageRates.map((rate) => {
+                const isTimeLimited = Boolean(
+                  rate.eligible_start_local_time && rate.eligible_end_local_time
+                );
+                const promoLabel = rate.name.replace(/^Standard\s+|^VIP\s+/i, "").toUpperCase();
+                return (
+                  <button
+                    className={`${styles.rateOption} ${
+                      selectedRateId === rate.rate_id ? styles.rateOptionSelected : ""
+                    } ${isTimeLimited ? styles.rateOptionPromo : ""}`}
+                    key={rate.rate_id}
+                    onClick={() => setSelectedRateId(rate.rate_id)}
+                    type="button"
+                  >
+                    {isTimeLimited ? (
+                      <span className={styles.ratePromoLabel}>{promoLabel}</span>
+                    ) : null}
+                    <span className={styles.ratePrice}>{formatMoney(rate.price)}</span>
+                    <span className={styles.rateDuration}>
+                      {formatRateDuration(rate.duration_seconds)}
+                    </span>
+                    {isTimeLimited ? (
+                      <span className={styles.ratePromoWindow}>
+                        {formatClockTime(rate.eligible_start_local_time as string)}
+                        {"–"}
+                        {formatClockTime(rate.eligible_end_local_time as string)}
+                        {rate.guest_only ? " · Guest only" : ""}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}

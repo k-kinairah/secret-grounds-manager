@@ -267,6 +267,35 @@ export function DashboardClient() {
     }
   }
 
+  async function changeStationType(slot: PcLayoutSlot, isVip: boolean) {
+    if (slot.is_vip === isVip) {
+      return;
+    }
+    setIsMutating(true);
+    try {
+      await updatePcLayout(slot.pc_name, {
+        display_name: slot.display_name,
+        area_label: slot.area_label,
+        layout_order: slot.layout_order,
+        is_vip: isVip,
+        is_enabled: slot.is_enabled,
+        mac_address: slot.mac_address
+      });
+      const slots = await fetchPcLayouts(true);
+      setLayoutSlots(slots);
+      const message = `${slot.display_name} is now classified as ${isVip ? "VIP" : "Standard"}. This determines which rates and member-balance rules apply to this station.`;
+      setMessage(message);
+      pushToast(message, "success");
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Could not change this station's computer type.";
+      setMessage(errorMessage);
+      pushToast(errorMessage, "error");
+    } finally {
+      setIsMutating(false);
+    }
+  }
+
   async function endSessionAction(pc: PcSummary) {
     setIsMutating(true);
     try {
@@ -500,13 +529,43 @@ export function DashboardClient() {
                     >
                       <div className={styles.pcAreaRow}>
                         <span>{slot.area_label}</span>
-                        {slot.is_vip ? <span className={styles.vipBadge}>VIP</span> : null}
+                        {slot.is_vip ? (
+                          <span className={styles.vipBadge}>VIP</span>
+                        ) : (
+                          <span className={styles.standardBadge}>Standard</span>
+                        )}
                       </div>
                       <div className={styles.monitorFace}>
                         <h3>{slot.display_name}</h3>
                         <span className={isRegistered ? styles.installedStatus : styles.notInstalledStatus}>
                           {isRegistered ? "Registered" : "Not Installed"}
                         </span>
+                      </div>
+                      <div className={styles.computerTypeControl}>
+                        <span className={styles.computerTypeLabel}>Computer Type</span>
+                        <div className={styles.computerTypeToggle} role="group" aria-label={`${slot.display_name} computer type`}>
+                          <button
+                            aria-pressed={!slot.is_vip}
+                            className={!slot.is_vip ? styles.computerTypeOptionActive : styles.computerTypeOption}
+                            disabled={isMutating}
+                            onClick={() => void changeStationType(slot, false)}
+                            type="button"
+                          >
+                            Standard
+                          </button>
+                          <button
+                            aria-pressed={slot.is_vip}
+                            className={slot.is_vip ? styles.computerTypeOptionActive : styles.computerTypeOption}
+                            disabled={isMutating}
+                            onClick={() => void changeStationType(slot, true)}
+                            type="button"
+                          >
+                            VIP
+                          </button>
+                        </div>
+                        <p className={styles.computerTypeHint}>
+                          This determines which rates and member-balance rules apply to this station.
+                        </p>
                       </div>
                       <div className={styles.setupSlotActions}>
                         <button

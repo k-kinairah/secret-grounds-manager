@@ -83,6 +83,18 @@ export function formatNaturalDuration(totalSeconds: number | null): string {
   return `${minutes} min`;
 }
 
+export function formatClockTime(value: string): string {
+  const [hourText, minuteText] = value.split(":");
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    return value;
+  }
+  const period = hour < 12 ? "AM" : "PM";
+  const displayHour = hour % 12 === 0 ? 12 : hour % 12;
+  return `${displayHour}:${String(minute).padStart(2, "0")} ${period}`;
+}
+
 export function formatDateTime(value: string | null): string {
   if (value === null) {
     return "Not ended";

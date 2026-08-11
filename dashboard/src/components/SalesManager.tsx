@@ -23,6 +23,13 @@ const SALES_TYPE_LABELS: Record<SalesType, string> = {
   pc_session: "PC Session"
 };
 
+function salesTypeLabel(salesType: SalesType, balanceType?: "standard" | "vip" | null): string {
+  if (salesType === "member_purchase") {
+    return balanceType === "vip" ? "VIP Promo" : "Standard Top-up";
+  }
+  return SALES_TYPE_LABELS[salesType];
+}
+
 const METHOD_FILTER_OPTIONS: SecretSelectOption[] = [
   { label: "All methods", value: "all" },
   { label: "Cash", value: "cash" },
@@ -384,7 +391,7 @@ export function SalesManager() {
                           <td>{payment.operator_name}</td>
                           <td>{payment.customer ?? "Walk-in"}</td>
                           <td>{payment.pc_name ?? "No PC"}</td>
-                          <td>{SALES_TYPE_LABELS[payment.sales_type]}</td>
+                          <td>{salesTypeLabel(payment.sales_type, payment.balance_type)}</td>
                           <td>{displayMethod(payment.payment_method)}</td>
                           <td>{formatMoney(payment.amount)}</td>
                           <td>{payment.status === "completed" ? "Completed" : "Voided"}</td>
@@ -803,7 +810,7 @@ function OperatorTransactionsModal({
           transaction.reference_number,
           transaction.related_reference,
           transaction.recorded_by_operator,
-          SALES_TYPE_LABELS[transaction.sales_type],
+          salesTypeLabel(transaction.sales_type, transaction.balance_type),
           transactionSourceLabel(transaction)
         ]
           .filter(Boolean)
@@ -996,10 +1003,15 @@ function TransactionReceipt({
   transaction: SalesOperatorTransaction;
 }) {
   return (
-    <article aria-label={`${SALES_TYPE_LABELS[transaction.sales_type]} ${statusLabel(transaction)} ${formatMoney(transaction.amount_due)}`} className={styles.transactionReceipt}>
+    <article aria-label={`${salesTypeLabel(transaction.sales_type, transaction.balance_type)} ${statusLabel(transaction)} ${formatMoney(transaction.amount_due)}`} className={styles.transactionReceipt}>
       <div className={styles.transactionReceiptHeader}>
         <div>
-          <strong>{transaction.sales_type === "member_purchase" ? "Member Balance Purchase" : SALES_TYPE_LABELS[transaction.sales_type]}</strong>
+          <strong>
+            {salesTypeLabel(transaction.sales_type, transaction.balance_type)}
+            {transaction.balance_type === "vip" ? (
+              <span className={styles.vipPurchaseBadge}>Non-refundable</span>
+            ) : null}
+          </strong>
           <span>{formatDateTime(transaction.timestamp)}</span>
         </div>
         <span className={`${styles.statusBadge} ${transaction.status === "completed" ? styles.statusCompleted : styles.statusVoided}`}>
@@ -1078,7 +1090,12 @@ function TransactionDetailsModal({
       <div aria-modal="true" className={styles.transactionModal} role="dialog">
         <div className={styles.transactionModalHeader}>
           <div>
-            <h2>{transaction.sales_type === "member_purchase" ? "Member Balance Purchase" : SALES_TYPE_LABELS[transaction.sales_type]}</h2>
+            <h2>
+              {salesTypeLabel(transaction.sales_type, transaction.balance_type)}
+              {transaction.balance_type === "vip" ? (
+                <span className={styles.vipPurchaseBadge}>Non-refundable</span>
+              ) : null}
+            </h2>
             <span>{formatDateTime(transaction.timestamp)}</span>
           </div>
           <button className={styles.collectionActionButton} onClick={onClose} type="button">
@@ -1088,7 +1105,10 @@ function TransactionDetailsModal({
         <div className={styles.transactionModalGrid}>
           <DetailSection title="Transaction">
             <ReceiptField label="Status" value={statusLabel(transaction)} />
-            <ReceiptField label="Type" value={SALES_TYPE_LABELS[transaction.sales_type]} />
+            <ReceiptField label="Type" value={salesTypeLabel(transaction.sales_type, transaction.balance_type)} />
+            {transaction.balance_type === "vip" ? (
+              <ReceiptField label="Refund policy" value="Non-refundable" />
+            ) : null}
             <ReceiptField label="Original amount" value={formatMoney(transaction.amount_due)} />
             {transaction.status === "voided" ? <ReceiptField label="Correction amount" value={formatMoney(transaction.amount_due)} /> : null}
           </DetailSection>

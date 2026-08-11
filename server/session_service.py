@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
-from server.balance_conversion import split_vip_session
+from server.balance_conversion import STANDARD_SECONDS_PER_VIP_SECOND, finalize_vip_usage, split_vip_session
 from server.connection_manager import ClientConnectionManager
 from server.billing_service import BillingService
 from server.billing_service import calculate_open_time_estimate
@@ -24,6 +24,7 @@ from server.schemas import (
     SessionCommandResponse,
     SessionEventRecord,
     SessionRecord,
+    SessionBalanceSourceProjection,
     PaymentCreateRequest,
 )
 from server.prepared_session_repository import PreparedSessionRepository, payment_from_json, payment_to_json
@@ -1661,6 +1662,62 @@ class SessionService:
             session=updated_session,
             command=command,
             acknowledgements=acknowledgements,
+        )
+
+    def get_balance_source_projection(self, session_id: str) -> SessionBalanceSourceProjection:
+        """Dashboard-only read: which balance pool a member session is
+        currently drawing from, right now. Pure projection from the
+        persisted reservation snapshot + session.station_type + elapsed
+        wall-clock time -- reuses finalize_vip_usage (the same function the
+        real finalization path calls) so this never diverges from what
+        ending the session would actually deduct. Read-only: no reservation
+        or balance state is touched, so polling this has no side effects."""
+        if self.member_repository is None:
+            raise HTTPException(status_code=500, detail="Member service is unavailable")
+        session = self.repository.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session.session_mode != "member_balance" or session.member_id is None:
+            raise HTTPException(status_code=400, detail="Session is not a member-balance session")
+
+        is_vip_station = session.station_type == "vip"
+        reservation_totals = self.member_repository.get_active_reservation_totals(  # type: ignore[attr-defined]
+            session.member_id, session_id
+        )
+        reserved_standard, reserved_vip = reservation_totals if reservation_totals is not None else (0, 0)
+        elapsed_seconds = (
+            max(0, int((current_utc_time() - session.started_at).total_seconds()))
+            if session.status in {"active", "grace_period", "ending"}
+            else 0
+        )
+
+        if is_vip_station:
+            reserved_effective = reserved_vip + reserved_standard // STANDARD_SECONDS_PER_VIP_SECOND
+            vip_consumed, standard_consumed = finalize_vip_usage(elapsed_seconds, reserved_effective, reserved_vip)
+            if reservation_totals is None:
+                balance_source = None
+            elif standard_consumed > 0:
+                balance_source = "standard"
+            elif vip_consumed > 0 or reserved_vip > 0:
+                balance_source = "vip"
+            else:
+                balance_source = "standard" if reserved_standard > 0 else None
+        else:
+            vip_consumed = 0
+            standard_consumed = (
+                min(elapsed_seconds, reserved_standard) if reservation_totals is not None else 0
+            )
+            balance_source = "standard" if reservation_totals is not None else None
+
+        return SessionBalanceSourceProjection(
+            session_id=session_id,
+            is_vip_station=is_vip_station,
+            balance_source=balance_source,
+            vip_reserved_seconds=reserved_vip,
+            standard_reserved_seconds=reserved_standard,
+            standard_reserved_vip_equivalent_seconds=reserved_standard // STANDARD_SECONDS_PER_VIP_SECOND,
+            vip_consumed_estimate_seconds=vip_consumed,
+            standard_consumed_estimate_seconds=standard_consumed,
         )
 
     def compute_open_time_final_amount(

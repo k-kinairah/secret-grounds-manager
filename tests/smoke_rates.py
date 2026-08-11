@@ -49,18 +49,18 @@ def main() -> None:
         )
 
         rates = get_rates()
-        # Stage 2 activates the owner-confirmed default packages (lower
-        # sort_order) alongside the pre-existing legacy defaults.
+        # A fresh database gets exactly the five owner-approved default
+        # packages -- the legacy seed_default_rates() placeholders ("30
+        # Minutes"/"1 Hour"/"2 Hours"/"Overnight") have been removed and
+        # must never appear here (see deactivate_untouched_legacy_default_rates
+        # in server/database.py for how a database that already has one of
+        # those rows from before this cleanup is handled instead).
         assert [rate.name for rate in rates if rate.rate_type == "package"] == [
             "Standard Guest - P5 (20 Minutes)",
             "Standard Guest - P10 (40 Minutes)",
             "Standard Guest - P15 (1 Hour)",
             "Standard Midnight Promo",
             "VIP Guest - P30 (1 Hour)",
-            "30 Minutes",
-            "1 Hour",
-            "2 Hours",
-            "Overnight",
         ]
 
         # Metered/Open Time customer operation is permanently retired.
@@ -141,7 +141,7 @@ def main() -> None:
         assert still_inactive.is_active is False
 
         # Package rate creation/edit remains fully unaffected.
-        one_hour = next(rate for rate in rates if rate.name == "1 Hour")
+        one_hour = next(rate for rate in rates if rate.name == "Standard Guest - P15 (1 Hour)")
         updated_one_hour = update_rate(
             one_hour.rate_id,
             RateProfileUpdate(
@@ -199,7 +199,7 @@ def main() -> None:
         assert saved_session.rate_name_snapshot == "1 Hour"
         assert saved_session.base_amount == Decimal("100.10")
 
-        thirty = next(rate for rate in get_rates() if rate.name == "30 Minutes")
+        thirty = next(rate for rate in get_rates() if rate.name == "Standard Guest - P5 (20 Minutes)")
         update_rate(
             thirty.rate_id,
             RateProfileUpdate(

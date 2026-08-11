@@ -784,6 +784,7 @@
 }
 
 .monitorVipBadge,
+.monitorStandardBadge,
 .monitorWarningBadge {
   border-radius: 999px;
   font-size: 10px;
@@ -799,6 +800,12 @@
 .monitorVipBadge {
   background: #fde047;
   color: #111827;
+}
+
+.monitorStandardBadge {
+  background: rgb(148 163 184 / 0.22);
+  color: #cbd5e1;
+  font-weight: 800;
 }
 
 .monitorWarningBadge {
@@ -1043,6 +1050,14 @@
   padding: 3px 8px;
 }
 
+.standardBadge {
+  background: rgb(148 163 184 / 0.18);
+  border-radius: 999px;
+  color: var(--muted);
+  font-weight: 800;
+  padding: 3px 8px;
+}
+
 .vipBadge {
   background: #fde047;
   border-radius: 999px;
@@ -1110,6 +1125,61 @@
   gap: 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 12px;
+}
+
+.computerTypeControl {
+  border-top: 1px solid rgb(148 163 184 / 0.14);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.computerTypeLabel {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.computerTypeToggle {
+  background: rgb(15 23 42 / 0.5);
+  border-radius: 999px;
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+}
+
+.computerTypeOption,
+.computerTypeOptionActive {
+  border-radius: 999px;
+  flex: 1;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 10px;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.computerTypeOption {
+  background: transparent;
+  color: var(--muted);
+}
+
+.computerTypeOption:hover:not(:disabled) {
+  color: #e2e8f0;
+}
+
+.computerTypeOptionActive {
+  background: #22d3ee;
+  color: #0b1018;
+}
+
+.computerTypeHint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 8px 0 0;
 }
 
 .pcCard:hover {
@@ -1782,6 +1852,25 @@
   font-size: 16px;
 }
 
+.memberBalanceGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.vipPreviewBreakdown {
+  display: grid;
+  gap: 3px;
+}
+
+.vipPreviewBreakdown span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 .paymentSummary {
   align-items: center;
   background: #f8fafc;
@@ -1891,6 +1980,24 @@
   background: #eff6ff;
   border-color: var(--active);
   box-shadow: 0 0 0 3px rgb(37 99 235 / 0.13);
+}
+
+.rateOptionPromo {
+  border-color: #f59e0b;
+}
+
+.ratePromoLabel {
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ratePromoWindow {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .rateTitle {
@@ -2343,6 +2450,14 @@
   box-shadow: 0 0 0 3px rgb(34 211 238 / 0.12), 0 0 28px rgb(14 165 233 / 0.16);
 }
 
+.rateOptionPromo {
+  border-color: rgba(245, 158, 11, 0.55);
+}
+
+.ratePromoLabel {
+  color: #fbbf24;
+}
+
 .ratePrice {
   color: #67e8f9;
 }
@@ -2383,6 +2498,25 @@
 .panelText {
   color: var(--muted);
   margin: 6px 0 0;
+}
+
+.vipSourceStatusVip,
+.vipSourceStatusStandard {
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 900;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.vipSourceStatusVip {
+  background: rgb(253 224 71 / 0.16);
+  color: #fde047;
+}
+
+.vipSourceStatusStandard {
+  background: rgb(34 211 238 / 0.14);
+  color: #67e8f9;
 }
 
 .detailRow small {
@@ -2767,6 +2901,12 @@
   background: rgba(253, 224, 71, 0.18);
   border-color: rgba(253, 224, 71, 0.42);
   color: #fde047;
+}
+
+.memberBalanceType-nonrefundable {
+  background: rgba(248, 113, 113, 0.16);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fecaca;
 }
 
 .memberStatus-locked {

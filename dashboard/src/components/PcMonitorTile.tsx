@@ -44,7 +44,11 @@ function PcMonitorTileComponent({ pc, isSelected, onSelect }: PcMonitorTileProps
       type="button"
     >
       <span className={styles.monitorScreen}>
-        {pc.is_vip ? <span className={styles.monitorVipBadge}>VIP</span> : null}
+        {pc.is_vip ? (
+          <span className={styles.monitorVipBadge}>VIP</span>
+        ) : (
+          <span className={styles.monitorStandardBadge}>Standard</span>
+        )}
         {pc.recovery_required ? <span className={styles.monitorWarningBadge}>Recovery</span> : null}
         <span className={styles.monitorName}>{displayName}</span>
         {secondaryLabel ? <span className={styles.monitorSubLabel}>{secondaryLabel}</span> : null}

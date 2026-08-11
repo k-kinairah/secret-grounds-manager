@@ -1303,9 +1303,16 @@ export function MembersManager() {
                         <span className={styles.rateTitle}>
                           {product.name}
                           {product.balance_type === "vip" ? (
-                            <span className={`${styles.memberBalanceTypeBadge} ${styles["memberBalanceType-vip"]}`}>
-                              VIP
-                            </span>
+                            <>
+                              <span className={`${styles.memberBalanceTypeBadge} ${styles["memberBalanceType-vip"]}`}>
+                                VIP Only
+                              </span>
+                              <span
+                                className={`${styles.memberBalanceTypeBadge} ${styles["memberBalanceType-nonrefundable"]}`}
+                              >
+                                Non-Refundable
+                              </span>
+                            </>
                           ) : null}
                         </span>
                         <span className={styles.rateDuration}>

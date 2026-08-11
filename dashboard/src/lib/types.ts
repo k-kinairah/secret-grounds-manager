@@ -155,6 +155,10 @@ export interface SessionRecord {
   member_name_snapshot: string | null;
   member_balance_before_seconds: number | null;
   member_balance_after_seconds: number | null;
+  station_type: "standard" | "vip";
+  vip_seconds_consumed: number | null;
+  standard_seconds_consumed_at_vip_rate: number | null;
+  conversion_applied: boolean;
 }
 
 export interface SessionCommandResponse {
@@ -436,6 +440,7 @@ export interface SalesOperatorTransaction {
   voided_at: string | null;
   void_reason: string | null;
   related_reference: string | null;
+  balance_type: "standard" | "vip" | null;
 }
 
 export interface SalesOperatorCollection {
@@ -479,6 +484,7 @@ export interface SalesRecentPayment {
   amount: string;
   status: PaymentStatus;
   related_reference: string | null;
+  balance_type: "standard" | "vip" | null;
 }
 
 export interface SalesOutstandingSettlement {
@@ -756,6 +762,17 @@ export interface MemberVipPlayablePreview {
   vip_seconds: number;
   standard_seconds: number;
   standard_real_seconds_equivalent: number;
+}
+
+export interface SessionBalanceSourceProjection {
+  session_id: string;
+  is_vip_station: boolean;
+  balance_source: "standard" | "vip" | null;
+  vip_reserved_seconds: number;
+  standard_reserved_seconds: number;
+  standard_reserved_vip_equivalent_seconds: number;
+  vip_consumed_estimate_seconds: number;
+  standard_consumed_estimate_seconds: number;
 }
 
 export interface MemberPurchaseResponse {

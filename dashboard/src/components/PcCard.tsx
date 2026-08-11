@@ -99,7 +99,11 @@ export function PcCard({
       >
         <div className={styles.pcAreaRow}>
           <span>{pc.area_label ?? "Secret Grounds"}</span>
-          {pc.is_vip ? <strong>VIP</strong> : null}
+          {pc.is_vip ? (
+            <strong>VIP</strong>
+          ) : (
+            <span className={styles.standardBadge}>Standard</span>
+          )}
         </div>
         <div className={styles.pcHeader}>
           <div className={styles.pcName}>{displayName}</div>

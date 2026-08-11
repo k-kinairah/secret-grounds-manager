@@ -607,6 +607,94 @@ def test_layout_change_during_active_session_does_not_reclassify_running_session
     assert new_started.session.session_id != session_id
 
 
+# --- Balance-source projection (Stage 5 dashboard read) -----------------
+
+
+def test_balance_source_projection_vip_only_phase(temp_directory: str) -> None:
+    """While elapsed real time is still within the VIP portion of a mixed
+    reservation, the projection must report balance_source='vip' and must
+    not mutate the member's actual balances or the reservation."""
+    service, session_repository, member_repository = create_service(Path(temp_directory) / "proj-vip-phase.sqlite3")
+    member = create_test_member(member_repository, "vip.projvip", vip_seconds=1800, standard_seconds=7200)
+
+    started = asyncio.run(service.start_member_session("PC-VIP", "vip.projvip", None, "1234"))
+    rewind_session_start(session_repository, started.session.session_id, elapsed_seconds=900)  # 15 min, still VIP
+
+    projection = service.get_balance_source_projection(started.session.session_id)
+    assert projection.is_vip_station is True
+    assert projection.balance_source == "vip"
+    assert projection.vip_reserved_seconds == 1800
+    assert projection.standard_reserved_seconds == 7200
+    assert projection.vip_consumed_estimate_seconds == 900
+    assert projection.standard_consumed_estimate_seconds == 0
+
+    # Polling the projection must never touch balances or the reservation.
+    reloaded = member_repository.get_member(member.member_id)
+    assert reloaded.vip_balance_seconds == 1800
+    assert reloaded.time_balance_seconds == 7200
+    reservation = member_repository.get_active_reservation_totals(member.member_id, started.session.session_id)
+    assert reservation == (7200, 1800)
+
+
+def test_balance_source_projection_crosses_to_standard(temp_directory: str) -> None:
+    """Once elapsed real time passes the VIP boundary, the projection must
+    flip to balance_source='standard' -- the same crossing point Stage 4's
+    finalization uses, computed here without ending the session."""
+    service, session_repository, member_repository = create_service(Path(temp_directory) / "proj-crosses.sqlite3")
+    member = create_test_member(member_repository, "vip.projcross", vip_seconds=1800, standard_seconds=7200)
+
+    started = asyncio.run(service.start_member_session("PC-VIP-2", "vip.projcross", None, "1234"))
+    rewind_session_start(session_repository, started.session.session_id, elapsed_seconds=2700)  # 45 min
+
+    projection = service.get_balance_source_projection(started.session.session_id)
+    assert projection.balance_source == "standard"
+    assert projection.vip_consumed_estimate_seconds == 1800
+    assert projection.standard_consumed_estimate_seconds == 1800
+
+    # Still purely a projection -- ending the session afterward must produce
+    # identical numbers via the real finalization path, proving no drift.
+    ended = asyncio.run(service.end_session(started.session.session_id))
+    assert ended.session.vip_seconds_consumed == projection.vip_consumed_estimate_seconds
+    assert ended.session.standard_seconds_consumed_at_vip_rate == projection.standard_consumed_estimate_seconds
+    reloaded = member_repository.get_member(member.member_id)
+    assert reloaded.vip_balance_seconds == 0
+    assert reloaded.time_balance_seconds == 7200 - 1800
+
+
+def test_balance_source_projection_standard_pc(temp_directory: str) -> None:
+    service, session_repository, member_repository = create_service(Path(temp_directory) / "proj-std.sqlite3")
+    create_test_member(member_repository, "std.proj", vip_seconds=36000, standard_seconds=14400)
+
+    started = asyncio.run(service.start_member_session("PC-STD", "std.proj", 1800, "1234"))
+    rewind_session_start(session_repository, started.session.session_id, elapsed_seconds=600)
+
+    projection = service.get_balance_source_projection(started.session.session_id)
+    assert projection.is_vip_station is False
+    assert projection.balance_source == "standard"
+    assert projection.vip_reserved_seconds == 0
+    assert projection.vip_consumed_estimate_seconds == 0
+    assert projection.standard_consumed_estimate_seconds == 600
+
+
+def test_balance_source_projection_repeated_polling_is_side_effect_free(temp_directory: str) -> None:
+    """Simulates a dashboard polling the projection repeatedly while a
+    session is active -- must never deduct or otherwise mutate state."""
+    service, session_repository, member_repository = create_service(Path(temp_directory) / "proj-poll.sqlite3")
+    member = create_test_member(member_repository, "vip.projpoll", vip_seconds=1800, standard_seconds=7200)
+
+    started = asyncio.run(service.start_member_session("PC-VIP-3", "vip.projpoll", None, "1234"))
+    rewind_session_start(session_repository, started.session.session_id, elapsed_seconds=1200)
+
+    for _ in range(5):
+        service.get_balance_source_projection(started.session.session_id)
+
+    reloaded = member_repository.get_member(member.member_id)
+    assert reloaded.vip_balance_seconds == 1800, "repeated polling must never deduct VIP balance"
+    assert reloaded.time_balance_seconds == 7200, "repeated polling must never deduct Standard balance"
+    reservation = member_repository.get_active_reservation_totals(member.member_id, started.session.session_id)
+    assert reservation == (7200, 1800), "repeated polling must never mutate the reservation"
+
+
 # --- Standard regression --------------------------------------------------
 
 
@@ -658,6 +746,10 @@ def main() -> None:
         test_member_lock_during_vip_only_portion,
         test_member_lock_during_standard_converted_portion_and_wall_clock_consumption,
         test_layout_change_during_active_session_does_not_reclassify_running_session,
+        test_balance_source_projection_vip_only_phase,
+        test_balance_source_projection_crosses_to_standard,
+        test_balance_source_projection_standard_pc,
+        test_balance_source_projection_repeated_polling_is_side_effect_free,
         test_standard_member_lifecycle_unaffected_and_vip_untouched,
     ]
     for test in tests:

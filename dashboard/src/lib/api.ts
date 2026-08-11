@@ -40,6 +40,7 @@ import type {
   UserUpdateInput,
   RateProfile,
   RateProfileInput,
+  SessionBalanceSourceProjection,
   SessionCommandResponse,
   SessionRecord
 } from "./types";
@@ -714,6 +715,13 @@ export async function fetchMemberVipPreview(
   }
   return requestJson<MemberVipPlayablePreview>(
     `${getApiBaseUrl()}/members/${memberId}/vip-preview?${query.toString()}`,
+    { cache: "no-store" }
+  );
+}
+
+export async function fetchSessionBalanceSource(sessionId: string): Promise<SessionBalanceSourceProjection> {
+  return requestJson<SessionBalanceSourceProjection>(
+    `${getApiBaseUrl()}/sessions/${sessionId}/balance-source`,
     { cache: "no-store" }
   );
 }
