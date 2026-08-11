@@ -18,6 +18,7 @@ import type {
   OperatorActivityRecord,
   OperatorCreateInput,
   OperatorManagementRecord,
+  OperatorSaleSummary,
   OperatorUpdateInput,
   PcLayoutSlot,
   PcSummary,
@@ -406,6 +407,12 @@ export async function fetchSalesReport(filters: SalesReportFilters): Promise<Sal
 
 export async function fetchDashboardTodaySales(): Promise<string> {
   return requestJson<string>(`${getApiBaseUrl()}/dashboard/today-sales`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchOperatorSale(): Promise<OperatorSaleSummary> {
+  return requestJson<OperatorSaleSummary>(`${getApiBaseUrl()}/dashboard/operator-sale`, {
     cache: "no-store"
   });
 }

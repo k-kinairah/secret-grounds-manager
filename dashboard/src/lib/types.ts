@@ -713,6 +713,20 @@ export interface CashierShiftDetail {
   payments: PaymentRecord[];
 }
 
+export interface OperatorSaleSummary {
+  has_open_shift: boolean;
+  operator_user_id: string | null;
+  operator_name: string | null;
+  shift_id: string | null;
+  operator_sale: string;
+  cash_payments: string;
+  gcash_payments: string;
+  maya_payments: string;
+  other_payments: string;
+  voided_payments: string;
+  payment_count: number;
+}
+
 export interface MemberRecord {
   member_id: string;
   member_code: string;

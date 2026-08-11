@@ -6,7 +6,7 @@ import {
   broadcastAnnouncement,
   cancelPreparedSession,
   endSession,
-  fetchDashboardTodaySales,
+  fetchOperatorSale,
   fetchPcs,
   fetchCurrentUser,
   fetchIncomeGroups,
@@ -26,7 +26,7 @@ import {
 import { getPackageRatesForPc } from "@/lib/packageEligibility";
 import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
 import { calculateOpenTimeEstimate, secondsFromScheduledEnd } from "@/lib/time";
-import type { CurrentUser, IncomeGroup, MessageSeverity, PcLayoutSlot, PcSummary, RateProfile } from "@/lib/types";
+import type { CurrentUser, IncomeGroup, MessageSeverity, OperatorSaleSummary, PcLayoutSlot, PcSummary, RateProfile } from "@/lib/types";
 import { DashboardSummary } from "./DashboardSummary";
 import { EndSessionDialog } from "./EndSessionDialog";
 import { PageTitleIcon } from "./PageTitleIcon";
@@ -55,7 +55,7 @@ export function DashboardClient() {
   const [pcs, setPcs] = useState<PcSummary[]>([]);
   const [rates, setRates] = useState<RateProfile[]>([]);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-  const [todaySales, setTodaySales] = useState<string | null>(null);
+  const [operatorSale, setOperatorSale] = useState<OperatorSaleSummary | null>(null);
   const [layoutSlots, setLayoutSlots] = useState<PcLayoutSlot[]>([]);
   const [incomeGroups, setIncomeGroups] = useState<IncomeGroup[]>([]);
   const [showSetupLayout, setShowSetupLayout] = useState(false);
@@ -82,9 +82,9 @@ export function DashboardClient() {
         fetchRates(),
         fetchCurrentUser()
       ]);
-      fetchDashboardTodaySales()
-        .then(setTodaySales)
-        .catch(() => setTodaySales(null));
+      fetchOperatorSale()
+        .then(setOperatorSale)
+        .catch(() => setOperatorSale(null));
       setPcs(nextPcs);
       setRates(nextRates);
       setCurrentUser(nextUser);
@@ -475,7 +475,7 @@ export function DashboardClient() {
       <DashboardSummary
         currentOperator={currentUser?.display_name ?? "Loading"}
         summary={summary}
-        todaySales={todaySales}
+        operatorSale={operatorSale}
       />
 
       {message ? <div className={styles.statusMessage}>{message}</div> : null}

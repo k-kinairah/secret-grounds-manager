@@ -950,7 +950,19 @@ async function runAsyncAssertions() {
     const dashboardSource = readFileSync("src/components/DashboardClient.tsx", "utf8");
     assert.doesNotMatch(dashboardSource, /Sino ang naka-bantay ngayon/);
     assert.doesNotMatch(dashboardSource, /Current on-duty operator/);
-    assert.match(dashboardSource, /fetchDashboardTodaySales/);
+    // Stage 7: the main-dashboard summary card is server-authoritative
+    // Operator's Sale (Stage 5), not Today's Sales -- /dashboard/today-sales
+    // remains a valid endpoint for other consumers (see the dedicated
+    // fetchDashboardTodaySales assertions further below), just not used here.
+    assert.match(dashboardSource, /fetchOperatorSale/);
+    assert.doesNotMatch(dashboardSource, /fetchDashboardTodaySales/);
+    // Operator's Sale must reuse the existing single poll loop, not a
+    // second/aggressive interval of its own -- exactly the same two
+    // setInterval calls (data refresh + clock tick) as before Stage 7.
+    assert.equal((dashboardSource.match(/window\.setInterval/g) ?? []).length, 2);
+    assert.match(dashboardSource, /window\.setInterval\(\(\) => void refresh\(\), pollIntervalMs\)/);
+    assert.match(dashboardSource, /setOperatorSale\)/);
+    assert.match(dashboardSource, /catch\(\(\) => setOperatorSale\(null\)\)/);
     assert.match(dashboardSource, /displayAreaLabel/);
     assert.match(dashboardSource, /SECRET GROUNDS SHOP/);
     assert.match(dashboardSource, /Select a PC/);
@@ -1123,6 +1135,15 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(authShellSource, /href="\/shifts">Shifts/);
     assert.doesNotMatch(authShellSource, /href="\/users">Users/);
 
+    // Stage 7 leaves Stage 4's End Shift flow untouched: closing the shift
+    // still clears local user/shift state and redirects to /login, which
+    // is what makes the main-dashboard Operator's Sale card correctly go
+    // stale/neutral on next load rather than something Stage 7 had to add.
+    assert.match(authShellSource, /await closeShift\(/);
+    assert.match(authShellSource, /setShift\(null\)/);
+    assert.match(authShellSource, /setUser\(null\)/);
+    assert.match(authShellSource, /router\.replace\("\/login"\)/);
+
     const operatorsSource = readFileSync("src/components/OperatorsManager.tsx", "utf8");
     assert.match(operatorsSource, /Manage who can operate Secret Grounds/);
     assert.match(operatorsSource, /Add Operator/);
@@ -1285,6 +1306,27 @@ async function runAsyncAssertions() {
     assert.match(dashboardSummarySource, /icon: "operator"/);
     assert.match(dashboardSummarySource, /variant="dashboard"/);
     assert.doesNotMatch(dashboardSummarySource, /icon: "OK"/);
+
+    // Stage 7: main-dashboard card is Operator's Sale (Stage 5
+    // server-authoritative), replacing Today's Sales on this card only.
+    assert.match(dashboardSummarySource, /label: "Operator's Sale"/);
+    assert.doesNotMatch(dashboardSummarySource, /label: "Today's Sales"/);
+    assert.match(dashboardSummarySource, /OperatorSaleSummary/);
+    // The card only ever formats/passes through fields the backend already
+    // computed (operator_sale, operator_name, has_open_shift,
+    // operator_user_id) -- it never sums payments or shift totals itself.
+    assert.match(dashboardSummarySource, /formatMoney\(operatorSale\.operator_sale\)/);
+    assert.doesNotMatch(dashboardSummarySource, /\.payments\b/);
+    assert.doesNotMatch(dashboardSummarySource, /\.totals\b/);
+    assert.doesNotMatch(dashboardSummarySource, /reduce\(/);
+    assert.match(dashboardSummarySource, /No operator on duty/);
+    assert.match(dashboardSummarySource, /No open shift/);
+    assert.match(dashboardSummarySource, /Current shift/);
+    assert.match(dashboardSummarySource, /operatorSale === null/);
+    assert.match(dashboardSummarySource, /value: "--"/);
+    assert.match(dashboardSummarySource, /operatorSale\.has_open_shift/);
+    assert.match(dashboardSummarySource, /operatorSale\.operator_user_id === null/);
+    assert.match(dashboardSummarySource, /operatorSale\.operator_name/);
 
     const pageTitleIconSource = readFileSync("src/components/PageTitleIcon.tsx", "utf8");
     assert.match(pageTitleIconSource, /PageTitleIcon/);
@@ -1803,6 +1845,13 @@ async function runAsyncAssertions() {
     assert.match(salesManagerSourceForStage6, /Sales by PC/);
     assert.match(salesManagerSourceForStage6, /Payment Methods/);
     assert.match(salesManagerSourceForStage6, /Sales by Type/);
+
+    // Stage 7 removed Today's Sales only from the MAIN dashboard summary
+    // card -- the dedicated Sales page's own Today period/date-range
+    // reporting (Net Sales, Gross Sales, etc.) is untouched.
+    assert.match(salesManagerSourceForStage6, /\{ label: "Today", value: "today" \}/);
+    assert.match(salesManagerSourceForStage6, /Net Sales/);
+    assert.match(salesManagerSourceForStage6, /Gross Sales/);
 
     const typesSourceForStage6 = readFileSync("src/lib/types.ts", "utf8");
     assert.match(typesSourceForStage6, /export interface SalesIncomeGroupBreakdown/);

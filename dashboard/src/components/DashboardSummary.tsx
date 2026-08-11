@@ -1,6 +1,6 @@
 import styles from "@/app/page.module.css";
 import { formatMoney } from "@/lib/time";
-import type { DashboardSummary as DashboardSummaryData } from "@/lib/types";
+import type { DashboardSummary as DashboardSummaryData, OperatorSaleSummary } from "@/lib/types";
 import { StatusCard } from "./StatusCard";
 
 type SummaryIconName = "available" | "inUse" | "operator" | "sales" | "settlement";
@@ -8,10 +8,29 @@ type SummaryIconName = "available" | "inUse" | "operator" | "sales" | "settlemen
 interface DashboardSummaryProps {
   currentOperator: string;
   summary: DashboardSummaryData;
-  todaySales: string | null;
+  operatorSale: OperatorSaleSummary | null;
 }
 
-export function DashboardSummary({ currentOperator, summary, todaySales }: DashboardSummaryProps) {
+function operatorSaleCard(operatorSale: OperatorSaleSummary | null): { detail: string; value: string } {
+  // The amount always comes straight from the Stage 5 server-authoritative
+  // endpoint -- never recomputed here from raw payments/shift data.
+  if (operatorSale === null) {
+    return { detail: "Current shift", value: "--" };
+  }
+  if (!operatorSale.has_open_shift) {
+    return {
+      detail: operatorSale.operator_user_id === null ? "No operator on duty" : "No open shift",
+      value: formatMoney(null)
+    };
+  }
+  return {
+    detail: operatorSale.operator_name ? `${operatorSale.operator_name} · Current shift` : "Current shift",
+    value: formatMoney(operatorSale.operator_sale)
+  };
+}
+
+export function DashboardSummary({ currentOperator, summary, operatorSale }: DashboardSummaryProps) {
+  const { detail: operatorSaleDetail, value: operatorSaleValue } = operatorSaleCard(operatorSale);
   const cards: Array<{
     detail: string | null;
     icon: SummaryIconName;
@@ -21,7 +40,7 @@ export function DashboardSummary({ currentOperator, summary, todaySales }: Dashb
   }> = [
     { icon: "available", label: "Available", value: String(summary.available), detail: `${summary.total} stations`, tone: "success" },
     { icon: "inUse", label: "In Use", value: String(summary.inUse), detail: "Active sessions", tone: "info" },
-    { icon: "sales", label: "Today's Sales", value: todaySales === null ? "--" : formatMoney(todaySales), detail: "Gross collected", tone: "neutral" },
+    { icon: "sales", label: "Operator's Sale", value: operatorSaleValue, detail: operatorSaleDetail, tone: "neutral" },
     { icon: "operator", label: "Operator", value: currentOperator, detail: "On duty", tone: "neutral" }
   ];
   if (summary.paymentDue > 0) {
