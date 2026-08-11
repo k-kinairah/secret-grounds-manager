@@ -506,6 +506,13 @@ export interface SalesOutstandingSettlement {
   payment_status: BillingPaymentStatus;
 }
 
+export interface SalesIncomeGroupBreakdown {
+  income_group_id: string | null;
+  income_group_name: string;
+  amount: string;
+  payment_count: number;
+}
+
 export interface SalesReport {
   period: SalesPeriod;
   start_at: string;
@@ -520,6 +527,9 @@ export interface SalesReport {
   timeseries: SalesTimeseriesPoint[];
   recent_payments: SalesRecentPayment[];
   outstanding_settlements: SalesOutstandingSettlement[];
+  income_groups: SalesIncomeGroupBreakdown[];
+  pending_attribution_amount: string;
+  pending_attribution_count: number;
 }
 
 export type ManualEndBehavior = "lock_only" | "lock_and_settle";

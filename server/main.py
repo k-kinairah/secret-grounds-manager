@@ -104,6 +104,7 @@ from server.schemas import (
     SessionRecord,
     SessionStateSummary,
     SalesOutstandingSettlement,
+    SalesIncomeGroupBreakdown,
     SalesPCBreakdown,
     SalesPaymentMethodBreakdown,
     SalesPeriod,
@@ -1390,6 +1391,9 @@ def build_sales_report(
                 p.voided_at,
                 p.void_reason,
                 p.created_at,
+                p.income_group_id_snapshot,
+                p.income_group_name_snapshot,
+                p.attribution_status,
                 s.pc_name,
                 s.member_name_snapshot,
                 s.member_code_snapshot,
@@ -1484,6 +1488,22 @@ def build_sales_report(
     timeseries_totals: dict[str, dict[str, object]] = {}
     recent_payments: list[SalesRecentPayment] = []
 
+    # Income-group reporting (Stage 6): the four currently-configured
+    # groups always appear, even at ₱0.00, so the shop always sees the
+    # full set. A custom/legacy group only appears if a payment snapshot
+    # actually references it -- never hardcoded, never pre-seeded.
+    income_group_totals: dict[str, dict[str, object]] = {
+        group.income_group_id: {
+            "income_group_id": group.income_group_id,
+            "income_group_name": group.name,
+            "amount": Decimal("0.00"),
+            "count": 0,
+        }
+        for group in income_group_repository.list_income_groups()
+    }
+    pending_attribution_amount = Decimal("0.00")
+    pending_attribution_count = 0
+
     for row in payment_rows:
         amount = parse_money(row["amount"])
         method = row["payment_method"]
@@ -1512,6 +1532,33 @@ def build_sales_report(
         method_totals[method]["count"] += 1
         type_totals[sales_type]["amount"] += amount
         type_totals[sales_type]["count"] += 1
+
+        if row["attribution_status"] == "pending":
+            pending_attribution_amount += amount
+            pending_attribution_count += 1
+        else:
+            group_id = row["income_group_id_snapshot"]
+            if group_id is None:
+                # Historical payment recorded before the income-attribution
+                # migration existed (attribution_status='assigned' with no
+                # group snapshot, per Stage 1). Never forced into one of
+                # the four current groups -- kept in its own explicit
+                # bucket so income-group totals still reconcile exactly.
+                group_id = "__legacy__"
+                group_name = "Legacy / Unattributed"
+            else:
+                group_name = row["income_group_name_snapshot"] or group_id
+            group_entry = income_group_totals.setdefault(
+                group_id,
+                {
+                    "income_group_id": None if group_id == "__legacy__" else group_id,
+                    "income_group_name": group_name,
+                    "amount": Decimal("0.00"),
+                    "count": 0,
+                },
+            )
+            group_entry["amount"] = group_entry["amount"] + amount
+            group_entry["count"] = int(group_entry["count"]) + 1
 
         if row["pc_name"] is not None and sales_type == "pc_session":
             pc_entry = pc_totals.setdefault(
@@ -1790,6 +1837,20 @@ def build_sales_report(
         ],
         recent_payments=recent_payments,
         outstanding_settlements=outstanding,
+        income_groups=[
+            SalesIncomeGroupBreakdown(
+                income_group_id=values["income_group_id"],
+                income_group_name=values["income_group_name"],
+                amount=values["amount"],
+                payment_count=values["count"],
+            )
+            for values in sorted(
+                income_group_totals.values(),
+                key=lambda value: value["income_group_name"],
+            )
+        ],
+        pending_attribution_amount=pending_attribution_amount,
+        pending_attribution_count=pending_attribution_count,
     )
 
 

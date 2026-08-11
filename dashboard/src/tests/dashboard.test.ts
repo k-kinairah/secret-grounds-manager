@@ -1780,6 +1780,36 @@ async function runAsyncAssertions() {
     assert.match(salesManagerSourceForStage5, /"Standard Top-up"/);
     assert.match(salesManagerSourceForStage5, /vipPurchaseBadge/);
 
+    // Income by Group section (Stage 6): fully data-driven off
+    // report.income_groups/pending_attribution_* -- no group name is
+    // hardcoded, so any seeded, custom, or legacy group the backend
+    // returns renders identically through the same BreakdownPanel/
+    // formatMoney path every other breakdown already uses.
+    const salesManagerSourceForStage6 = readFileSync("src/components/SalesManager.tsx", "utf8");
+    assert.match(salesManagerSourceForStage6, /Income by Group/);
+    assert.match(salesManagerSourceForStage6, /Pending Attribution/);
+    assert.match(salesManagerSourceForStage6, /Payments awaiting automatic income-group assignment\./);
+    assert.match(salesManagerSourceForStage6, /report\.income_groups\.map/);
+    assert.match(salesManagerSourceForStage6, /group\.income_group_name/);
+    assert.match(salesManagerSourceForStage6, /group\.amount/);
+    assert.match(salesManagerSourceForStage6, /group\.payment_count/);
+    assert.match(salesManagerSourceForStage6, /report\.pending_attribution_amount/);
+    assert.match(salesManagerSourceForStage6, /report\.pending_attribution_count/);
+    assert.match(salesManagerSourceForStage6, /description\?: string/);
+    assert.match(salesManagerSourceForStage6, /hint\?: string/);
+    assert.match(salesManagerSourceForStage6, /formatMoney\(row\.amount\)/);
+    // Existing Sales sections must remain present, untouched by the new panel.
+    assert.match(salesManagerSourceForStage6, /Sales by Operator/);
+    assert.match(salesManagerSourceForStage6, /Sales by PC/);
+    assert.match(salesManagerSourceForStage6, /Payment Methods/);
+    assert.match(salesManagerSourceForStage6, /Sales by Type/);
+
+    const typesSourceForStage6 = readFileSync("src/lib/types.ts", "utf8");
+    assert.match(typesSourceForStage6, /export interface SalesIncomeGroupBreakdown/);
+    assert.match(typesSourceForStage6, /income_group_id: string \| null/);
+    assert.match(typesSourceForStage6, /pending_attribution_amount: string/);
+    assert.match(typesSourceForStage6, /pending_attribution_count: number/);
+
     const loggedErrors: unknown[] = [];
     console.error = (...args: unknown[]) => {
       loggedErrors.push(args);

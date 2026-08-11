@@ -420,6 +420,23 @@ export function SalesManager() {
                   label: displayMethod(item.payment_method)
                 }))}
               />
+              <BreakdownPanel
+                title="Income by Group"
+                description="Revenue attributed to each income-group owner for this period, based on the PC each payment was made on at the time."
+                rows={[
+                  ...report.income_groups.map((group) => ({
+                    amount: group.amount,
+                    count: group.payment_count,
+                    label: group.income_group_name
+                  })),
+                  {
+                    amount: report.pending_attribution_amount,
+                    count: report.pending_attribution_count,
+                    label: "Pending Attribution",
+                    hint: "Payments awaiting automatic income-group assignment."
+                  }
+                ]}
+              />
               <section className={styles.panel}>
                 <h2>Sales by Operator</h2>
                 <div className={styles.stackList}>
@@ -1271,20 +1288,23 @@ function MetricCard({
 
 function BreakdownPanel({
   rows,
-  title
+  title,
+  description
 }: {
-  rows: Array<{ amount: string; count: number; label: string }>;
+  rows: Array<{ amount: string; count: number; label: string; hint?: string }>;
   title: string;
+  description?: string;
 }) {
   return (
     <section className={styles.panel}>
       <h2>{title}</h2>
+      {description ? <p>{description}</p> : null}
       <div className={styles.breakdownList}>
         {rows.map((row) => (
           <article key={row.label}>
             <span>{row.label}</span>
             <strong>{formatMoney(row.amount)}</strong>
-            <small>{row.count} payments</small>
+            <small>{row.hint ?? `${row.count} payments`}</small>
           </article>
         ))}
       </div>

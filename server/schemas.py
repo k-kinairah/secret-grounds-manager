@@ -1480,6 +1480,24 @@ class SalesPCBreakdown(BaseModel):
     billable_seconds: int | None = None
 
 
+class SalesIncomeGroupBreakdown(BaseModel):
+    """Revenue-owner breakdown for the selected report period, built from
+    each payment's immutable income_group_id_snapshot/
+    income_group_name_snapshot -- never from the live pc_layouts
+    assignment, so a later PC reassignment can never change a historical
+    period's numbers. income_group_id is None only for the synthetic
+    "Legacy / Unattributed" bucket (payments recorded before the income-
+    attribution migration existed: attribution_status='assigned' with no
+    group snapshot) -- that bucket exists purely so
+    sum(income_groups) + pending_attribution_amount reconciles exactly
+    to the report's completed revenue; it is never a real income group."""
+
+    income_group_id: str | None = None
+    income_group_name: str
+    amount: Decimal = Decimal("0.00")
+    payment_count: int = 0
+
+
 class SalesTimeseriesPoint(BaseModel):
     label: str
     start_at: datetime
@@ -1525,6 +1543,11 @@ class SalesReport(BaseModel):
     timeseries: list[SalesTimeseriesPoint] = Field(default_factory=list)
     recent_payments: list[SalesRecentPayment] = Field(default_factory=list)
     outstanding_settlements: list[SalesOutstandingSettlement] = Field(default_factory=list)
+    # Additive Stage 6 fields -- income-group ("who owns this revenue")
+    # reporting, independent of and additional to everything above.
+    income_groups: list[SalesIncomeGroupBreakdown] = Field(default_factory=list)
+    pending_attribution_amount: Decimal = Decimal("0.00")
+    pending_attribution_count: int = 0
 
 
 class LoginRequest(BaseModel):
