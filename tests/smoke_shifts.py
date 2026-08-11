@@ -4,7 +4,7 @@ import tempfile
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -197,6 +197,7 @@ def main() -> None:
             close_shift(
                 opened.shift.shift_id,
                 ShiftCloseRequest(actual_cash=Decimal("1000.00")),
+                Response(),
                 cashier_user,
             )
         except HTTPException as error:
@@ -211,6 +212,7 @@ def main() -> None:
                 closing_notes="Manager closed with known pending settlement",
                 force_close_reason="Cashier left before settlement",
             ),
+            Response(),
             owner_user,
         )
         assert closed.shift.status == "closed"
@@ -224,6 +226,7 @@ def main() -> None:
             close_shift(
                 opened.shift.shift_id,
                 ShiftCloseRequest(actual_cash=Decimal("1000.00")),
+                Response(),
                 owner_user,
             )
         except HTTPException as error:

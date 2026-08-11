@@ -311,6 +311,19 @@ class OperatorRepository:
             self._record_audit(connection, "operator_signed_out", actor, operator_id, existing.display_name, {"dashboard_sessions": "ended"})
         return operator_from_row(row)
 
+    def revoke_all_sessions(self, user_id: str) -> None:
+        """Plain, business-rule-free session revocation -- reuses the same
+        _revoke_sessions query every admin-initiated revocation above
+        already uses. Deliberately does not apply sign_out_operator's
+        Staff-panel guard rails (protected-Admin block, "must currently be
+        signed in" 409): End Shift (server/main.py close_shift) must be
+        able to force-logout any operator, including a protected account
+        ending their own shift, and must never fail merely because the
+        operator happened to have no active session at close time."""
+        now = current_utc_time()
+        with get_connection() as connection:
+            self._revoke_sessions(connection, user_id, now.isoformat())
+
     def _record_audit(
         self,
         connection: sqlite3.Connection,

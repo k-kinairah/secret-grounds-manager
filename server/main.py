@@ -656,9 +656,45 @@ def get_shift(
 def close_shift(
     shift_id: str,
     request: ShiftCloseRequest,
+    response: Response,
     current_user=Depends(require_role("cashier")),
 ) -> CashierShiftDetail:
-    return shift_repository.close_shift(shift_id, request, current_user)
+    # Validate/finalize first -- if this raises, nothing below runs, so a
+    # failed close leaves the operator's auth/on-duty state untouched and
+    # they can simply retry. Once this line succeeds the shift is
+    # permanently closed; everything after is "operator is done working"
+    # cleanup that must never be able to put the shift itself back into a
+    # half-closed state.
+    closed = shift_repository.close_shift(shift_id, request, current_user)
+    shift_owner_id = closed.shift.user_id
+
+    try:
+        operator_repository.revoke_all_sessions(shift_owner_id)
+    except Exception:
+        logger.exception(
+            "End Shift: failed to revoke auth sessions for operator %s after closing shift %s",
+            shift_owner_id,
+            shift_id,
+        )
+
+    try:
+        operator_state_repository.clear_if_current(shift_owner_id)
+    except Exception:
+        logger.exception(
+            "End Shift: failed to clear on-duty operator state for operator %s after closing shift %s",
+            shift_owner_id,
+            shift_id,
+        )
+
+    if current_user.user_id == shift_owner_id:
+        # Only clear the cookie belonging to the browser that made this
+        # request. An owner/admin force-closing another cashier's shift
+        # must never clear their own session -- the shift owner's other
+        # sessions are already invalidated server-side above and will be
+        # rejected on their next request regardless.
+        clear_auth_cookie(response)
+
+    return closed
 
 
 @app.get("/members", response_model=list[MemberRecord])

@@ -203,15 +203,17 @@ export function AuthShell({ children }: { children: ReactNode }) {
     setIsClosingShift(true);
     setShiftMessage(null);
     try {
-      const closed = await closeShift(shift.shift.shift_id, {
+      await closeShift(shift.shift.shift_id, {
         actualCash,
         closingNotes,
         forceCloseReason
       });
+      // The backend has already revoked this operator's auth sessions and
+      // cleared the cookie on End Shift -- reflect the logged-out state
+      // immediately instead of waiting for a later request to 401.
       setShift(null);
-      setShiftMessage(
-        `Shift closed. Difference: ${formatMoney(closed.shift.difference ?? "0.00")}.`
-      );
+      setUser(null);
+      router.replace("/login");
     } catch (error) {
       setShiftMessage(error instanceof Error ? error.message : "Could not close shift.");
     } finally {

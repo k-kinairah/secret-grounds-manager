@@ -181,3 +181,24 @@ class OperatorStateRepository:
                 """,
                 (operator_user_id, selected_by_user_id, now.isoformat()),
             )
+
+    def clear_if_current(self, operator_user_id: str) -> bool:
+        """Resets the singleton to "nobody on duty" (operator_user_id =
+        NULL -- the same convention get_current already treats as unset)
+        but only if it still points at operator_user_id. A single
+        conditional UPDATE, not read-then-write, so this can never race
+        with or clobber a different operator who logged in in the
+        meantime. selected_by_user_id/selected_at are left as the last
+        selection's audit breadcrumb; only get_current's operator_user_id
+        check governs "who is on duty". Returns whether a row was
+        actually cleared."""
+        with get_connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE operator_state
+                SET operator_user_id = NULL
+                WHERE state_id = 'current' AND operator_user_id = ?
+                """,
+                (operator_user_id,),
+            )
+            return cursor.rowcount > 0
