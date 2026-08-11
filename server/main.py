@@ -311,6 +311,11 @@ def upsert_client_display_name(pc_name: str, display_name: str | None, mac_addre
             is_vip=existing_layout.is_vip if existing_layout is not None else False,
             is_enabled=existing_layout.is_enabled if existing_layout is not None else True,
             mac_address=mac_address or (existing_layout.mac_address if existing_layout is not None else None),
+            # Register/heartbeat only ever touch client/runtime info (display
+            # name, MAC). The owner-controlled revenue-owner assignment must
+            # never be reset by a routine client check-in -- carry it forward
+            # unchanged, the same way every other layout field already is.
+            income_group_id=existing_layout.income_group_id if existing_layout is not None else None,
         ),
     )
 
