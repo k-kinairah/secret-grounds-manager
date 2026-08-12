@@ -30,6 +30,7 @@ from client.lock_screen import LockScreenController
 from client.remote_controls import RemoteControlHandler
 from client.session_recovery import SessionRecoveryStore
 from client.setup_wizard import show_setup_wizard
+from client.station_resolver import build_http_resolve_fn, resolve_station_identity
 from client.utils import get_local_ip, get_local_mac_address
 from client.websocket_transport import SimpleWebSocketClient
 
@@ -1737,17 +1738,48 @@ def load_runtime_config() -> ClientConfig:
         raise SystemExit(1) from error
 
 
+def resolve_runtime_pc_name(runtime_config: ClientConfig) -> tuple[str, str | None]:
+    """Returns (pc_name, display_name) to actually run as.
+
+    Explicit/development mode: runtime_config.pc_name is already set (a
+    human configured this specific station), so it is used unchanged --
+    today's behavior, completely untouched.
+
+    Automatic/diskless mode: runtime_config.pc_name is blank, so this
+    blocks until the server's /stations/resolve resolves this physical
+    machine's wired NIC MAC to a runtime pc_name. That name is kept only
+    in memory for the life of this process -- it is never written back
+    into config.json. A restart re-resolves from the MAC, so the server's
+    station_assignments table always remains the sole authority (NIC
+    replacement/reassignment take effect on the very next start, with no
+    local file to go stale).
+    """
+    if runtime_config.pc_name:
+        return runtime_config.pc_name, runtime_config.display_name
+
+    print(
+        "No pc_name configured; resolving this station's identity automatically "
+        "from its wired NIC MAC address."
+    )
+    resolved = resolve_station_identity(
+        resolve_fn=build_http_resolve_fn(runtime_config.server_url, runtime_config.request_timeout_seconds),
+        poll_interval_seconds=runtime_config.reconnect_interval_seconds,
+    )
+    return resolved.pc_name, resolved.display_name
+
+
 def main() -> None:
     runtime_config = load_runtime_config()
+    pc_name, display_name = resolve_runtime_pc_name(runtime_config)
 
     print(
         "Secret Grounds client attempting to connect to "
-        f"{runtime_config.server_url} as {runtime_config.pc_name}. Version {APP_VERSION}."
+        f"{runtime_config.server_url} as {pc_name}. Version {APP_VERSION}."
     )
     client = SecretGroundsClient(
         server_url=runtime_config.server_url,
-        pc_name=runtime_config.pc_name,
-        display_name=runtime_config.display_name,
+        pc_name=pc_name,
+        display_name=display_name,
         heartbeat_interval=runtime_config.reconnect_interval_seconds,
         request_timeout=runtime_config.request_timeout_seconds,
         enable_lock_screen=False,
@@ -1769,15 +1801,16 @@ def main() -> None:
 
 def register_with_server() -> None:
     runtime_config = load_runtime_config()
+    pc_name, display_name = resolve_runtime_pc_name(runtime_config)
 
     print(
         "Secret Grounds client attempting to connect to "
-        f"{runtime_config.server_url} as {runtime_config.pc_name}. Version {APP_VERSION}."
+        f"{runtime_config.server_url} as {pc_name}. Version {APP_VERSION}."
     )
     client = SecretGroundsClient(
         server_url=runtime_config.server_url,
-        pc_name=runtime_config.pc_name,
-        display_name=runtime_config.display_name,
+        pc_name=pc_name,
+        display_name=display_name,
         heartbeat_interval=runtime_config.reconnect_interval_seconds,
         request_timeout=runtime_config.request_timeout_seconds,
         enable_lock_screen=ENABLE_LOCK_SCREEN,

@@ -84,9 +84,17 @@ def create_default_config(config_path: Path) -> None:
     save_client_config(default_config_payload(), config_path)
 
 
-def save_client_config(payload: dict[str, object], config_path: Path | None = None) -> ClientConfig:
+def save_client_config(
+    payload: dict[str, object],
+    config_path: Path | None = None,
+    require_pc_name: bool = True,
+) -> ClientConfig:
+    # The interactive setup wizard is the "explicit/development mode" entry
+    # point -- a human filling out this form is choosing a specific station,
+    # so it keeps requiring a Station ID by default. A generic/automatic-
+    # mode config.json is never produced by this path.
     resolved_path = config_path or get_client_config_path()
-    config = validate_client_config(payload, resolved_path)
+    config = validate_client_config(payload, resolved_path, require_pc_name=require_pc_name)
     write_client_config(config, resolved_path)
     return config
 
@@ -127,7 +135,10 @@ def load_client_config(config_path: Path | None = None) -> ClientConfig:
     except OSError as error:
         raise ClientConfigError(f"Could not read config.json: {error}") from error
 
-    config = validate_client_config(payload, resolved_path)
+    # Loading (unlike the wizard's save path above) must accept a blank/
+    # absent pc_name: that is exactly what marks a config as generic/
+    # automatic-mode, resolved later from this PC's wired NIC MAC.
+    config = validate_client_config(payload, resolved_path, require_pc_name=False)
     return apply_server_url_override(config)
 
 
@@ -165,11 +176,15 @@ def apply_server_url_override(config: ClientConfig) -> ClientConfig:
     )
 
 
-def validate_client_config(payload: Any, config_path: Path) -> ClientConfig:
+def validate_client_config(payload: Any, config_path: Path, require_pc_name: bool = False) -> ClientConfig:
     if not isinstance(payload, dict):
         raise ClientConfigError("config.json must contain a JSON object.")
 
-    required_fields = {"server_host", "server_port", "pc_name", "auto_connect"}
+    # pc_name is deliberately not in required_fields: a generic/automatic-
+    # mode config validly omits it entirely. require_pc_name gates the
+    # separate "blank Station ID" check below for callers (the setup
+    # wizard) that still need to force a human to choose one.
+    required_fields = {"server_host", "server_port", "auto_connect"}
     missing_fields = sorted(required_fields.difference(payload))
     if missing_fields:
         raise ClientConfigError(
@@ -203,17 +218,26 @@ def validate_client_config(payload: Any, config_path: Path) -> ClientConfig:
     if server_port < 1 or server_port > 65535:
         raise ClientConfigError("Server Port must be between 1 and 65535.")
 
-    pc_name = payload["pc_name"]
-    if not isinstance(pc_name, str) or not pc_name.strip():
+    raw_pc_name = payload.get("pc_name", "")
+    if not isinstance(raw_pc_name, str):
+        raise ClientConfigError("Station ID must be text.")
+    pc_name = raw_pc_name.strip()
+    if require_pc_name and not pc_name:
         raise ClientConfigError("Station ID is required.")
-    pc_name = pc_name.strip()
-    if not is_valid_station_id(pc_name):
+    # A non-blank Station ID still has to be well-formed; a blank one is
+    # the automatic-mode sentinel and skips this check entirely -- it is
+    # resolved later from this PC's wired NIC MAC, never validated as a
+    # station-id string.
+    if pc_name and not is_valid_station_id(pc_name):
         raise ClientConfigError("Station ID may contain only letters, numbers, dash, and underscore.")
 
-    display_name = payload.get("display_name", pc_name)
-    if not isinstance(display_name, str) or not display_name.strip():
-        raise ClientConfigError("Display Name is required.")
-    display_name = " ".join(display_name.strip().split())
+    raw_display_name = payload.get("display_name")
+    if raw_display_name is None:
+        display_name = pc_name
+    else:
+        if not isinstance(raw_display_name, str) or not raw_display_name.strip():
+            raise ClientConfigError("Display Name is required.")
+        display_name = " ".join(raw_display_name.strip().split())
 
     auto_connect = payload["auto_connect"]
     if not isinstance(auto_connect, bool):
