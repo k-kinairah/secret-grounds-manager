@@ -3,9 +3,11 @@ import { readFileSync } from "node:fs";
 import {
   addTime,
   adminOperatorLogin,
+  assignStation,
   createUser,
   createRate,
   fetchAdminSettings,
+  fetchAssignedStations,
   fetchCurrentUser,
   fetchDashboardTodaySales,
   fetchLoginOperators,
@@ -20,6 +22,7 @@ import {
   fetchSystemInfo,
   fetchSystemLogs,
   fetchSystemStorage,
+  fetchUnclaimedStations,
   fetchUsers,
   forceEndSession,
   getApiBaseUrl,
@@ -28,10 +31,12 @@ import {
   login,
   logout,
   quickOperatorLogin,
+  reassignStation,
   recordPayment,
   resetMemberPin,
   resetAdminSettings,
   resetUserPassword,
+  revokeStation,
   createSystemBackup,
   deleteSystemBackup,
   restoreSystemBackup,
@@ -675,6 +680,11 @@ async function runAsyncAssertions() {
     await fetchSystemLogs();
     await fetchSystemClients();
     await fetchLiveActivity();
+    await fetchUnclaimedStations();
+    await fetchAssignedStations();
+    await assignStation("AA:BB:CC:DD:EE:FF", "PC-11");
+    await reassignStation("AA:BB:CC:DD:EE:01", "PC-11");
+    await revokeStation("AA:BB:CC:DD:EE:FF");
 
     assert.deepEqual(
       fetchCalls.map((call) => ({ method: call.method, url: call.url })),
@@ -719,10 +729,18 @@ async function runAsyncAssertions() {
         { method: "GET", url: "http://localhost:8000/system/info" },
         { method: "GET", url: "http://localhost:8000/system/logs" },
         { method: "GET", url: "http://localhost:8000/system/clients" },
-        { method: "GET", url: "http://localhost:8000/activity?limit=60" }
+        { method: "GET", url: "http://localhost:8000/activity?limit=60" },
+        { method: "GET", url: "http://localhost:8000/stations/unclaimed" },
+        { method: "GET", url: "http://localhost:8000/stations/assigned" },
+        { method: "POST", url: "http://localhost:8000/stations/AA%3ABB%3ACC%3ADD%3AEE%3AFF/assign" },
+        { method: "POST", url: "http://localhost:8000/stations/AA%3ABB%3ACC%3ADD%3AEE%3A01/reassign" },
+        { method: "POST", url: "http://localhost:8000/stations/AA%3ABB%3ACC%3ADD%3AEE%3AFF/revoke" }
       ]
     );
     assert.equal(fetchCalls.every((call) => call.credentials === "include"), true);
+    assert.deepEqual(fetchCalls[43].body, { pc_name: "PC-11" });
+    assert.deepEqual(fetchCalls[44].body, { pc_name: "PC-11" });
+    assert.deepEqual(fetchCalls[45].body, null);
     assert.deepEqual(fetchCalls[0].body, {
       username: "owner",
       password: "password123"

@@ -34,6 +34,7 @@ import { PcDetailsPanel } from "./PcDetailsPanel";
 import { PcMonitorTile } from "./PcMonitorTile";
 import { PaymentDialog } from "./PaymentDialog";
 import { SessionDialog } from "./SessionDialog";
+import { StationAssignmentManager } from "./StationAssignmentManager";
 import { ActivityDrawerTrigger } from "./ActivityFeed";
 import { useToast } from "./ToastProvider";
 
@@ -59,6 +60,7 @@ export function DashboardClient() {
   const [layoutSlots, setLayoutSlots] = useState<PcLayoutSlot[]>([]);
   const [incomeGroups, setIncomeGroups] = useState<IncomeGroup[]>([]);
   const [showSetupLayout, setShowSetupLayout] = useState(false);
+  const [stationRefreshToken, setStationRefreshToken] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -241,6 +243,7 @@ export function DashboardClient() {
       setLayoutSlots(slots);
       setIncomeGroups(groups);
       setShowSetupLayout(true);
+      setStationRefreshToken((token) => token + 1);
       setMessage("Setup/Layout mode is showing configured slots. Unregistered slots are not counted in operations.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load layout setup.");
@@ -540,6 +543,10 @@ export function DashboardClient() {
           )}
         </aside>
       </div>
+
+      {showSetupLayout && currentUser?.role === "owner" ? (
+        <StationAssignmentManager layoutSlots={layoutSlots} pcs={livePcs} refreshToken={stationRefreshToken} />
+      ) : null}
 
       {showSetupLayout && currentUser?.role === "owner" ? (
         <section className={styles.setupLayoutSection} aria-label="Setup layout slots">

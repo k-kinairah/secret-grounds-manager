@@ -44,7 +44,8 @@ import type {
   RateProfileInput,
   SessionBalanceSourceProjection,
   SessionCommandResponse,
-  SessionRecord
+  SessionRecord,
+  StationAssignment
 } from "./types";
 
 const DEVELOPMENT_BASE_URL = "http://localhost:8000";
@@ -446,6 +447,44 @@ export async function updatePcLayout(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
+  });
+}
+
+// Station Assignment: physical mac_address -> pc_name identity, kept
+// deliberately separate from PcLayoutSlot (station type/income owner/
+// display configuration) above. Reuses the existing Stage 2 station
+// endpoints/repository -- no second assignment system.
+export async function fetchUnclaimedStations(): Promise<StationAssignment[]> {
+  return requestJson<StationAssignment[]>(`${getApiBaseUrl()}/stations/unclaimed`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchAssignedStations(): Promise<StationAssignment[]> {
+  return requestJson<StationAssignment[]>(`${getApiBaseUrl()}/stations/assigned`, {
+    cache: "no-store"
+  });
+}
+
+export async function assignStation(macAddress: string, pcName: string): Promise<StationAssignment> {
+  return requestJson<StationAssignment>(`${getApiBaseUrl()}/stations/${encodeURIComponent(macAddress)}/assign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pc_name: pcName })
+  });
+}
+
+export async function reassignStation(macAddress: string, pcName: string): Promise<StationAssignment> {
+  return requestJson<StationAssignment>(`${getApiBaseUrl()}/stations/${encodeURIComponent(macAddress)}/reassign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pc_name: pcName })
+  });
+}
+
+export async function revokeStation(macAddress: string): Promise<StationAssignment> {
+  return requestJson<StationAssignment>(`${getApiBaseUrl()}/stations/${encodeURIComponent(macAddress)}/revoke`, {
+    method: "POST"
   });
 }
 
