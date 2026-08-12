@@ -1389,6 +1389,45 @@ def initialize_database() -> None:
             )
             """
         )
+        # Server-owned physical-station identity: mac_address -> pc_name.
+        # Deliberately separate from pc_metadata above, which is keyed by
+        # pc_name and only ever records "what MAC does this already-known
+        # station currently report" (populated by register/heartbeat).
+        # station_assignments answers the opposite, prior question -- "what
+        # station does this physical machine belong to" -- and is the sole
+        # write path for that binding. Only an 'assigned' row may hold a
+        # non-NULL pc_name; UNIQUE(pc_name) then guarantees one active
+        # assignment per station, since SQLite UNIQUE permits any number of
+        # NULLs. previous_pc_name preserves the last binding a MAC held once
+        # revoked/reassigned, for audit and for the reassignment UI.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS station_assignments (
+                mac_address TEXT PRIMARY KEY,
+                pc_name TEXT UNIQUE,
+                status TEXT NOT NULL DEFAULT 'unclaimed' CHECK (
+                    status IN ('unclaimed', 'assigned', 'revoked')
+                ),
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                last_seen_ip TEXT,
+                assigned_at TEXT,
+                assigned_by_user_id TEXT,
+                previous_pc_name TEXT,
+                CHECK (
+                    (status = 'assigned' AND pc_name IS NOT NULL AND assigned_at IS NOT NULL)
+                    OR (status IN ('unclaimed', 'revoked') AND pc_name IS NULL)
+                ),
+                FOREIGN KEY (assigned_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_station_assignments_status
+            ON station_assignments (status, last_seen_at)
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS remote_commands (

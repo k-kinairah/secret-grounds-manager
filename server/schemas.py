@@ -486,6 +486,25 @@ class PCLayoutUpdate(BaseModel):
         return normalize_mac_address(value)
 
 
+StationAssignmentStatus = Literal["unclaimed", "assigned", "revoked"]
+
+
+class StationAssignmentRecord(BaseModel):
+    """Server-owned mac_address -> pc_name binding. See
+    server/station_repository.py for the write paths that produce this
+    shape; only an 'assigned' row carries a non-None pc_name."""
+
+    mac_address: str
+    pc_name: str | None = None
+    status: StationAssignmentStatus
+    first_seen_at: datetime
+    last_seen_at: datetime
+    last_seen_ip: str | None = None
+    assigned_at: datetime | None = None
+    assigned_by_user_id: str | None = None
+    previous_pc_name: str | None = None
+
+
 class PreparedSessionRecord(BaseModel):
     prepared_session_id: str
     pc_name: str
