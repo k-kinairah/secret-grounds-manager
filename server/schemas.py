@@ -505,6 +505,60 @@ class StationAssignmentRecord(BaseModel):
     previous_pc_name: str | None = None
 
 
+class StationResolveRequest(BaseModel):
+    """Public, pre-authentication payload from a booting client that does
+    not yet know its own pc_name. Deliberately has no pc_name field at
+    all -- extra="forbid" means a caller cannot smuggle one in and have it
+    silently accepted; only the server's station_assignments record ever
+    decides pc_name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mac_address: str = Field(..., min_length=1)
+    ip_address: str = Field(..., min_length=1)
+
+    @field_validator("mac_address")
+    @classmethod
+    def validate_mac_address(cls, value: str) -> str:
+        normalized = normalize_mac_address(value)
+        if normalized is None:
+            raise ValueError("mac_address is required")
+        return normalized
+
+    @field_validator("ip_address")
+    @classmethod
+    def validate_ip_address(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ip_address must not be blank")
+        return cleaned
+
+
+class StationResolveResponse(BaseModel):
+    """Minimal, non-sensitive resolution result. A revoked MAC is
+    presented identically to an unclaimed one -- the client-facing action
+    is the same either way ("wait for the owner"), and the response must
+    not hint at internal assignment history to an unauthenticated caller."""
+
+    status: Literal["unclaimed", "assigned"]
+    pc_name: str | None = None
+    display_name: str | None = None
+
+
+class StationAssignRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pc_name: str = Field(..., min_length=1)
+
+    @field_validator("pc_name")
+    @classmethod
+    def validate_pc_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("pc_name is required")
+        return cleaned
+
+
 class PreparedSessionRecord(BaseModel):
     prepared_session_id: str
     pc_name: str

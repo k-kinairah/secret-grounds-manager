@@ -117,6 +117,11 @@ from server.schemas import (
     SalesOperatorCollection,
     SalesOperatorTransaction,
     StartSessionRequest,
+    StationAssignRequest,
+    StationAssignmentRecord,
+    StationResolveRequest,
+    StationResolveResponse,
+    normalize_mac_address,
     TestCommandRequest,
     TestCommandResponse,
     WakeCommandResponse,
@@ -159,6 +164,7 @@ from server.session_repository import SessionRepository
 from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
 from server.rate_repository import RateRepository
+from server.station_repository import StationAssignmentRepository
 from server.time_utils import current_utc_time
 from server.system_service import SystemService
 from server.version import APP_VERSION
@@ -185,6 +191,7 @@ member_repository = MemberRepository(payment_repository, shift_repository)
 remote_command_repository = RemoteCommandRepository()
 pc_metadata_repository = PCMetadataRepository()
 pc_layout_repository = PCLayoutRepository()
+station_repository = StationAssignmentRepository()
 income_group_repository = IncomeGroupRepository()
 operator_state_repository = OperatorStateRepository()
 operator_repository = OperatorRepository()
@@ -2010,6 +2017,34 @@ def check_client_registration(
     }
 
 
+@app.post("/stations/resolve", response_model=StationResolveResponse)
+def resolve_station(request: StationResolveRequest) -> StationResolveResponse:
+    """Public, pre-registration identity lookup for a booting client that
+    does not yet have a pc_name. Deliberately minimal and read-mostly:
+    records this MAC's sighting (mac_address/ip_address only -- see
+    StationResolveRequest's extra="forbid", which makes it impossible for
+    a caller to smuggle a pc_name in) and reports back only whether the
+    server's station_assignments table already has an active binding for
+    it. Never creates, changes, or removes an assignment; never touches
+    pc_layouts, income groups, or Standard/VIP configuration.
+    """
+    record = station_repository.record_sighting(request.mac_address, request.ip_address)
+
+    if record.status == "assigned" and record.pc_name is not None:
+        layout = pc_layout_repository.get_layout(record.pc_name)
+        return StationResolveResponse(
+            status="assigned",
+            pc_name=record.pc_name,
+            display_name=layout.display_name if layout is not None else None,
+        )
+
+    # 'unclaimed' and 'revoked' both mean "no active assignment right now"
+    # from this endpoint's perspective -- a revoked MAC must never regain
+    # its old station automatically, and the response must not hint at
+    # revocation history to an unauthenticated caller.
+    return StationResolveResponse(status="unclaimed", pc_name=None)
+
+
 @app.post("/heartbeat", response_model=PCRecord)
 def heartbeat(pc: PCHeartbeat) -> PCRecord:
     pc_name, ip_address = clean_pc_payload(pc.pc_name, pc.ip_address)
@@ -2808,6 +2843,76 @@ def update_pc_layout(
                 layout.income_group_id,
             )
     return layout
+
+
+def clean_station_mac_path_param(mac_address: str) -> str:
+    try:
+        normalized = normalize_mac_address(mac_address)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if normalized is None:
+        raise HTTPException(status_code=400, detail="mac_address must not be blank")
+    return normalized
+
+
+def require_configured_pc_layout(pc_name: str) -> None:
+    # Station identity and PC Layout are separate concepts: assignment must
+    # only ever target a station that already exists in pc_layouts, and
+    # must never create one implicitly.
+    if pc_layout_repository.get_layout(pc_name) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{pc_name} is not a configured station. Add it under PC Layout first.",
+        )
+
+
+@app.get("/stations/unclaimed", response_model=list[StationAssignmentRecord])
+def list_unclaimed_stations(_: object = Depends(require_owner)) -> list[StationAssignmentRecord]:
+    return station_repository.list_unclaimed()
+
+
+@app.get("/stations/assigned", response_model=list[StationAssignmentRecord])
+def list_assigned_stations(_: object = Depends(require_owner)) -> list[StationAssignmentRecord]:
+    return station_repository.list_assigned()
+
+
+@app.post("/stations/{mac_address}/assign", response_model=StationAssignmentRecord)
+def assign_station(
+    mac_address: str,
+    request: StationAssignRequest,
+    current_user: object = Depends(require_owner),
+) -> StationAssignmentRecord:
+    cleaned_mac = clean_station_mac_path_param(mac_address)
+    require_configured_pc_layout(request.pc_name)
+    return station_repository.assign(
+        cleaned_mac,
+        request.pc_name,
+        assigned_by_user_id=get_actor_user_id(current_user),
+    )
+
+
+@app.post("/stations/{mac_address}/reassign", response_model=StationAssignmentRecord)
+def reassign_station(
+    mac_address: str,
+    request: StationAssignRequest,
+    current_user: object = Depends(require_owner),
+) -> StationAssignmentRecord:
+    cleaned_mac = clean_station_mac_path_param(mac_address)
+    require_configured_pc_layout(request.pc_name)
+    return station_repository.reassign(
+        cleaned_mac,
+        request.pc_name,
+        assigned_by_user_id=get_actor_user_id(current_user),
+    )
+
+
+@app.post("/stations/{mac_address}/revoke", response_model=StationAssignmentRecord)
+def revoke_station(
+    mac_address: str,
+    _: object = Depends(require_owner),
+) -> StationAssignmentRecord:
+    cleaned_mac = clean_station_mac_path_param(mac_address)
+    return station_repository.revoke(cleaned_mac)
 
 
 @app.get("/operators", response_model=list[UserPublic])
