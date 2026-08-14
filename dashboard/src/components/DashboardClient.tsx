@@ -23,6 +23,7 @@ import {
   addMemberTime,
   addPrepaidTime
 } from "@/lib/api";
+import { useMonitorFrames } from "@/hooks/useMonitorFrames";
 import { getPackageRatesForPc } from "@/lib/packageEligibility";
 import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
 import { calculateOpenTimeEstimate, secondsFromScheduledEnd } from "@/lib/time";
@@ -71,6 +72,7 @@ export function DashboardClient() {
   const isPollingRef = useRef(false);
   const pollIntervalMs = getPollingIntervalMs();
   const { pushToast } = useToast();
+  const { statusByPcName, frameUrlByPcName, frameErrorByPcName } = useMonitorFrames();
 
   const refresh = useCallback(async () => {
     if (isPollingRef.current) {
@@ -510,7 +512,10 @@ export function DashboardClient() {
                 {groupPcs.map((pc) => (
                   <PcMonitorTile
                     key={pc.pc_name}
+                    frameHasError={frameErrorByPcName[pc.pc_name]}
+                    frameUrl={frameUrlByPcName[pc.pc_name]}
                     isSelected={selectedPcName === pc.pc_name}
+                    monitorStatus={statusByPcName[pc.pc_name]}
                     pc={pc}
                     onSelect={openDetails}
                   />
@@ -523,6 +528,9 @@ export function DashboardClient() {
           {selectedPc ? (
             <PcDetailsPanel
               currentUserRole={currentUser?.role ?? null}
+              frameHasError={frameErrorByPcName[selectedPc.pc_name]}
+              frameUrl={frameUrlByPcName[selectedPc.pc_name]}
+              monitorStatus={statusByPcName[selectedPc.pc_name]}
               onActionComplete={() => void refresh()}
               onAddTime={(selectedPanelPc) => setDialog({ type: "add", pc: selectedPanelPc })}
               onCancelPrepared={(selectedPanelPc) => void cancelPreparedAction(selectedPanelPc)}
@@ -744,6 +752,9 @@ export function DashboardClient() {
       {dialog?.type === "details" ? (
         <PcDetailsPanel
           currentUserRole={currentUser?.role ?? null}
+          frameHasError={frameErrorByPcName[dialog.pc.pc_name]}
+          frameUrl={frameUrlByPcName[dialog.pc.pc_name]}
+          monitorStatus={statusByPcName[dialog.pc.pc_name]}
           onActionComplete={() => void refresh()}
           onAddTime={(selectedPc) => setDialog({ type: "add", pc: selectedPc })}
           onCancelPrepared={(selectedPc) => void cancelPreparedAction(selectedPc)}

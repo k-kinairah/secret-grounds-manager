@@ -56,6 +56,7 @@ from server.schemas import (
     PCSessionStateResponse,
     PaymentCreateRequest,
     LoginRequest,
+    ScreenMonitorPCStatus,
     QuickOperatorLoginRequest,
     MemberAddTimeRequest,
     MemberCreateRequest,
@@ -164,6 +165,8 @@ from server.session_repository import SessionRepository
 from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
 from server.rate_repository import RateRepository
+from server.screen_monitor_service import ScreenMonitorService, sniff_image_content_type
+from server.settings import SCREEN_MONITORING_ENABLED
 from server.station_repository import StationAssignmentRepository
 from server.time_utils import current_utc_time
 from server.system_service import SystemService
@@ -175,6 +178,7 @@ logger = logging.getLogger(__name__)
 pc_registry: dict[str, PCRecord] = {}
 recovery_flags: dict[str, dict[str, str]] = {}
 connection_manager = ClientConnectionManager()
+screen_monitor_service = ScreenMonitorService()
 session_repository = SessionRepository()
 payment_repository = PaymentRepository()
 shift_repository = ShiftRepository()
@@ -376,6 +380,7 @@ def mark_stale_pcs_offline() -> None:
                 last_seen=pc.last_seen,
                 mac_address=pc.mac_address,
             )
+            screen_monitor_service.clear_frame(pc_name)
 
 
 async def monitor_pc_statuses() -> None:
@@ -2168,6 +2173,130 @@ async def client_websocket(websocket: WebSocket, pc_name: str) -> None:
     finally:
         activation_task.cancel()
         connection_manager.disconnect(cleaned_pc_name, websocket)
+
+
+@app.websocket("/ws/screens/{pc_name}")
+async def screen_upload_websocket(websocket: WebSocket, pc_name: str) -> None:
+    """Separate, dedicated channel for PC screen monitoring frames.
+
+    Deliberately independent of /ws/{pc_name} (commands/acknowledgements)
+    -- a stalled or slow screen upload must never be able to delay or
+    interfere with command delivery, and vice versa. Authorization here
+    is the same station-identity check the command socket already uses:
+    only a pc_name that has actually registered may push frames.
+    """
+    cleaned_pc_name = connection_manager.normalize_pc_name(pc_name)
+
+    if not SCREEN_MONITORING_ENABLED:
+        await websocket.close(code=1008)
+        return
+
+    if not cleaned_pc_name or cleaned_pc_name not in pc_registry:
+        print(
+            "Screen WebSocket rejected: "
+            f"pc_name={cleaned_pc_name!r}, registered_pc_names={sorted(pc_registry)}"
+        )
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    print(f"Screen WebSocket connected: pc_name={cleaned_pc_name}")
+    pending_sequence: int | None = None
+
+    try:
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+
+            text_payload = message.get("text")
+            if text_payload is not None:
+                # Optional per-frame metadata (currently just an
+                # in-order sequence number the client wants echoed and
+                # stored). Applies to the very next binary frame only.
+                try:
+                    parsed = json.loads(text_payload)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(parsed, dict) and parsed.get("type") == "frame_meta":
+                    sequence_value = parsed.get("sequence")
+                    pending_sequence = sequence_value if isinstance(sequence_value, int) else None
+                continue
+
+            data = message.get("bytes")
+            if not data:
+                continue
+
+            sequence = pending_sequence
+            pending_sequence = None
+
+            content_type = sniff_image_content_type(data)
+            if content_type is None:
+                await websocket.send_json(
+                    {"type": "frame_rejected", "reason": "Unsupported or unrecognized image format"}
+                )
+                continue
+
+            try:
+                frame = screen_monitor_service.store_frame(cleaned_pc_name, content_type, data, sequence)
+            except HTTPException as error:
+                await websocket.send_json({"type": "frame_rejected", "reason": error.detail})
+                continue
+
+            await websocket.send_json(
+                {
+                    "type": "frame_accepted",
+                    "sequence": frame.sequence,
+                    "byte_size": frame.byte_size,
+                    "received_at": frame.received_at.isoformat(),
+                }
+            )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        screen_monitor_service.clear_frame(cleaned_pc_name)
+        print(f"Screen WebSocket disconnected: pc_name={cleaned_pc_name}")
+
+
+@app.get("/monitor/pcs", response_model=list[ScreenMonitorPCStatus])
+def list_monitored_pcs(
+    _: object = Depends(require_role("cashier")),
+) -> list[ScreenMonitorPCStatus]:
+    mark_stale_pcs_offline()
+    statuses: list[ScreenMonitorPCStatus] = []
+
+    for pc_name in sorted(pc_registry):
+        pc = pc_registry[pc_name]
+        frame, status = screen_monitor_service.frame_status(pc_name, is_online=pc.status == "online")
+        statuses.append(
+            ScreenMonitorPCStatus(
+                pc_name=pc_name,
+                has_frame=frame is not None,
+                frame_received_at=frame.received_at if frame is not None else None,
+                frame_age_seconds=(
+                    (current_utc_time() - frame.received_at).total_seconds() if frame is not None else None
+                ),
+                frame_status=status,
+            )
+        )
+
+    return statuses
+
+
+@app.get("/monitor/pcs/{pc_name}/frame")
+def get_monitored_pc_frame(
+    pc_name: str,
+    _: object = Depends(require_role("cashier")),
+) -> Response:
+    frame = screen_monitor_service.get_frame(pc_name.strip())
+    if frame is None:
+        raise HTTPException(status_code=404, detail=f"No screen frame available for {pc_name}")
+
+    return Response(
+        content=frame.data,
+        media_type=frame.content_type,
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
 
 
 @app.get("/pcs", response_model=list[PCDashboardRecord])

@@ -745,8 +745,10 @@
   font-size: 17px;
   font-weight: 900;
   line-height: 1.1;
+  position: relative;
   text-align: center;
   text-shadow: 0 0 16px rgb(34 211 238 / 0.45);
+  z-index: 1;
 }
 
 .monitorSubLabel {
@@ -758,8 +760,10 @@
   margin-top: 7px;
   max-width: 116px;
   overflow: hidden;
+  position: relative;
   text-overflow: ellipsis;
   white-space: nowrap;
+  z-index: 1;
 }
 
 .monitorTimeLabel {
@@ -770,6 +774,8 @@
   font-weight: 900;
   line-height: 1.1;
   margin-top: 5px;
+  position: relative;
+  z-index: 1;
 }
 
 .monitorStatusLight {
@@ -813,6 +819,72 @@
   color: #111827;
   left: 7px;
   right: auto;
+}
+
+.monitorThumbnail {
+  border-radius: 4px;
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  opacity: 0.85;
+  position: absolute;
+  width: 100%;
+  z-index: 0;
+}
+
+.monitorThumbnailStale {
+  filter: grayscale(0.65) brightness(0.55);
+}
+
+.monitorStaleOverlay {
+  background: rgb(15 23 42 / 0.72);
+  border-radius: 999px;
+  color: #fbbf24;
+  font-size: 10px;
+  font-weight: 900;
+  left: 50%;
+  letter-spacing: 0.08em;
+  padding: 3px 9px;
+  position: absolute;
+  top: 8px;
+  transform: translateX(-50%);
+  z-index: 1;
+}
+
+.monitorNoImageHint {
+  bottom: 22px;
+  color: rgb(148 163 184 / 0.85);
+  font-size: 9px;
+  font-weight: 700;
+  left: 50%;
+  letter-spacing: 0.03em;
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.monitorFrameBadge {
+  border-radius: 999px;
+  bottom: 7px;
+  font-size: 9px;
+  font-weight: 900;
+  left: 7px;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  position: absolute;
+  text-transform: uppercase;
+  z-index: 1;
+}
+
+.monitorFrameBadgeLive {
+  background: rgb(52 211 153 / 0.92);
+  color: #052e1a;
+}
+
+.monitorFrameBadgeError {
+  background: rgb(248 113 113 / 0.92);
+  color: #450a0a;
 }
 
 .monitorStand {
@@ -1745,6 +1817,37 @@
   letter-spacing: 0.04em;
   margin: 0 0 12px;
   text-transform: uppercase;
+}
+
+.monitorPreviewFrame {
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(145deg, #151922, #080b12 58%, #05070c);
+  border: 1px solid rgb(34 211 238 / 0.35);
+  border-radius: 6px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.monitorPreviewImage {
+  display: block;
+  height: 100%;
+  object-fit: contain;
+  width: 100%;
+}
+
+.monitorPreviewPlaceholder {
+  align-items: center;
+  color: rgb(148 163 184 / 0.85);
+  display: flex;
+  font-size: 12px;
+  font-weight: 700;
+  height: 100%;
+  justify-content: center;
+  letter-spacing: 0.03em;
+  text-align: center;
+  width: 100%;
 }
 
 .compactDetailList {

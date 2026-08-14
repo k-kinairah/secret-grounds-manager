@@ -12,6 +12,8 @@ import {
   fetchDashboardTodaySales,
   fetchLoginOperators,
   fetchLiveActivity,
+  fetchMonitorFrame,
+  fetchMonitorStatuses,
   fetchPcLayouts,
   fetchRates,
   fetchSalesReport,
@@ -65,6 +67,16 @@ import {
   summarizePcs
 } from "../lib/pcStatus";
 import { getPackageRatesForPc, isRateEligibleNow } from "../lib/packageEligibility";
+import {
+  applyFrameUrlUpdate,
+  clearFrameUrl,
+  getMonitorTileVisualState,
+  mapMonitorStatusesByPcName,
+  PollGuard,
+  revokeAllFrameUrls,
+  shouldFetchFrame,
+  type FrameUrlCache
+} from "../lib/pcMonitor";
 import { saveRateProfile } from "../lib/rateActions";
 import { rateFormToInput, rateToForm } from "../lib/rateForm";
 import {
@@ -77,7 +89,7 @@ import {
   minutesToSeconds,
   secondsFromStartedAt
 } from "../lib/time";
-import type { OperatorActivityRecord, PcSummary, RateProfile, RateProfileInput } from "../lib/types";
+import type { OperatorActivityRecord, PcSummary, RateProfile, RateProfileInput, ScreenMonitorStatus } from "../lib/types";
 
 function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
   return {
@@ -129,6 +141,17 @@ function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
     member_balance_after_seconds: null,
     mac_address: null,
     customer_locked: false,
+    ...overrides
+  };
+}
+
+function makeMonitorStatus(overrides: Partial<ScreenMonitorStatus> = {}): ScreenMonitorStatus {
+  return {
+    pc_name: "PC-01",
+    has_frame: true,
+    frame_received_at: "2026-08-14T12:00:00+00:00",
+    frame_age_seconds: 2,
+    frame_status: "live",
     ...overrides
   };
 }
@@ -527,6 +550,106 @@ assert.equal(isPaymentInputValid("cash", "20.00", "20.00", "10.00"), false);
 assert.equal(isPaymentInputValid("gcash", "25.00", "20.00", ""), false);
 assert.equal(isPaymentInputValid("gcash", "5.00", "20.00", ""), true);
 
+// --- PC screen monitoring (pcMonitor.ts) ---------------------------------
+
+// 15 stations map to the correct tiles.
+const fifteenStatuses = Array.from({ length: 15 }, (_, index) =>
+  makeMonitorStatus({ pc_name: `PC-${String(index + 1).padStart(2, "0")}` })
+);
+const monitorMap = mapMonitorStatusesByPcName(fifteenStatuses);
+assert.equal(Object.keys(monitorMap).length, 15);
+for (const status of fifteenStatuses) {
+  assert.equal(monitorMap[status.pc_name], status);
+}
+assert.equal(monitorMap["PC-07"].pc_name, "PC-07");
+
+// shouldFetchFrame: unchanged frame_received_at does not redownload.
+assert.equal(shouldFetchFrame(makeMonitorStatus(), "2026-08-14T12:00:00+00:00"), false);
+// changed frame_received_at replaces the image.
+assert.equal(shouldFetchFrame(makeMonitorStatus(), "2026-08-14T11:59:57+00:00"), true);
+// never-fetched-before (no prior timestamp on record).
+assert.equal(shouldFetchFrame(makeMonitorStatus(), null), true);
+assert.equal(shouldFetchFrame(makeMonitorStatus(), undefined), true);
+// no frame at all -> never worth fetching, regardless of frame_status.
+assert.equal(
+  shouldFetchFrame(makeMonitorStatus({ has_frame: false, frame_status: "no_image", frame_received_at: null }), null),
+  false
+);
+// offline/stale-server-state is never fetched even if a timestamp is present.
+assert.equal(shouldFetchFrame(makeMonitorStatus({ frame_status: "offline" }), null), false);
+// unknown station (not yet in the monitor list).
+assert.equal(shouldFetchFrame(undefined, null), false);
+
+// getMonitorTileVisualState: exhaustive branch coverage.
+assert.equal(getMonitorTileVisualState({ status: makeMonitorStatus({ frame_status: "live" }), hasFetchError: false }), "live");
+assert.equal(getMonitorTileVisualState({ status: makeMonitorStatus({ frame_status: "stale" }), hasFetchError: false }), "stale");
+assert.equal(
+  getMonitorTileVisualState({ status: makeMonitorStatus({ frame_status: "offline", has_frame: false }), hasFetchError: false }),
+  "offline"
+);
+assert.equal(
+  getMonitorTileVisualState({
+    status: makeMonitorStatus({ frame_status: "no_image", has_frame: false, frame_received_at: null }),
+    hasFetchError: false
+  }),
+  "no_image"
+);
+assert.equal(
+  getMonitorTileVisualState({ status: undefined, hasFetchError: false }),
+  "no_image",
+  "a station missing from the monitor list is treated the same as no_image, not an error"
+);
+// one failed frame download must not affect the other 14 tiles -- proven
+// here by hasFetchError only ever changing the outcome for the one status
+// object it's paired with.
+assert.equal(getMonitorTileVisualState({ status: makeMonitorStatus({ frame_status: "live" }), hasFetchError: true }), "error");
+assert.equal(getMonitorTileVisualState({ status: makeMonitorStatus({ frame_status: "stale" }), hasFetchError: true }), "error");
+// a fetch error against an offline/no_image station never masquerades as
+// "error" -- those states never attempt a download in the first place.
+assert.equal(
+  getMonitorTileVisualState({ status: makeMonitorStatus({ frame_status: "offline" }), hasFetchError: true }),
+  "offline"
+);
+assert.equal(
+  getMonitorTileVisualState({ status: makeMonitorStatus({ frame_status: "no_image" }), hasFetchError: true }),
+  "no_image"
+);
+
+// Blob URL lifecycle: old URL revoked after replacement, never accumulates.
+{
+  const revoked: string[] = [];
+  const revoke = (url: string) => revoked.push(url);
+  let cache: FrameUrlCache = {};
+  cache = applyFrameUrlUpdate(cache, "PC-01", "t1", "blob:one", revoke);
+  assert.deepEqual(revoked, []);
+  assert.equal(Object.keys(cache).length, 1);
+  cache = applyFrameUrlUpdate(cache, "PC-01", "t2", "blob:two", revoke);
+  assert.deepEqual(revoked, ["blob:one"], "the superseded URL must be revoked exactly once");
+  assert.equal(cache["PC-01"].url, "blob:two");
+  assert.equal(Object.keys(cache).length, 1, "replacing a PC's frame must never leave a second cached URL behind");
+
+  // offline removes the screenshot.
+  cache = clearFrameUrl(cache, "PC-01", revoke);
+  assert.deepEqual(revoked, ["blob:one", "blob:two"]);
+  assert.equal("PC-01" in cache, false);
+  // clearing an already-absent PC is a safe no-op.
+  const beforeNoop = cache;
+  cache = clearFrameUrl(cache, "PC-01", revoke);
+  assert.equal(cache, beforeNoop);
+  assert.deepEqual(revoked, ["blob:one", "blob:two"]);
+}
+
+// Blob URLs are revoked on unmount (full teardown).
+{
+  const revoked: string[] = [];
+  const revoke = (url: string) => revoked.push(url);
+  let cache: FrameUrlCache = {};
+  cache = applyFrameUrlUpdate(cache, "PC-01", "t1", "blob:a", revoke);
+  cache = applyFrameUrlUpdate(cache, "PC-02", "t1", "blob:b", revoke);
+  revokeAllFrameUrls(cache, revoke);
+  assert.deepEqual(revoked.sort(), ["blob:a", "blob:b"]);
+}
+
 const originalBaseUrl = process.env.NEXT_PUBLIC_FASTAPI_BASE_URL;
 const originalNodeEnv = process.env.NODE_ENV;
 const originalFetch = globalThis.fetch;
@@ -685,6 +808,12 @@ async function runAsyncAssertions() {
     await assignStation("AA:BB:CC:DD:EE:FF", "PC-11");
     await reassignStation("AA:BB:CC:DD:EE:01", "PC-11");
     await revokeStation("AA:BB:CC:DD:EE:FF");
+    // fetchCalls[46]: monitor status poll.
+    await fetchMonitorStatuses();
+    // fetchCalls[47]: authenticated frame download -- credentials: "include"
+    // is what actually authenticates this request (see fetchMonitorFrame's
+    // comment in lib/api.ts); a plain <img src> would never send it.
+    await fetchMonitorFrame("PC-11");
 
     assert.deepEqual(
       fetchCalls.map((call) => ({ method: call.method, url: call.url })),
@@ -734,13 +863,18 @@ async function runAsyncAssertions() {
         { method: "GET", url: "http://localhost:8000/stations/assigned" },
         { method: "POST", url: "http://localhost:8000/stations/AA%3ABB%3ACC%3ADD%3AEE%3AFF/assign" },
         { method: "POST", url: "http://localhost:8000/stations/AA%3ABB%3ACC%3ADD%3AEE%3A01/reassign" },
-        { method: "POST", url: "http://localhost:8000/stations/AA%3ABB%3ACC%3ADD%3AEE%3AFF/revoke" }
+        { method: "POST", url: "http://localhost:8000/stations/AA%3ABB%3ACC%3ADD%3AEE%3AFF/revoke" },
+        { method: "GET", url: "http://localhost:8000/monitor/pcs" },
+        { method: "GET", url: "http://localhost:8000/monitor/pcs/PC-11/frame" }
       ]
     );
     assert.equal(fetchCalls.every((call) => call.credentials === "include"), true);
     assert.deepEqual(fetchCalls[43].body, { pc_name: "PC-11" });
     assert.deepEqual(fetchCalls[44].body, { pc_name: "PC-11" });
     assert.deepEqual(fetchCalls[45].body, null);
+    assert.equal(fetchCalls[46].url, "http://localhost:8000/monitor/pcs");
+    assert.equal(fetchCalls[47].url, "http://localhost:8000/monitor/pcs/PC-11/frame");
+    assert.equal(fetchCalls[47].credentials, "include");
     assert.deepEqual(fetchCalls[0].body, {
       username: "owner",
       password: "password123"
@@ -987,6 +1121,15 @@ async function runAsyncAssertions() {
     assert.match(dashboardSource, /Choose a station to view session, billing, messaging, and power controls\./);
     assert.match(dashboardSource, /Register First PC/);
     assert.match(dashboardSource, /variant="dock"/);
+
+    // The selected-PC enlarged view (PcDetailsPanel, both the desktop dock
+    // and mobile modal usages) must read frames from the exact same
+    // useMonitorFrames() call that feeds the grid tiles -- never a second
+    // hook instance / second poll loop, so opening the enlarged view never
+    // triggers a duplicate frame download of what the tile already has.
+    assert.equal((dashboardSource.match(/useMonitorFrames\(\)/g) ?? []).length, 1);
+    assert.equal((dashboardSource.match(/frameUrlByPcName\[/g) ?? []).length, 3);
+    assert.equal((dashboardSource.match(/statusByPcName\[/g) ?? []).length, 3);
     assert.doesNotMatch(dashboardSource, /startOpenTimeSession/);
     assert.doesNotMatch(dashboardSource, /meteredRate/);
     // Historical open_time sessions (already active/settling before this
@@ -1876,6 +2019,48 @@ async function runAsyncAssertions() {
     assert.match(typesSourceForStage6, /income_group_id: string \| null/);
     assert.match(typesSourceForStage6, /pending_attribution_amount: string/);
     assert.match(typesSourceForStage6, /pending_attribution_count: number/);
+
+    // A missing frame (station never uploaded / cleaned up after
+    // disconnect) is a normal 404, not a fatal dashboard failure --
+    // fetchMonitorFrame must resolve, never throw, and report it plainly.
+    globalThis.fetch = async () => new Response(null, { status: 404 });
+    const missingFrame = await fetchMonitorFrame("PC-99");
+    assert.deepEqual(missingFrame, { status: 404, blob: null });
+
+    // Polling cleanup: PollGuard prevents overlapping runs and updates
+    // after stop() (component unmount).
+    {
+      const calls: number[] = [];
+      const guard = new PollGuard();
+      let releaseFirst: (() => void) | null = null;
+      const firstRun = guard.run(
+        () =>
+          new Promise<void>((resolve) => {
+            calls.push(1);
+            releaseFirst = resolve;
+          })
+      );
+      // A second run() call while the first is still in flight must be a
+      // silent no-op -- this is what stops duplicate overlapping poll cycles.
+      await guard.run(async () => {
+        calls.push(2);
+      });
+      assert.deepEqual(calls, [1], "an overlapping run() must not invoke its function");
+      (releaseFirst as unknown as () => void)();
+      await firstRun;
+
+      await guard.run(async () => {
+        calls.push(3);
+      });
+      assert.deepEqual(calls, [1, 3], "once the prior run() resolves, the guard must accept new work again");
+
+      guard.stop();
+      assert.equal(guard.isStopped, true);
+      await guard.run(async () => {
+        calls.push(4);
+      });
+      assert.deepEqual(calls, [1, 3], "run() after stop() (component unmount) must never invoke its function");
+    }
 
     const loggedErrors: unknown[] = [];
     console.error = (...args: unknown[]) => {

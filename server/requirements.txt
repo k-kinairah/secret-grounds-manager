@@ -5,3 +5,9 @@ websockets==16.1.1
 # zoneinfo.ZoneInfo needs this package to resolve any timezone name (e.g.
 # Asia/Manila) on a Windows deployment. Required by server/rate_eligibility.py.
 tzdata==2026.3
+
+# Client-side PC screen-monitoring capture prototype (client/screen_capture.py).
+# mss grabs the primary display cheaply on Windows; Pillow resizes and
+# JPEG-encodes the frame before it goes out over /ws/screens/{pc_name}.
+mss==10.2.0
+Pillow==12.3.0

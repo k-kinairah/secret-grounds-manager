@@ -10,10 +10,19 @@ import {
   updatePcMacAddress,
   wakePc
 } from "@/lib/api";
+import { getMonitorTileVisualState, type MonitorTileVisualState } from "@/lib/pcMonitor";
 import { getPcActionAvailability } from "@/lib/pcStatus";
 import { formatDateTime, formatMoney, formatNaturalDuration, formatTimer } from "@/lib/time";
-import type { MessageSeverity, PcSummary, SessionBalanceSourceProjection, UserRole } from "@/lib/types";
+import type { MessageSeverity, PcSummary, ScreenMonitorStatus, SessionBalanceSourceProjection, UserRole } from "@/lib/types";
 import { CloseButton } from "./CloseButton";
+
+const MONITOR_STATE_LABEL: Record<MonitorTileVisualState, string> = {
+  live: "Live",
+  stale: "Stale",
+  offline: "Offline",
+  no_image: "No screen available",
+  error: "Preview unavailable"
+};
 
 type IconName =
   | "card"
@@ -43,6 +52,9 @@ interface PcDetailsPanelProps {
   onPayment: (pc: PcSummary) => void;
   onRetryWake: (pc: PcSummary) => void;
   onCancelPrepared: (pc: PcSummary) => void;
+  monitorStatus?: ScreenMonitorStatus;
+  frameUrl?: string;
+  frameHasError?: boolean;
 }
 
 function Icon({ name }: { name: IconName }) {
@@ -177,11 +189,16 @@ export function PcDetailsPanel({
   onResolve,
   onPayment,
   onRetryWake,
-  onCancelPrepared
+  onCancelPrepared,
+  monitorStatus,
+  frameUrl,
+  frameHasError = false
 }: PcDetailsPanelProps) {
   const modalRef = useRef<HTMLElement | null>(null);
   const isSettlementPending = pc.session_status === "settlement_pending";
   const actions = getPcActionAvailability(pc);
+  const monitorVisualState = getMonitorTileVisualState({ status: monitorStatus, hasFetchError: frameHasError });
+  const showMonitorThumbnail = (monitorVisualState === "live" || monitorVisualState === "stale") && Boolean(frameUrl);
   const canSeeTechnical = currentUserRole === "owner" || currentUserRole === "admin";
   const planLabel =
     pc.session_mode === "member_balance"
@@ -392,6 +409,47 @@ export function PcDetailsPanel({
 
         <div className={styles.pcControlGrid}>
           <div className={styles.pcControlColumn}>
+            <section className={styles.controlSection} aria-label="Live screen">
+              <h3>Live Screen</h3>
+              <div
+                className={styles.monitorPreviewFrame}
+                data-monitor-state={monitorVisualState}
+              >
+                {showMonitorThumbnail ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- an authenticated Blob URL, not a static asset next/image can optimize.
+                  <img
+                    alt={`${pc.display_name ?? pc.pc_name} live screen preview`}
+                    className={`${styles.monitorPreviewImage} ${
+                      monitorVisualState === "stale" ? styles.monitorThumbnailStale : ""
+                    }`}
+                    src={frameUrl}
+                  />
+                ) : (
+                  <div className={styles.monitorPreviewPlaceholder}>
+                    {monitorVisualState === "offline" ? "Station offline" : MONITOR_STATE_LABEL[monitorVisualState]}
+                  </div>
+                )}
+              </div>
+              <dl className={styles.compactDetailList}>
+                <div className={styles.detailRow}>
+                  <span>Monitor status</span>
+                  <strong>{MONITOR_STATE_LABEL[monitorVisualState]}</strong>
+                </div>
+                <div className={styles.detailRow}>
+                  <span>Connection</span>
+                  <strong>{pc.connection_status.toUpperCase()}</strong>
+                </div>
+                <div className={styles.detailRow}>
+                  <span>Last frame received</span>
+                  <strong>
+                    {monitorStatus?.frame_received_at
+                      ? `${formatNaturalDuration(Math.round(monitorStatus.frame_age_seconds ?? 0))} ago`
+                      : "Never"}
+                  </strong>
+                </div>
+              </dl>
+            </section>
+
             <section className={styles.controlSection} aria-label="Session summary">
               <h3>Session</h3>
               <dl className={styles.compactDetailList}>

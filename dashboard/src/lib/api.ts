@@ -30,6 +30,7 @@ import type {
   MessageSeverity,
   SalesPeriod,
   SalesReport,
+  ScreenMonitorStatus,
   SystemBackupRecord,
   SystemClientHealth,
   SystemDatabaseHealth,
@@ -62,6 +63,15 @@ export function getApiBaseUrl(): string {
 export function getPollingIntervalMs(): number {
   const rawValue = Number(process.env.NEXT_PUBLIC_POLL_INTERVAL_MS ?? "4000");
   return Number.isFinite(rawValue) && rawValue >= 3000 ? rawValue : 4000;
+}
+
+// PC screen monitoring polls faster than the main dashboard refresh above
+// (screen frames go stale after ~10s server-side; a 3s cycle keeps LIVE
+// tiles genuinely live) but is otherwise an independent polling loop --
+// see useMonitorFrames.
+export function getMonitorPollingIntervalMs(): number {
+  const rawValue = Number(process.env.NEXT_PUBLIC_MONITOR_POLL_INTERVAL_MS ?? "3000");
+  return Number.isFinite(rawValue) && rawValue >= 2000 ? rawValue : 3000;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -592,6 +602,37 @@ export function toCashierMessage(message: string): string {
 
 export async function fetchPcs(): Promise<PcSummary[]> {
   return requestJson<PcSummary[]>(`${getApiBaseUrl()}/pcs`, { cache: "no-store" });
+}
+
+export async function fetchMonitorStatuses(): Promise<ScreenMonitorStatus[]> {
+  return requestJson<ScreenMonitorStatus[]>(`${getApiBaseUrl()}/monitor/pcs`, { cache: "no-store" });
+}
+
+export type MonitorFrameResult =
+  | { status: 200; blob: Blob }
+  | { status: 404; blob: null }
+  | { status: number; blob: null };
+
+// Deliberately NOT requestJson: the response body is binary image bytes,
+// not JSON, and a 404 (no frame yet) is an expected, non-throwing outcome
+// -- see useMonitorFrames, which treats it as no_image rather than an
+// error. credentials: "include" is what actually authenticates this
+// request (the session cookie is SameSite=Lax, so a plain <img src="...">
+// across the dashboard/API origins would never send it) -- callers must
+// never render this via a direct <img src> URL.
+export async function fetchMonitorFrame(pcName: string, signal?: AbortSignal): Promise<MonitorFrameResult> {
+  const response = await fetch(`${getApiBaseUrl()}/monitor/pcs/${encodeURIComponent(pcName)}/frame`, {
+    credentials: "include",
+    cache: "no-store",
+    signal
+  });
+  if (response.status === 404) {
+    return { status: 404, blob: null };
+  }
+  if (!response.ok) {
+    return { status: response.status, blob: null };
+  }
+  return { status: 200, blob: await response.blob() };
 }
 
 export async function updatePcMacAddress(

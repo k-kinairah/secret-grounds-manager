@@ -74,21 +74,43 @@ class SimpleWebSocketClient:
         raw_socket.settimeout(None)
         self._socket = raw_socket
 
-    def receive_json(self) -> dict[str, Any]:
-        while True:
-            opcode, payload = self._receive_frame()
+    def receive_json(self, timeout: float | None = None) -> dict[str, Any]:
+        """Block for the next JSON text frame.
 
-            if opcode == 0x1:
-                return json.loads(payload.decode("utf-8"))
+        timeout is opt-in and per-call, deliberately: the command channel
+        (client/client.py's run_websocket_loop) calls this with no timeout
+        and must keep blocking indefinitely -- that is the correct,
+        unchanged behavior for a persistent command socket. Callers that
+        need a bounded wait (e.g. the screen-capture worker waiting for
+        frame_accepted/frame_rejected) pass an explicit timeout instead, so
+        a socket-level stall surfaces as ConnectionError rather than
+        hanging the caller's thread forever.
+        """
+        if timeout is not None and self._socket is not None:
+            self._socket.settimeout(timeout)
+        try:
+            while True:
+                opcode, payload = self._receive_frame()
 
-            if opcode == 0x8:
-                raise ConnectionError("WebSocket connection closed")
+                if opcode == 0x1:
+                    return json.loads(payload.decode("utf-8"))
 
-            if opcode == 0x9:
-                self._send_frame(payload, opcode=0xA)
+                if opcode == 0x8:
+                    raise ConnectionError("WebSocket connection closed")
+
+                if opcode == 0x9:
+                    self._send_frame(payload, opcode=0xA)
+        except socket.timeout as error:
+            raise ConnectionError("Timed out waiting for a WebSocket response") from error
+        finally:
+            if timeout is not None and self._socket is not None:
+                self._socket.settimeout(None)
 
     def send_json(self, payload: dict[str, Any]) -> None:
         self._send_frame(json.dumps(payload).encode("utf-8"), opcode=0x1)
+
+    def send_bytes(self, payload: bytes) -> None:
+        self._send_frame(payload, opcode=0x2)
 
     def close(self) -> None:
         if self._socket is None:

@@ -14,6 +14,7 @@ from client.config import (
     ENABLE_DEV_ESCAPE,
     ENABLE_CUSTOMER_OVERLAY,
     ENABLE_LOCK_SCREEN,
+    ENABLE_SCREEN_MONITORING,
     AUTOMATIC_SHUTDOWN_ON_EXPIRATION,
     APP_VERSION,
     CUSTOMER_OVERLAY_POSITION,
@@ -21,6 +22,10 @@ from client.config import (
     EXPIRATION_SOUND_ENABLED,
     HEARTBEAT_INTERVAL_SECONDS,
     REQUEST_TIMEOUT_SECONDS,
+    SCREEN_CAPTURE_INTERVAL_SECONDS,
+    SCREEN_CAPTURE_JPEG_QUALITY,
+    SCREEN_CAPTURE_MAX_HEIGHT,
+    SCREEN_CAPTURE_MAX_WIDTH,
     SESSION_RECOVERY_PATH,
     get_client_config_path,
     load_client_config,
@@ -28,6 +33,7 @@ from client.config import (
 from client.customer_overlay import CustomerOverlayController
 from client.lock_screen import LockScreenController
 from client.remote_controls import RemoteControlHandler
+from client.screen_capture import ScreenCaptureWorker
 from client.session_recovery import SessionRecoveryStore
 from client.setup_wizard import show_setup_wizard
 from client.station_resolver import build_http_resolve_fn, resolve_station_identity
@@ -102,6 +108,23 @@ class SecretGroundsClient:
             lock_pc_action=self.lock_current_session,
         )
         self.lock_screen.start()
+        # Runs on its own thread/socket, entirely separate from the command
+        # WebSocket and heartbeat loops -- a screen-capture disconnect/
+        # backoff must never delay or interfere with those. Shares
+        # self.stop_event only so a single client.stop() tears down all
+        # three together; it never shares a thread or connection with them.
+        self.screen_capture_worker: ScreenCaptureWorker | None = None
+        if ENABLE_SCREEN_MONITORING:
+            self.screen_capture_worker = ScreenCaptureWorker(
+                server_url=self.server_url,
+                pc_name=self.pc_name,
+                request_timeout=self.request_timeout,
+                capture_interval_seconds=SCREEN_CAPTURE_INTERVAL_SECONDS,
+                max_width=SCREEN_CAPTURE_MAX_WIDTH,
+                max_height=SCREEN_CAPTURE_MAX_HEIGHT,
+                jpeg_quality=SCREEN_CAPTURE_JPEG_QUALITY,
+                stop_event=self.stop_event,
+            )
 
     def mark_initial_reconciliation_complete(self) -> None:
         if self.initial_reconciliation_complete.is_set():
@@ -1252,10 +1275,14 @@ class SecretGroundsClient:
         # not stop presence updates, and a server restart reconnects both paths.
         websocket_thread = Thread(target=self.run_websocket_loop, daemon=True)
         websocket_thread.start()
+        if self.screen_capture_worker is not None:
+            self.screen_capture_worker.start()
         self.run_heartbeat_loop()
 
     def stop(self) -> None:
         self.stop_event.set()
+        if self.screen_capture_worker is not None:
+            self.screen_capture_worker.stop()
         self.lock_screen.stop()
         self.customer_overlay.hide()
 

@@ -107,6 +107,20 @@ export interface PcSummary {
   customer_locked: boolean;
 }
 
+export type ScreenFrameStatus = "live" | "stale" | "offline" | "no_image";
+
+// PC screen monitoring: read-only projection of a station's latest cached
+// screen frame. Deliberately separate from PcSummary (operational session
+// state) -- see server/schemas.py's ScreenMonitorPCStatus, which this
+// mirrors field-for-field.
+export interface ScreenMonitorStatus {
+  pc_name: string;
+  has_frame: boolean;
+  frame_received_at: string | null;
+  frame_age_seconds: number | null;
+  frame_status: ScreenFrameStatus;
+}
+
 export interface PcLayoutSlot {
   pc_name: string;
   display_name: string;

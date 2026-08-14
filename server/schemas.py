@@ -545,6 +545,24 @@ class StationResolveResponse(BaseModel):
     display_name: str | None = None
 
 
+ScreenFrameStatus = Literal["live", "stale", "offline", "no_image"]
+
+
+class ScreenMonitorPCStatus(BaseModel):
+    """Read-only projection of a station's latest cached screen frame.
+
+    Never carries the frame bytes themselves -- see
+    server/screen_monitor_service.py, which never persists them anywhere
+    outside process memory in the first place.
+    """
+
+    pc_name: str
+    has_frame: bool
+    frame_received_at: datetime | None = None
+    frame_age_seconds: float | None = None
+    frame_status: ScreenFrameStatus
+
+
 class StationAssignRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

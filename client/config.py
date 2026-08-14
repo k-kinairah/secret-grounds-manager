@@ -302,3 +302,11 @@ AUTOMATIC_SHUTDOWN_ON_EXPIRATION = read_bool_config(
     not TEST_MODE,
 )
 EXPIRATION_SOUND_ENABLED = read_bool_config("SECRET_GROUNDS_EXPIRATION_SOUND_ENABLED", True)
+
+# PC screen monitoring (prototype, client/screen_capture.py). Defaults to
+# disabled so existing clients are unaffected until explicitly opted in.
+ENABLE_SCREEN_MONITORING = read_bool_config("ENABLE_SCREEN_MONITORING", False)
+SCREEN_CAPTURE_INTERVAL_SECONDS = int(os.getenv("SCREEN_CAPTURE_INTERVAL_SECONDS", "3"))
+SCREEN_CAPTURE_MAX_WIDTH = int(os.getenv("SCREEN_CAPTURE_MAX_WIDTH", "480"))
+SCREEN_CAPTURE_MAX_HEIGHT = int(os.getenv("SCREEN_CAPTURE_MAX_HEIGHT", "270"))
+SCREEN_CAPTURE_JPEG_QUALITY = int(os.getenv("SCREEN_CAPTURE_JPEG_QUALITY", "50"))
