@@ -601,7 +601,6 @@ def main() -> None:
                 ("rate-standard-guest-5", "5.00", 1200),
                 ("rate-standard-guest-10", "10.00", 2400),
                 ("rate-standard-guest-15", "15.00", 3600),
-                ("rate-standard-midnight-promo", "10.00", 3600),
                 ("rate-vip-guest-1hr", "30.00", 3600),
             ]:
                 row = connection.execute(
@@ -612,16 +611,14 @@ def main() -> None:
                 assert row["price"] == expected_price
                 assert row["duration_seconds"] == expected_duration
 
+            # Owner ended Midnight Promo -- no longer in REQUIRED_DEFAULT_RATES,
+            # so seed_required_default_pricing() never (re)creates it. See
+            # tests/smoke_midnight_promo_retirement.py for how an existing
+            # shop that already has the row gets it deactivated instead.
             midnight_row = connection.execute(
-                "SELECT station_scope, guest_only, member_eligible, "
-                "eligible_start_local_time, eligible_end_local_time "
-                "FROM rate_profiles WHERE rate_id = 'rate-standard-midnight-promo'"
+                "SELECT 1 FROM rate_profiles WHERE rate_id = 'rate-standard-midnight-promo'"
             ).fetchone()
-            assert midnight_row["station_scope"] == "standard"
-            assert midnight_row["guest_only"] == 1
-            assert midnight_row["member_eligible"] == 0
-            assert midnight_row["eligible_start_local_time"] == "00:00"
-            assert midnight_row["eligible_end_local_time"] == "05:00"
+            assert midnight_row is None
 
             vip_guest_row = connection.execute(
                 "SELECT station_scope FROM rate_profiles WHERE rate_id = 'rate-vip-guest-1hr'"

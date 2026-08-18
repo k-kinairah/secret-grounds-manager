@@ -31,7 +31,6 @@ type IconName =
   | "moon"
   | "play"
   | "power"
-  | "powerOff"
   | "refresh"
   | "rotate"
   | "save"
@@ -74,10 +73,10 @@ function Icon({ name }: { name: IconName }) {
     ),
     clockPlus: (
       <>
-        <circle {...common} cx="12" cy="12" r="8" />
-        <path {...common} d="M12 8v4l3 2" />
-        <path {...common} d="M19 19l2 2" />
-        <path {...common} d="M21 17v4" />
+        <circle {...common} cx="10" cy="12" r="7" />
+        <path {...common} d="M10 9v3l2 1.5" />
+        <path {...common} d="M16 15v5" />
+        <path {...common} d="M13.5 17.5h5" />
       </>
     ),
     message: (
@@ -93,13 +92,6 @@ function Icon({ name }: { name: IconName }) {
       <>
         <path {...common} d="M12 2.8v9" />
         <path {...common} d="M18.4 6.6a9 9 0 1 1-12.8 0" />
-      </>
-    ),
-    powerOff: (
-      <>
-        <path {...common} d="M12 2.8v6" />
-        <path {...common} d="M18.4 6.6a9 9 0 0 1-11 14" />
-        <path {...common} d="M3.8 3.8 20.2 20.2" />
       </>
     ),
     refresh: (
@@ -200,15 +192,8 @@ export function PcDetailsPanel({
   const monitorVisualState = getMonitorTileVisualState({ status: monitorStatus, hasFetchError: frameHasError });
   const showMonitorThumbnail = (monitorVisualState === "live" || monitorVisualState === "stale") && Boolean(frameUrl);
   const canSeeTechnical = currentUserRole === "owner" || currentUserRole === "admin";
-  const planLabel =
-    pc.session_mode === "member_balance"
-      ? "Member Time"
-      : pc.session_mode === "open_time"
-        ? "Open Time"
-        : pc.rate_name_snapshot ?? "Package";
   const customerLabel =
     pc.member_name_snapshot ?? pc.member_code_snapshot ?? (pc.active_session_id ? "Walk-in" : "No active customer");
-  const [messageTitle, setMessageTitle] = useState("Secret Grounds");
   const [messageText, setMessageText] = useState("");
   const [messageSeverity, setMessageSeverity] = useState<MessageSeverity>("info");
   const [macAddress, setMacAddress] = useState(pc.mac_address ?? "");
@@ -227,7 +212,10 @@ export function PcDetailsPanel({
 
   useEffect(() => {
     if (!isVipMemberSession || !pc.active_session_id) {
-      setBalanceSource(null);
+      // No setState here: balanceSource is only ever rendered behind
+      // `isVipMemberSession ? ... : null` below, so a stale value from a
+      // prior VIP session can never actually be shown once this becomes
+      // false -- nothing to clear.
       return;
     }
     let isMounted = true;
@@ -329,7 +317,6 @@ export function PcDetailsPanel({
     void runPanelAction(
       () =>
         sendPcMessage(pc.pc_name, {
-          title: messageTitle,
           message: messageText,
           severity: messageSeverity,
           require_acknowledgement: messageSeverity === "urgent"
@@ -364,7 +351,7 @@ export function PcDetailsPanel({
       role={variant === "modal" ? "dialog" : "region"}
       tabIndex={variant === "modal" ? -1 : undefined}
     >
-      <PcControlPanelContent />
+      {PcControlPanelContent()}
     </section>
   );
 
@@ -396,7 +383,7 @@ export function PcDetailsPanel({
               <span className={styles.pcControlStatus}>{pc.connection_status.toUpperCase()}</span>
               <span>{statusLabel(pc).toUpperCase()}</span>
             </div>
-            <p>{customerLabel} / {planLabel}</p>
+            <p>{customerLabel}</p>
           </div>
           <CloseButton
             disabled={isWorking}
@@ -409,47 +396,6 @@ export function PcDetailsPanel({
 
         <div className={styles.pcControlGrid}>
           <div className={styles.pcControlColumn}>
-            <section className={styles.controlSection} aria-label="Live screen">
-              <h3>Live Screen</h3>
-              <div
-                className={styles.monitorPreviewFrame}
-                data-monitor-state={monitorVisualState}
-              >
-                {showMonitorThumbnail ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- an authenticated Blob URL, not a static asset next/image can optimize.
-                  <img
-                    alt={`${pc.display_name ?? pc.pc_name} live screen preview`}
-                    className={`${styles.monitorPreviewImage} ${
-                      monitorVisualState === "stale" ? styles.monitorThumbnailStale : ""
-                    }`}
-                    src={frameUrl}
-                  />
-                ) : (
-                  <div className={styles.monitorPreviewPlaceholder}>
-                    {monitorVisualState === "offline" ? "Station offline" : MONITOR_STATE_LABEL[monitorVisualState]}
-                  </div>
-                )}
-              </div>
-              <dl className={styles.compactDetailList}>
-                <div className={styles.detailRow}>
-                  <span>Monitor status</span>
-                  <strong>{MONITOR_STATE_LABEL[monitorVisualState]}</strong>
-                </div>
-                <div className={styles.detailRow}>
-                  <span>Connection</span>
-                  <strong>{pc.connection_status.toUpperCase()}</strong>
-                </div>
-                <div className={styles.detailRow}>
-                  <span>Last frame received</span>
-                  <strong>
-                    {monitorStatus?.frame_received_at
-                      ? `${formatNaturalDuration(Math.round(monitorStatus.frame_age_seconds ?? 0))} ago`
-                      : "Never"}
-                  </strong>
-                </div>
-              </dl>
-            </section>
-
             <section className={styles.controlSection} aria-label="Session summary">
               <h3>Session</h3>
               <dl className={styles.compactDetailList}>
@@ -460,10 +406,6 @@ export function PcDetailsPanel({
                 <div className={styles.detailRow}>
                   <span>Customer</span>
                   <strong>{customerLabel}</strong>
-                </div>
-                <div className={styles.detailRow}>
-                  <span>Plan</span>
-                  <strong>{planLabel}</strong>
                 </div>
                 <div className={styles.detailRow}>
                   <span>Started</span>
@@ -661,20 +603,13 @@ export function PcDetailsPanel({
           <div className={styles.pcControlColumn}>
             <section className={styles.controlSection} aria-label="Messaging controls">
               <h3>Messaging</h3>
+              <p className={styles.panelText}>Sent to the customer as SECRET GROUNDS.</p>
               <label className={styles.field}>
-                Message title
-                <input
-                  maxLength={80}
-                  onChange={(event) => setMessageTitle(event.target.value)}
-                  value={messageTitle}
-                />
-              </label>
-              <label className={styles.field}>
-                Customer message
-                <input
+                Message to customer
+                <textarea
                   maxLength={500}
                   onChange={(event) => setMessageText(event.target.value)}
-                  placeholder="Please return to the cashier."
+                  placeholder="Type a message for this customer…"
                   value={messageText}
                 />
               </label>
@@ -698,6 +633,47 @@ export function PcDetailsPanel({
                 <Icon name="message" />
                 Send Message
               </button>
+            </section>
+
+            <section className={styles.controlSection} aria-label="Live screen">
+              <h3>Live Screen</h3>
+              <div
+                className={styles.monitorPreviewFrame}
+                data-monitor-state={monitorVisualState}
+              >
+                {showMonitorThumbnail ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- an authenticated Blob URL, not a static asset next/image can optimize.
+                  <img
+                    alt={`${pc.display_name ?? pc.pc_name} live screen preview`}
+                    className={`${styles.monitorPreviewImage} ${
+                      monitorVisualState === "stale" ? styles.monitorThumbnailStale : ""
+                    }`}
+                    src={frameUrl}
+                  />
+                ) : (
+                  <div className={styles.monitorPreviewPlaceholder}>
+                    {monitorVisualState === "offline" ? "Station offline" : MONITOR_STATE_LABEL[monitorVisualState]}
+                  </div>
+                )}
+              </div>
+              <dl className={styles.compactDetailList}>
+                <div className={styles.detailRow}>
+                  <span>Monitor status</span>
+                  <strong>{MONITOR_STATE_LABEL[monitorVisualState]}</strong>
+                </div>
+                <div className={styles.detailRow}>
+                  <span>Connection</span>
+                  <strong>{pc.connection_status.toUpperCase()}</strong>
+                </div>
+                <div className={styles.detailRow}>
+                  <span>Last frame received</span>
+                  <strong>
+                    {monitorStatus?.frame_received_at
+                      ? `${formatNaturalDuration(Math.round(monitorStatus.frame_age_seconds ?? 0))} ago`
+                      : "Never"}
+                  </strong>
+                </div>
+              </dl>
             </section>
 
             {canPowerControl ? (
@@ -758,7 +734,7 @@ export function PcDetailsPanel({
                     onClick={() => power("shutdown")}
                     type="button"
                   >
-                    <Icon name="powerOff" />
+                    <Icon name="power" />
                     Shutdown
                   </button>
                 </div>

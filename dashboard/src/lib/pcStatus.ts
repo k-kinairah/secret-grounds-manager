@@ -62,6 +62,14 @@ export function getPcMonitorPresentation(pc: PcSummary): PcMonitorPresentation {
     return { className: "monitorTileGrace", label: "Grace Period" };
   }
 
+  // Offline outranks Low Time/In Use: a station that has lost connection
+  // must always read as Powered Off, even if the server still shows an
+  // active session underneath (e.g. a brief window before recovery_required
+  // is set) -- see the operational-color state priority in page.module.css.
+  if (pc.connection_status === "offline") {
+    return { className: "monitorTileOffline", label: "Powered Off" };
+  }
+
   if (pc.session_status === "active") {
     // A temporary member-initiated lock, not a new status -- the station
     // stays counted as "In Use" everywhere else (summarizePcs, KPI tiles),
@@ -80,10 +88,6 @@ export function getPcMonitorPresentation(pc: PcSummary): PcMonitorPresentation {
     }
 
     return { className: "monitorTileActive", label: "In Use" };
-  }
-
-  if (pc.connection_status === "offline") {
-    return { className: "monitorTileOffline", label: "Powered Off" };
   }
 
   return { className: "monitorTileAvailable", label: "Available" };
@@ -177,4 +181,18 @@ export function summarizePcs(pcs: PcSummary[]): DashboardSummary {
     ).length,
     settlementDueAmount: `${Math.floor(settlementDueCents / 100)}.${String(settlementDueCents % 100).padStart(2, "0")}`
   };
+}
+
+function extractStationNumber(pcName: string): number {
+  const match = pcName.match(/(\d+)/);
+  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+}
+
+// The operational PC grid is one unified panel in strict numeric station
+// order (PC-01, PC-02, ... PC-15) -- never grouped or reordered by income
+// group/area, which is accounting-only data. Explicit rather than relying
+// on the server's own ordering so the frontend doesn't silently depend on
+// an upstream sort it doesn't control.
+export function sortPcsByStationNumber(pcs: PcSummary[]): PcSummary[] {
+  return [...pcs].sort((a, b) => extractStationNumber(a.pc_name) - extractStationNumber(b.pc_name));
 }

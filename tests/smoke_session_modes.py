@@ -121,6 +121,11 @@ def main() -> None:
         prepaid_billing = get_session_billing(prepaid.session.session_id)
         assert prepaid_billing.total_paid == Decimal("20.00")
         assert prepaid_billing.payments[-1].change_given == Decimal("30.00")
+        # Notes is optional at the schema level and was omitted above (the
+        # dashboard's SessionDialog no longer sends it at all) -- the
+        # payment must still be created successfully, with notes simply
+        # null, never a validation error.
+        assert prepaid_billing.payments[-1].notes is None
 
         added = asyncio.run(
             add_prepaid_time_to_session(
@@ -178,8 +183,11 @@ def main() -> None:
         assert open_started is not None
         assert open_started.session_mode == "open_time"
         assert open_started.original_seconds == 0
-        assert open_started.metered_rate_price_snapshot == Decimal("1.00")
-        assert open_started.metered_rate_duration_seconds_snapshot == 300
+        # Asserted against the dynamically-fetched active rate itself
+        # (not a hardcoded literal) so this stays correct regardless of
+        # what the Standard metered rate's price/duration happen to be.
+        assert open_started.metered_rate_price_snapshot == metered_rate.price
+        assert open_started.metered_rate_duration_seconds_snapshot == metered_rate.duration_seconds
 
         started_at = current_utc_time()
         assert calculate_open_time_estimate(
@@ -228,26 +236,35 @@ def main() -> None:
         ended = asyncio.run(end_session(open_started.session_id))
         assert ended.session.status == "settlement_pending"
         assert ended.session.actual_elapsed_seconds is not None
-        assert ended.session.billed_seconds == 600
-        assert ended.session.final_computed_amount == Decimal("2.00")
-        assert ended.session.metered_rate_price_snapshot == Decimal("1.00")
+        # ~360s elapsed (6 minutes backdated) rounds up to one full
+        # metered_rate.duration_seconds block, billed at metered_rate.price
+        # -- recomputed from the actual active rate rather than hardcoded,
+        # since the Standard metered rate's price/duration can change.
+        assert ended.session.billed_seconds == metered_rate.duration_seconds
+        assert ended.session.final_computed_amount == metered_rate.price
+        assert ended.session.metered_rate_price_snapshot == metered_rate.price
         assert ended.session.settlement_pending is True
         assert session_service.repository.get_active_session_for_pc("PC-OPEN") is not None
 
         unpaid = get_session_billing(open_started.session_id)
         assert unpaid.payment_status == "unpaid"
+        # A caller that still supplies notes (an older client, or a manual
+        # API call) must continue to work unchanged -- the field was never
+        # removed from the backend schema, only from the dashboard's UI.
         settled = record_payment(
             open_started.session_id,
             PaymentCreateRequest(
                 payment_method="gcash",
-                amount=Decimal("2.00"),
+                amount=metered_rate.price,
                 reference_number="GC-OPEN",
+                notes="Legacy client still sends notes",
             ),
         )
         assert settled.payment_status == "paid"
         assert settled.session.status == "completed"
         assert settled.session.settlement_pending is False
         assert session_service.repository.get_active_session_for_pc("PC-OPEN") is None
+        assert get_session_billing(open_started.session_id).payments[-1].notes == "Legacy client still sends notes"
 
         pc_registry.clear()
         register_pc(PCRegistration(pc_name="PC-FAIL", ip_address="127.0.0.1"))

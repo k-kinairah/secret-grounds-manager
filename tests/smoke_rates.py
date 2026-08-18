@@ -49,43 +49,67 @@ def main() -> None:
         )
 
         rates = get_rates()
-        # A fresh database gets exactly the five owner-approved default
+        # A fresh database gets exactly the four owner-approved default
         # packages -- the legacy seed_default_rates() placeholders ("30
         # Minutes"/"1 Hour"/"2 Hours"/"Overnight") have been removed and
         # must never appear here (see deactivate_untouched_legacy_default_rates
         # in server/database.py for how a database that already has one of
-        # those rows from before this cleanup is handled instead).
+        # those rows from before this cleanup is handled instead). Standard
+        # Midnight Promo is gone too -- the owner ended it, so it is no
+        # longer in REQUIRED_DEFAULT_RATES and a fresh install never seeds
+        # it (see deactivate_untouched_midnight_promo_rate for how an
+        # existing install that already has the row gets it turned off).
         assert [rate.name for rate in rates if rate.rate_type == "package"] == [
             "Standard Guest - P5 (20 Minutes)",
             "Standard Guest - P10 (40 Minutes)",
             "Standard Guest - P15 (1 Hour)",
-            "Standard Midnight Promo",
             "VIP Guest - P30 (1 Hour)",
+            "VIP Guest - P60 (2 Hours)",
+            "VIP Guest - P90 (3 Hours)",
+            "VIP Guest - P120 (4 Hours)",
+            "VIP Guest - P250 (10 Hour Promo)",
         ]
 
-        # Metered/Open Time customer operation is permanently retired.
-        try:
-            get_metered_rate()
-        except HTTPException as error:
-            assert error.status_code == 410
-        else:
-            raise AssertionError("GET /rates/metered must be retired")
+        # The Standard tab's amount-based custom session (dashboard) uses
+        # these two endpoints to convert cash to time via the shop's single
+        # active metered rate -- reactivated for that purpose. Creating,
+        # editing, or reactivating a *new/different* metered rate through
+        # the rates admin API is still permanently rejected below; only
+        # this one pre-existing seeded rate is usable.
+        # Authoritative Standard pricing: ₱5 = 20 min, ₱10 = 40 min,
+        # ₱15 = 1 hour -- i.e. ₱1 = 4 minutes (240 seconds), not the old
+        # (incorrect) ₱1 = 5 minutes. A typed amount and a fixed package
+        # must buy the same time.
+        active_metered = get_metered_rate()
+        assert active_metered.name == "Regular Rate"
+        assert active_metered.price == Decimal("5.00")
+        assert active_metered.duration_seconds == 1200
 
-        try:
-            calculate_time(CalculateTimeRequest(amount=Decimal("20.00")))
-        except HTTPException as error:
-            assert error.status_code == 410
-        else:
-            raise AssertionError("POST /rates/calculate-time must be retired")
+        calculated = calculate_time(CalculateTimeRequest(amount=Decimal("20.00")))
+        assert calculated.amount == Decimal("20.00")
+        assert calculated.duration_seconds == 4800, "₱20 must buy 80 minutes (1 hr 20 min)"
+        assert calculated.rate_name == "Regular Rate"
+        assert calculated.rate_snapshot == "₱5.00 per 20 minutes"
 
-        # The pre-existing legacy metered rate row must still exist (untouched
-        # historical data) even though it's no longer reachable for active use.
+        # ₱7 must buy exactly 28 minutes (the Standard tab's own worked
+        # example).
+        seven_pesos = calculate_time(CalculateTimeRequest(amount=Decimal("7.00")))
+        assert seven_pesos.duration_seconds == 1680, "₱7 must buy 28 minutes"
+
+        # A non-positive amount is rejected by the request schema itself.
+        try:
+            CalculateTimeRequest(amount=Decimal("0.00"))
+        except Exception:
+            pass
+        else:
+            raise AssertionError("A zero amount must be rejected")
+
         legacy_metered = next(
             rate for rate in get_rates(include_inactive=True) if rate.rate_type == "metered"
         )
         assert legacy_metered.name == "Regular Rate"
-        assert legacy_metered.price == Decimal("1.00")
-        assert legacy_metered.duration_seconds == 300
+        assert legacy_metered.price == Decimal("5.00")
+        assert legacy_metered.duration_seconds == 1200
         assert legacy_metered.is_active is True
 
         # Creating a brand new metered rate is rejected, active or not.
@@ -173,15 +197,17 @@ def main() -> None:
         assert session.base_amount == Decimal("100.10")
         assert session.total_amount == Decimal("100.10")
 
-        # Enter Amount (amount-based session start/add-time) is retired too,
-        # since it relied on the now-retired active metered rate as a
-        # money-to-time conversion table.
+        # Amount-based add-time (Standard tab) resolves through the same
+        # active metered rate as /rates/calculate-time -- but this test
+        # deactivated the only metered rate a few lines up, so it correctly
+        # fails with "no active metered rate" rather than succeeding.
         try:
             asyncio.run(session_service.add_time(session.session_id, amount=Decimal("5.00")))
         except HTTPException as error:
-            assert error.status_code == 410
+            assert error.status_code == 409
+            assert "No active metered rate" in error.detail
         else:
-            raise AssertionError("Amount-based add-time must be rejected")
+            raise AssertionError("Amount-based add-time without an active metered rate must be rejected")
 
         changed_rate = update_rate(
             one_hour.rate_id,
@@ -254,16 +280,20 @@ def main() -> None:
         )
         assert created.price == Decimal("12.34")
 
-        # Starting a brand new session via Enter Amount is rejected too.
+        # Starting a brand new session via a Standard-tab amount still
+        # correctly fails here too -- the only metered rate in this test
+        # was deactivated above and can never be reactivated through the
+        # API (see the "reactivating it is rejected" assertion earlier).
         pc_registry.clear()
         register_pc(PCRegistration(pc_name="PC-AMOUNT", ip_address="127.0.0.1"))
         session_service.require_available_client = lambda _: pc_registry["PC-AMOUNT"]
         try:
             asyncio.run(session_service.start_session("PC-AMOUNT", amount=Decimal("20.00")))
         except HTTPException as error:
-            assert error.status_code == 410
+            assert error.status_code == 409
+            assert "No active metered rate" in error.detail
         else:
-            raise AssertionError("Amount-based session start must be rejected")
+            raise AssertionError("Amount-based session start without an active metered rate must be rejected")
         assert session_repository.get_active_session_for_pc("PC-AMOUNT") is None
 
         print("Rate profile smoke test passed.")

@@ -76,6 +76,7 @@ def create_env(database_path: Path):
     main_module.pc_registry.clear()
     main_module.screen_monitor_service._frames.clear()
     main_module.screen_monitor_service._last_upload_monotonic.clear()
+    main_module.screen_monitor_service._owner_tokens.clear()
 
     main_module.pc_registry["PC-01"] = PCRecord(
         pc_name="PC-01",
@@ -308,6 +309,167 @@ def test_frame_meta_sequence_is_applied_to_next_binary_frame(temp_directory: str
     assert fake_ws.sent[-1]["sequence"] == 7
 
 
+class GatedFakeScreenWebSocket(FakeScreenWebSocket):
+    """Like FakeScreenWebSocket, but blocks on an asyncio.Event instead of
+    disconnecting immediately once its queued messages run out -- lets a
+    test hold one connection "open" while driving a second, real
+    screen_upload_websocket() coroutine concurrently, then release the
+    first on command. Only used to prove the reconnect race is fixed at
+    the actual handler level (server/main.py), not just the service."""
+
+    def __init__(self, incoming: list[dict], disconnect_gate) -> None:
+        super().__init__(incoming)
+        self._disconnect_gate = disconnect_gate
+
+    async def receive(self) -> dict:
+        if not self._incoming:
+            await self._disconnect_gate.wait()
+            return {"type": "websocket.disconnect", "code": 1000}
+        return self._incoming.pop(0)
+
+
+def test_superseded_connection_cannot_overwrite_newer_frame(temp_directory: str) -> None:
+    """The exact reconnect race this feature fixes, at the ScreenMonitorService
+    level: an old connection's late frame or disconnect cleanup must never
+    be able to clobber a newer connection's already-uploaded frame."""
+    from server.settings import SCREEN_MIN_FRAME_INTERVAL_MS
+
+    main_module, _ = create_env(Path(temp_directory) / "supersede.sqlite3")
+    service = main_module.screen_monitor_service
+    rate_limit_gap = (SCREEN_MIN_FRAME_INTERVAL_MS / 1000) + 0.05
+
+    # Connection A connects and uploads frame A.
+    token_a = service.acquire_connection("PC-01")
+    frame_a = service.store_frame_if_owner("PC-01", token_a, "image/jpeg", JPEG_BYTES, sequence=1)
+    assert service.get_frame("PC-01") is frame_a
+
+    # Connection B connects (superseding A) and uploads frame B.
+    time.sleep(rate_limit_gap)
+    token_b = service.acquire_connection("PC-01")
+    assert token_b != token_a
+    frame_b = service.store_frame_if_owner("PC-01", token_b, "image/webp", WEBP_BYTES, sequence=2)
+    assert service.get_frame("PC-01") is frame_b
+
+    # Connection A disconnects -- its cleanup must be a no-op now.
+    service.release_connection("PC-01", token_a)
+    assert service.get_frame("PC-01") is frame_b, "an old connection's disconnect must never clear a newer frame"
+
+    # A late/stray frame from the superseded connection A is rejected,
+    # never overwrites frame B.
+    try:
+        service.store_frame_if_owner("PC-01", token_a, "image/jpeg", JPEG_BYTES, sequence=3)
+        raise AssertionError("expected a 409 rejection for a superseded connection")
+    except HTTPException as error:
+        assert error.status_code == 409
+    assert service.get_frame("PC-01") is frame_b
+
+    # Connection B disconnects normally -- its own frame is cleared.
+    service.release_connection("PC-01", token_b)
+    assert service.get_frame("PC-01") is None
+
+
+def test_offline_cleanup_force_clears_regardless_of_ownership(temp_directory: str) -> None:
+    """mark_stale_pcs_offline's unconditional clear_frame() must still work
+    even while a connection is (in the service's bookkeeping) the current
+    owner -- offline always wins over connection ownership."""
+    main_module, _ = create_env(Path(temp_directory) / "offline-force-clear.sqlite3")
+    service = main_module.screen_monitor_service
+
+    token = service.acquire_connection("PC-01")
+    service.store_frame_if_owner("PC-01", token, "image/jpeg", JPEG_BYTES)
+    assert service.get_frame("PC-01") is not None
+
+    # Simulates mark_stale_pcs_offline's own call: unconditional, no token.
+    service.clear_frame("PC-01")
+    assert service.get_frame("PC-01") is None
+
+
+def test_connections_for_different_pcs_are_independent(temp_directory: str) -> None:
+    main_module, _ = create_env(Path(temp_directory) / "independent-pcs.sqlite3")
+    from server.schemas import PCRecord
+    from server.time_utils import current_utc_time
+
+    main_module.pc_registry["PC-02"] = PCRecord(
+        pc_name="PC-02", ip_address="192.168.0.11", status="online", last_seen=current_utc_time()
+    )
+    service = main_module.screen_monitor_service
+
+    from server.settings import SCREEN_MIN_FRAME_INTERVAL_MS
+
+    token_1 = service.acquire_connection("PC-01")
+    token_2 = service.acquire_connection("PC-02")
+    service.store_frame_if_owner("PC-01", token_1, "image/jpeg", JPEG_BYTES)
+    frame_2 = service.store_frame_if_owner("PC-02", token_2, "image/webp", WEBP_BYTES)
+
+    # A second connection superseding PC-01 must not affect PC-02 at all.
+    time.sleep((SCREEN_MIN_FRAME_INTERVAL_MS / 1000) + 0.05)
+    token_1b = service.acquire_connection("PC-01")
+    service.store_frame_if_owner("PC-01", token_1b, "image/webp", WEBP_BYTES, sequence=9)
+    assert service.get_frame("PC-02") is frame_2
+
+    # PC-01's original (now-superseded) connection disconnecting must not
+    # touch PC-02's frame or ownership.
+    service.release_connection("PC-01", token_1)
+    assert service.get_frame("PC-02") is frame_2
+    assert service.get_frame("PC-01") is not None, "PC-01's current (token_1b) frame must survive token_1's release"
+
+    # PC-02 disconnecting only clears PC-02.
+    service.release_connection("PC-02", token_2)
+    assert service.get_frame("PC-02") is None
+    assert service.get_frame("PC-01") is not None
+
+
+def test_handler_level_reconnect_race_is_safe(temp_directory: str) -> None:
+    """End-to-end through the real screen_upload_websocket() coroutine
+    (not just the service): an old connection left "open" past a newer
+    connection's upload must not be able to clear the newer frame when it
+    finally disconnects."""
+    from server.settings import SCREEN_MIN_FRAME_INTERVAL_MS
+
+    main_module, _ = create_env(Path(temp_directory) / "handler-race.sqlite3")
+
+    async def run_race() -> None:
+        disconnect_gate_a = asyncio.Event()
+        ws_a = GatedFakeScreenWebSocket([binary_message(JPEG_BYTES)], disconnect_gate_a)
+        task_a = asyncio.create_task(main_module.screen_upload_websocket(ws_a, "PC-01"))
+        # Let connection A run until it has uploaded frame A and is
+        # blocked waiting on the gate for its next message (i.e. still
+        # "connected" from the server's point of view).
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert ws_a.sent and ws_a.sent[-1]["type"] == "frame_accepted"
+
+        # Stay clear of the per-pc_name upload rate limit before B uploads.
+        await asyncio.sleep((SCREEN_MIN_FRAME_INTERVAL_MS / 1000) + 0.05)
+
+        # Connection B connects and uploads frame B, also staying
+        # "connected" (gated) afterward -- exactly the live scenario this
+        # fix targets: B is now current, A is a stale, still-open socket.
+        disconnect_gate_b = asyncio.Event()
+        ws_b = GatedFakeScreenWebSocket([binary_message(WEBP_BYTES)], disconnect_gate_b)
+        task_b = asyncio.create_task(main_module.screen_upload_websocket(ws_b, "PC-01"))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert ws_b.sent and ws_b.sent[-1]["type"] == "frame_accepted"
+        frame_after_b = main_module.screen_monitor_service.get_frame("PC-01")
+        assert frame_after_b is not None
+        assert frame_after_b.content_type == "image/webp"
+
+        # Now let connection A finally disconnect -- must not clear B's frame.
+        disconnect_gate_a.set()
+        await task_a
+        frame_after_a_disconnects = main_module.screen_monitor_service.get_frame("PC-01")
+        assert frame_after_a_disconnects is not None, "superseded connection A's disconnect must not clear B's frame"
+        assert frame_after_a_disconnects.content_type == "image/webp"
+
+        # Finally, B disconnecting normally does clear its own frame.
+        disconnect_gate_b.set()
+        await task_b
+        assert main_module.screen_monitor_service.get_frame("PC-01") is None
+
+    asyncio.run(run_race())
+
+
 def main() -> None:
     tests = [
         test_valid_station_can_upload_binary_frame,
@@ -324,6 +486,10 @@ def main() -> None:
         test_offline_station_with_cached_frame_reports_offline,
         test_unsupported_content_type_is_rejected,
         test_frame_meta_sequence_is_applied_to_next_binary_frame,
+        test_superseded_connection_cannot_overwrite_newer_frame,
+        test_offline_cleanup_force_clears_regardless_of_ownership,
+        test_connections_for_different_pcs_are_independent,
+        test_handler_level_reconnect_race_is_safe,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:

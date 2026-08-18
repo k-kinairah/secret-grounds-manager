@@ -135,8 +135,11 @@ select:focus-visible {
   display: flex;
   gap: 20px;
   justify-content: space-between;
-  min-height: 58px;
+  min-height: var(--global-header-height);
   padding: 0 28px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .appShell__links,

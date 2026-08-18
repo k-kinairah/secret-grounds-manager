@@ -1,3 +1,4 @@
+import { MonitorPlay, UserRoundCheck } from "lucide-react";
 import styles from "@/app/page.module.css";
 import { formatMoney } from "@/lib/time";
 import type { DashboardSummary as DashboardSummaryData, OperatorSaleSummary } from "@/lib/types";
@@ -65,10 +66,15 @@ export function DashboardSummary({ currentOperator, summary, operatorSale }: Das
 }
 
 function SummaryIcon({ name }: { name: SummaryIconName }) {
-  const paths: Record<SummaryIconName, Array<string>> = {
+  if (name === "inUse") {
+    return <MonitorPlay aria-hidden="true" className={styles.statusCardGlyph} />;
+  }
+  if (name === "operator") {
+    return <UserRoundCheck aria-hidden="true" className={styles.statusCardGlyph} />;
+  }
+
+  const paths: Record<"available" | "sales" | "settlement", Array<string>> = {
     available: ["M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z", "m8.5 12 2.3 2.3 4.7-5.3"],
-    inUse: ["M4 5h16v11H4z", "M8 20h8", "M12 16v4", "M10 9l5 3-5 3V9z"],
-    operator: ["M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M4 21c1-4 3.7-6 8-6s7 2 8 6", "m16.5 6.5 1.2 1.2 2.4-2.7"],
     sales: ["M6 3h12v18l-2-1.2-2 1.2-2-1.2-2 1.2-2-1.2L6 21V3z", "M9 7h6", "M9 11h6", "M9 15h3"],
     settlement: ["M12 3 22 20H2L12 3z", "M12 9v4", "M12 17h.01"]
   };

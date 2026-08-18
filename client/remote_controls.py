@@ -8,6 +8,7 @@ from threading import Thread
 from typing import Any, Callable
 
 from client.tk_runtime import create_tk_root, log_tk_startup_error
+from client.utils import get_logo_path
 
 
 PowerExecutor = Callable[[list[str]], None]
@@ -24,9 +25,10 @@ def default_power_executor(command: list[str]) -> None:
 class RemoteControlHandler:
     """Fixed allowlist for production-safe remote client controls."""
 
-    def __init__(self, pc_name: str, power_executor: PowerExecutor = default_power_executor) -> None:   
+    def __init__(self, pc_name: str, power_executor: PowerExecutor = default_power_executor) -> None:
         self.pc_name = pc_name
         self.power_executor = power_executor
+        self._brand_logo_image = None
 
     def handle_power_command(self, command_type: str, payload: dict[str, Any]) -> str:
         if platform.system().lower() != "windows":
@@ -58,7 +60,11 @@ class RemoteControlHandler:
             print(f"Remote {command_type} execution failed: {error}")
 
     def show_message(self, payload: dict[str, Any], announcement: bool = False) -> str:
-        title = self._clean_text(payload.get("title"), 80)
+        # title is intentionally ignored here -- the server already
+        # overrides it to the canonical "SECRET GROUNDS" brand regardless
+        # of what the dashboard sent (see MessageCommandRequest), and the
+        # popup below never reads it either, so a stale/rogue caller can
+        # never spoof the sender the customer sees.
         message = self._clean_text(payload.get("message"), 500)
         severity = payload.get("severity", "info")
         duration_seconds = payload.get("duration_seconds")
@@ -72,11 +78,37 @@ class RemoteControlHandler:
 
         Thread(
             target=self._show_message_window,
-            args=(title, message, severity, duration_seconds, require_acknowledgement, announcement),
+            args=(message, severity, duration_seconds, require_acknowledgement, announcement),
             daemon=True,
         ).start()
-        print(f"Displayed remote {'announcement' if announcement else 'message'}: {title}")
+        print(f"Displayed remote {'announcement' if announcement else 'message'} from SECRET GROUNDS.")
         return "message displayed"
+
+    def _build_brand_mark(self, tk, container):
+        """Logo image if the packaged asset is available, else a text mark
+        -- same fallback pattern as the customer overlay's compact mark."""
+        logo_path = get_logo_path()
+        if logo_path is not None:
+            try:
+                image = tk.PhotoImage(file=str(logo_path))
+                target_height = 22
+                if image.height() > target_height:
+                    factor = max(1, round(image.height() / target_height))
+                    image = image.subsample(factor, factor)
+                self._brand_logo_image = image
+                return tk.Label(container, image=image, background="#030712")
+            except Exception as error:
+                log_tk_startup_error("Remote message logo image failed to load", error)
+
+        return tk.Label(
+            container,
+            text="SG",
+            font=("Segoe UI", 10, "bold"),
+            foreground="#030712",
+            background="#22D3EE",
+            padx=6,
+            pady=3,
+        )
 
     def _clean_text(self, value: object, max_length: int) -> str:
         if not isinstance(value, str):
@@ -88,7 +120,6 @@ class RemoteControlHandler:
 
     def _show_message_window(
         self,
-        title: str,
         message: str,
         severity: str,
         duration_seconds: int | None,
@@ -99,7 +130,7 @@ class RemoteControlHandler:
             tk, root = create_tk_root()
         except Exception as error:
             log_tk_startup_error("Remote message GUI unavailable", error)
-            print(f"Message fallback: {title} - {message}")
+            print(f"Message fallback: SECRET GROUNDS - {message}")
             return
 
         colors = {
@@ -115,31 +146,38 @@ class RemoteControlHandler:
 
         frame = tk.Frame(root, background="#030712", padx=28, pady=24)
         frame.pack(fill="both", expand=True)
+
+        # Fixed shop branding -- the logo mark plus a hardcoded "SECRET
+        # GROUNDS" heading, never a caller-supplied string, so a cashier
+        # (or anyone hitting the API directly) can never make this popup
+        # claim to be from someone/something else.
+        header = tk.Frame(frame, background="#030712")
+        header.pack(fill="x")
+        mark = self._build_brand_mark(tk, header)
+        mark.pack(side="left")
         tk.Label(
-            frame,
-            text="Secret Grounds Announcement" if announcement else "Secret Grounds Message",
-            font=("Segoe UI", 11, "bold"),
+            header,
+            text="SECRET GROUNDS",
+            font=("Segoe UI", 13, "bold"),
             foreground=accent,
             background="#030712",
-        ).pack(anchor="w")
+        ).pack(side="left", padx=(8, 0))
         tk.Label(
             frame,
-            text=title,
-            font=("Segoe UI", 24, "bold"),
+            text="Announcement" if announcement else "Message",
+            font=("Segoe UI", 9, "bold"),
+            foreground="#94A3B8",
+            background="#030712",
+        ).pack(anchor="w", pady=(4, 0))
+        tk.Label(
+            frame,
+            text=message,
+            font=("Segoe UI", 18, "bold"),
             foreground=foreground,
             background="#030712",
             wraplength=520,
             justify="left",
-        ).pack(anchor="w", pady=(10, 8))
-        tk.Label(
-            frame,
-            text=message,
-            font=("Segoe UI", 14),
-            foreground="#CBD5E1",
-            background="#030712",
-            wraplength=520,
-            justify="left",
-        ).pack(anchor="w", pady=(0, 18))
+        ).pack(anchor="w", pady=(10, 18))
 
         if require_acknowledgement:
             tk.Button(frame, text="Acknowledge", command=root.destroy).pack(anchor="e")

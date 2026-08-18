@@ -1,5 +1,6 @@
 "use client";
 
+import { Megaphone } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "@/app/page.module.css";
 import {
@@ -25,7 +26,7 @@ import {
 } from "@/lib/api";
 import { useMonitorFrames } from "@/hooks/useMonitorFrames";
 import { getPackageRatesForPc } from "@/lib/packageEligibility";
-import { getPcActionAvailability, summarizePcs } from "@/lib/pcStatus";
+import { getPcActionAvailability, sortPcsByStationNumber, summarizePcs } from "@/lib/pcStatus";
 import { calculateOpenTimeEstimate, secondsFromScheduledEnd } from "@/lib/time";
 import type { CurrentUser, IncomeGroup, MessageSeverity, OperatorSaleSummary, PcLayoutSlot, PcSummary, RateProfile } from "@/lib/types";
 import { DashboardSummary } from "./DashboardSummary";
@@ -44,7 +45,6 @@ type DialogState =
   | { type: "add"; pc: PcSummary }
   | { type: "end"; pc: PcSummary }
   | { type: "resolve"; pc: PcSummary }
-  | { type: "details"; pc: PcSummary }
   | { type: "payment"; pc: PcSummary }
   | { type: "announcement" }
   | null;
@@ -72,7 +72,7 @@ export function DashboardClient() {
   const isPollingRef = useRef(false);
   const pollIntervalMs = getPollingIntervalMs();
   const { pushToast } = useToast();
-  const { statusByPcName, frameUrlByPcName, frameErrorByPcName } = useMonitorFrames();
+  const { statusByPcName, frameUrlByPcName, frameErrorByPcName } = useMonitorFrames(selectedPcName);
 
   const refresh = useCallback(async () => {
     if (isPollingRef.current) {
@@ -181,14 +181,12 @@ export function DashboardClient() {
     () => livePcs.find((pc) => pc.pc_name === selectedPcName) ?? null,
     [livePcs, selectedPcName]
   );
-  const groupedPcs = useMemo(() => {
-    const groups = new Map<string, PcSummary[]>();
-    for (const pc of livePcs) {
-      const label = displayAreaLabel(pc.area_label);
-      groups.set(label, [...(groups.get(label) ?? []), pc]);
-    }
-    return Array.from(groups.entries());
-  }, [livePcs]);
+  // The operational PC grid is one unified panel in strict numeric station
+  // order -- income group/area is accounting-only data (Sales reports,
+  // backend attribution) and must never split this grid into sections.
+  // Setup/Layout below is a separate, owner-only configuration view and
+  // keeps its own area grouping (groupedLayoutSlots) unchanged.
+  const orderedPcs = useMemo(() => sortPcsByStationNumber(livePcs), [livePcs]);
   const registeredPcNames = useMemo(() => new Set(livePcs.map((pc) => pc.pc_name)), [livePcs]);
   const groupedLayoutSlots = useMemo(() => {
     const groups = new Map<string, PcLayoutSlot[]>();
@@ -354,12 +352,12 @@ export function DashboardClient() {
           actual_elapsed_seconds: response.session.actual_elapsed_seconds,
           settlement_pending: response.session.settlement_pending
         };
-        setMessage(`${pc.pc_name} open-time session ended. Settlement is pending.`);
-        pushToast(`${pc.pc_name} open-time session ended. Settlement is pending.`, "warning");
+        setMessage(`${pc.display_name ?? pc.pc_name} open-time session ended. Settlement is pending.`);
+        pushToast(`${pc.display_name ?? pc.pc_name} open-time session ended. Settlement is pending.`, "warning");
         setDialog({ type: "payment", pc: settlementPc });
       } else {
-        setMessage(`${pc.pc_name} session ended.`);
-        pushToast(`${pc.pc_name} session ended.`, "success");
+        setMessage(`${pc.display_name ?? pc.pc_name} session ended.`);
+        pushToast(`${pc.display_name ?? pc.pc_name} session ended.`, "success");
         setDialog(null);
       }
       await refresh();
@@ -398,12 +396,12 @@ export function DashboardClient() {
           recovery_required: false,
           recovery_reason: null
         };
-        setMessage(`${pc.pc_name} recovery session force-ended. Settlement is pending.`);
-        pushToast(`${pc.pc_name} recovery session force-ended. Settlement is pending.`, "warning");
+        setMessage(`${pc.display_name ?? pc.pc_name} recovery session force-ended. Settlement is pending.`);
+        pushToast(`${pc.display_name ?? pc.pc_name} recovery session force-ended. Settlement is pending.`, "warning");
         setDialog({ type: "payment", pc: settlementPc });
       } else {
-        setMessage(`${pc.pc_name} recovery session resolved.`);
-        pushToast(`${pc.pc_name} recovery session resolved.`, "success");
+        setMessage(`${pc.display_name ?? pc.pc_name} recovery session resolved.`);
+        pushToast(`${pc.display_name ?? pc.pc_name} recovery session resolved.`, "success");
         setDialog(null);
       }
       await refresh();
@@ -452,7 +450,7 @@ export function DashboardClient() {
             Server {isConnected ? "Connected" : "Disconnected"}
           </div>
           <button className={styles.utilityButton} onClick={() => setDialog({ type: "announcement" })} type="button">
-            <MegaphoneIcon />
+            <Megaphone aria-hidden="true" className={styles.utilityIcon} />
             Announcement
           </button>
           <ActivityDrawerTrigger icon={<ActivityPulseIcon />} />
@@ -505,24 +503,18 @@ export function DashboardClient() {
               </div>
             </div>
           ) : null}
-          {groupedPcs.map(([groupLabel, groupPcs]) => (
-            <section className={styles.pcLayoutGroup} key={groupLabel} aria-label={groupLabel}>
-              <h2>{groupLabel}</h2>
-              <div className={styles.monitorGrid}>
-                {groupPcs.map((pc) => (
-                  <PcMonitorTile
-                    key={pc.pc_name}
-                    frameHasError={frameErrorByPcName[pc.pc_name]}
-                    frameUrl={frameUrlByPcName[pc.pc_name]}
-                    isSelected={selectedPcName === pc.pc_name}
-                    monitorStatus={statusByPcName[pc.pc_name]}
-                    pc={pc}
-                    onSelect={openDetails}
-                  />
-                ))}
-              </div>
-            </section>
-          ))}
+          {hasLoadedOnce && livePcs.length > 0 ? (
+            <div className={styles.monitorGrid}>
+              {orderedPcs.map((pc) => (
+                <PcMonitorTile
+                  key={pc.pc_name}
+                  isSelected={selectedPcName === pc.pc_name}
+                  pc={pc}
+                  onSelect={openDetails}
+                />
+              ))}
+            </div>
+          ) : null}
         </section>
         <aside className={styles.selectedPcRail} aria-label="Selected PC controls">
           {selectedPc ? (
@@ -749,25 +741,6 @@ export function DashboardClient() {
         />
       ) : null}
 
-      {dialog?.type === "details" ? (
-        <PcDetailsPanel
-          currentUserRole={currentUser?.role ?? null}
-          frameHasError={frameErrorByPcName[dialog.pc.pc_name]}
-          frameUrl={frameUrlByPcName[dialog.pc.pc_name]}
-          monitorStatus={statusByPcName[dialog.pc.pc_name]}
-          onActionComplete={() => void refresh()}
-          onAddTime={(selectedPc) => setDialog({ type: "add", pc: selectedPc })}
-          onCancelPrepared={(selectedPc) => void cancelPreparedAction(selectedPc)}
-          pc={findCurrentPc(dialog.pc)}
-          onClose={() => setDialog(null)}
-          onEnd={(selectedPc) => setDialog({ type: "end", pc: selectedPc })}
-          onPayment={(selectedPc) => setDialog({ type: "payment", pc: selectedPc })}
-          onResolve={(selectedPc) => setDialog({ type: "resolve", pc: selectedPc })}
-          onRetryWake={(selectedPc) => void retryWakeAction(selectedPc)}
-          onStart={(selectedPc) => setDialog({ type: "start", pc: selectedPc })}
-        />
-      ) : null}
-
       {dialog?.type === "payment" ? (
         <PaymentDialog
           isLoading={isMutating}
@@ -809,16 +782,6 @@ export function DashboardClient() {
   );
 }
 
-function MegaphoneIcon() {
-  return (
-    <svg aria-hidden="true" className={styles.utilityIcon} fill="none" viewBox="0 0 24 24">
-      <path d="M4 13.5h3.5l8-4.5v10l-8-4.5H4v-1z" />
-      <path d="M7.5 14.5 9 20h2.5l-1.2-4.7" />
-      <path d="M18 10.5c1.2.8 2 2.1 2 3.5s-.8 2.7-2 3.5" />
-    </svg>
-  );
-}
-
 function ActivityPulseIcon() {
   return (
     <svg aria-hidden="true" className={styles.utilityIcon} fill="none" viewBox="0 0 24 24">
@@ -846,14 +809,12 @@ function AnnouncementDialog({
   isLoading: boolean;
   onCancel: () => void;
   onConfirm: (input: {
-    title: string;
     message: string;
     severity: MessageSeverity;
     duration_seconds?: number;
     require_acknowledgement: boolean;
   }) => void;
 }) {
-  const [title, setTitle] = useState("Secret Grounds");
   const [message, setMessage] = useState("");
   const [severity, setSeverity] = useState<MessageSeverity>("info");
   const [duration, setDuration] = useState("30");
@@ -866,13 +827,10 @@ function AnnouncementDialog({
           <span>Targets</span>
           <strong>All online PCs with active command connections.</strong>
         </div>
-        <label className={styles.field}>
-          Title
-          <input maxLength={80} onChange={(event) => setTitle(event.target.value)} value={title} />
-        </label>
+        <p className={styles.panelText}>Sent to customers as SECRET GROUNDS.</p>
         <label className={styles.field}>
           Message
-          <input
+          <textarea
             maxLength={500}
             onChange={(event) => setMessage(event.target.value)}
             placeholder="Please save your work. The shop is closing soon."
@@ -900,7 +858,6 @@ function AnnouncementDialog({
             disabled={isLoading || !message.trim()}
             onClick={() =>
               onConfirm({
-                title,
                 message,
                 severity,
                 duration_seconds: Number(duration) || undefined,

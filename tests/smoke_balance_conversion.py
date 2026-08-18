@@ -18,6 +18,10 @@ def main() -> None:
     # Confirmed rule stated directly: 4 Standard hours = 2 VIP playable hours.
     assert playable_vip_seconds(0, 4 * 3600) == 2 * 3600
 
+    # Owner's literal example: 2 hours member (Standard) balance allows
+    # exactly 1 hour of maximum VIP playtime.
+    assert playable_vip_seconds(0, 2 * 3600) == 3600
+
     # Pure VIP balance, no Standard fallback needed.
     assert playable_vip_seconds(3600, 0) == 3600
 
@@ -101,6 +105,30 @@ def main() -> None:
             pass
         else:
             raise AssertionError("Negative seconds must be rejected")
+
+    # Owner's literal examples: a member with pure Standard balance (no VIP
+    # balance) playing on the VIP PC is charged Standard time at 2x actual
+    # use, and ending early only deducts for the actual time consumed.
+    effective, vip_part, standard_part = split_vip_session(0, 2 * 3600, None)
+    assert effective == 3600  # 2 Standard hours -> 1 hour playable
+    assert vip_part == 0
+    assert standard_part == 2 * 3600
+
+    # 30 real minutes actually used deducts 1 hour from the member balance.
+    vip_consumed, standard_consumed = finalize_vip_usage(1800, effective, vip_part)
+    assert vip_consumed == 0
+    assert standard_consumed == 3600
+
+    # 45 real minutes actually used deducts 1 hour 30 minutes.
+    vip_consumed, standard_consumed = finalize_vip_usage(2700, effective, vip_part)
+    assert vip_consumed == 0
+    assert standard_consumed == 5400
+
+    # Ending early (well short of the full 1-hour reservation) deducts only
+    # 2x the actual time consumed, never the full reserved amount.
+    vip_consumed, standard_consumed = finalize_vip_usage(600, effective, vip_part)
+    assert vip_consumed == 0
+    assert standard_consumed == 1200
 
     print("Balance conversion smoke test passed.")
 

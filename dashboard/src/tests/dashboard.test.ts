@@ -64,6 +64,7 @@ import {
   getPcActionAvailability,
   getPcCardTone,
   getPcMonitorPresentation,
+  sortPcsByStationNumber,
   summarizePcs
 } from "../lib/pcStatus";
 import { getPackageRatesForPc, isRateEligibleNow } from "../lib/packageEligibility";
@@ -381,6 +382,31 @@ assert.deepEqual(getPcMonitorPresentation(offlinePc), {
   label: "Powered Off"
 });
 
+// Operational-color state priority: Powered Off outranks Low Time/In Use
+// -- a station that lost connection reads as Powered Off even if the
+// server still shows an active/low-time session underneath (e.g. a brief
+// window before recovery_required is set).
+const offlineWhileActivePc = makePc({
+  connection_status: "offline",
+  session_status: "active",
+  active_session_id: "session-offline-active",
+  remaining_seconds: 600
+});
+assert.deepEqual(getPcMonitorPresentation(offlineWhileActivePc), {
+  className: "monitorTileOffline",
+  label: "Powered Off"
+});
+const offlineWhileLowTimePc = makePc({
+  connection_status: "offline",
+  session_status: "active",
+  active_session_id: "session-offline-lowtime",
+  remaining_seconds: 60
+});
+assert.deepEqual(getPcMonitorPresentation(offlineWhileLowTimePc), {
+  className: "monitorTileOffline",
+  label: "Powered Off"
+});
+
 assert.deepEqual(summarizePcs([availablePc, activePc, gracePc, shuttingDownPc, settlementPc, offlinePc]), {
   total: 6,
   inUse: 3,
@@ -388,6 +414,27 @@ assert.deepEqual(summarizePcs([availablePc, activePc, gracePc, shuttingDownPc, s
   paymentDue: 1,
   settlementDueAmount: "20.00"
 });
+
+// sortPcsByStationNumber: the operational grid is one unified panel in
+// strict numeric order (PC-01..PC-15), regardless of income group/area or
+// the order stations happen to arrive from the API in.
+{
+  const shuffled = [
+    makePc({ pc_name: "PC-11", area_label: "ROGENE" }),
+    makePc({ pc_name: "PC-02", area_label: "SECRET GROUND SHOP" }),
+    makePc({ pc_name: "PC-15", area_label: "VIP", is_vip: true }),
+    makePc({ pc_name: "PC-01", area_label: "SECRET GROUND SHOP" }),
+    makePc({ pc_name: "PC-09", area_label: "SECRET GROUND SHOP" }),
+    makePc({ pc_name: "PC-13", area_label: "MAMA" }),
+    makePc({ pc_name: "PC-10", area_label: "SECRET GROUND SHOP" })
+  ];
+  assert.deepEqual(
+    sortPcsByStationNumber(shuffled).map((pc) => pc.pc_name),
+    ["PC-01", "PC-02", "PC-09", "PC-10", "PC-11", "PC-13", "PC-15"]
+  );
+  // Pure/non-mutating: the input array's own order is untouched.
+  assert.equal(shuffled[0].pc_name, "PC-11");
+}
 
 assert.equal(
   toCashierMessage("PC-01 is offline"),
@@ -779,7 +826,6 @@ async function runAsyncAssertions() {
     });
     await startSession("PC-01", { amount: "20.00" });
     await sendPcMessage("PC-01", {
-      title: "Secret Grounds",
       message: "Please return to the cashier.",
       severity: "info",
       require_acknowledgement: false
@@ -917,8 +963,11 @@ async function runAsyncAssertions() {
       pc_name: "PC-01",
       amount: "20.00"
     });
+    // No title field is sent from the dashboard at all -- the server is
+    // the sole authority on the canonical "SECRET GROUNDS" sender/title
+    // (see MessageCommandRequest.enforce_canonical_title), so trusting a
+    // dashboard-supplied title was never an option to begin with.
     assert.deepEqual(fetchCalls[25].body, {
-      title: "Secret Grounds",
       message: "Please return to the cashier.",
       severity: "info",
       require_acknowledgement: false
@@ -1027,62 +1076,526 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /"open_time"/);
     assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /calculatePreviewSeconds/);
     assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /meteredRate/);
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /Packages\s*<\/button>/);
+    // The owner ended Midnight Promo and renamed the first tab: "Packages"
+    // is gone. Non-VIP stations get "Standard", VIP stations get "VIP" --
+    // never both tabs, never "Standard" on a VIP station.
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /Packages\s*<\/button>/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, />Packages</);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /\{pc\.is_vip \? "VIP" : "Standard"\}/);
     assert.match(sessionDialogSourceForOpenTimeRetirement, /Member\s*<\/button>/);
     // Stage 4: VIP playable-time preview is server-computed (fetched from
-    // the backend), never recomputed with 2:1 conversion logic in React.
+    // the backend), never recomputed with 2:1 conversion logic in React --
+    // the simplified Member tab shows this as one summary line, not a
+    // separate "Playable on VIP" panel.
     assert.match(sessionDialogSourceForOpenTimeRetirement, /fetchMemberVipPreview/);
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /Playable on VIP/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /Available VIP playtime/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /VIP uses balance at 2× rate/);
     assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /STANDARD_SECONDS_PER_VIP_SECOND/);
+
+    // Standard tab: a non-VIP station gets an amount-first selector (no
+    // large package cards) -- Amount label/input before the eight
+    // suggestion chips, a backend-calculated time preview (never a
+    // duplicated ₱-per-minute formula in the dashboard), reusing the same
+    // /rates/calculate-time endpoint the backend's Standard-tab session
+    // start/add-time now resolve `amount` through.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /fetchCalculatedTime/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, />\s*Amount\s*[\s\S]{0,20}<input/);
+    const amountFieldIndex = sessionDialogSourceForOpenTimeRetirement.search(/>\s*Amount\s*</);
+    const chipRowIndex = sessionDialogSourceForOpenTimeRetirement.indexOf("QUICK_STANDARD_AMOUNTS.map");
+    assert.ok(amountFieldIndex >= 0 && chipRowIndex >= 0 && amountFieldIndex < chipRowIndex);
+    // Eight quick amounts (was four): 5/10/15/20/30/40/50/100.
+    assert.match(
+      sessionDialogSourceForOpenTimeRetirement,
+      /QUICK_STANDARD_AMOUNTS = \["5", "10", "15", "20", "30", "40", "50", "100"\]/
+    );
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /setCustomAmount\(amount\)/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /Calculated time/);
+    // The displayed duration always comes from the backend's response
+    // (calculatedTime.duration_seconds), never a client-recomputed value.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /calculatedTime\.duration_seconds/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /isStandardAmountMode = activeTab === "standard" && !pc\.is_vip/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /onConfirm\(\{ amount: normalizedAmount, payment: buildPayment\(normalizedAmount\) \}\)/);
+    // Invalid (blank/zero/negative/malformed) amounts never submit.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /Enter a valid amount above/);
+    // The amount input and its chip row read as one tight group (8-12px
+    // apart via .standardAmountInputGroup), not spaced like the rest of
+    // the panel's fields.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /standardAmountInputGroup/);
+    // The suggestion chips are compact pill buttons (.amountChip) in a
+    // strict 4-column grid (.amountChipGrid) -- never full-size
+    // .rateOption cards, and the Standard-amount block never renders
+    // .optionGrid/.rateOption at all.
+    const standardAmountBlock = sessionDialogSourceForOpenTimeRetirement.slice(
+      sessionDialogSourceForOpenTimeRetirement.indexOf("isStandardAmountMode ? ("),
+      sessionDialogSourceForOpenTimeRetirement.indexOf(") : (\n          <div role=\"tabpanel\">")
+    );
+    assert.match(standardAmountBlock, /styles\.amountChip/);
+    assert.match(standardAmountBlock, /styles\.amountChipRow/);
+    assert.match(standardAmountBlock, /styles\.amountChipGrid/);
+    assert.doesNotMatch(standardAmountBlock, /styles\.rateOption/);
+    assert.doesNotMatch(standardAmountBlock, /styles\.optionGrid/);
+    // SessionDialog is the one shared component for both Start Session and
+    // Add Time (mode="start" | "add") -- the Standard-amount branch and
+    // its confirm() path are not gated on `mode`, so Add Time gets
+    // identical amount-input/chip/preview/validation behavior for free.
+    assert.doesNotMatch(standardAmountBlock, /mode ===/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /isStandardAmountMode = .*mode/);
+
+    // VIP tab: compact rate-id buttons (reusing the exact same .amountChip
+    // styling as Standard's chips), never the old large .rateOption cards,
+    // and never a "Standard"/"Create Account" option for a VIP station.
+    const vipTabBlock = sessionDialogSourceForOpenTimeRetirement.slice(
+      sessionDialogSourceForOpenTimeRetirement.indexOf(") : (\n          <div role=\"tabpanel\">"),
+      sessionDialogSourceForOpenTimeRetirement.indexOf("{activeTab !== \"member\"")
+    );
+    assert.match(vipTabBlock, />VIP</);
+    assert.match(vipTabBlock, /vipModeHeading/);
+    assert.match(vipTabBlock, /packageRates\.map/);
+    assert.match(vipTabBlock, /setSelectedRateId\(rate\.rate_id\)/);
+    assert.match(vipTabBlock, /formatChipLabel\(rate\)/);
+    assert.match(vipTabBlock, /styles\.amountChip/);
+    assert.doesNotMatch(vipTabBlock, /styles\.rateOption/);
+    assert.doesNotMatch(vipTabBlock, /styles\.optionGrid/);
+    assert.doesNotMatch(vipTabBlock, /Create Account/);
+    assert.doesNotMatch(vipTabBlock, />Standard</);
+    // formatChipLabel formats a rate's price/duration for a compact chip
+    // (e.g. "₱30 — 1 hr", "₱250 — 10 hr promo") -- never a hardcoded
+    // per-hour multiplication in the dashboard; the promo suffix is driven
+    // by the rate's own name, not a hardcoded rate_id/price check.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /function formatChipLabel/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /rate\.name\.toLowerCase\(\)\.includes\("promo"\)/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /price \* 30|30 \* rate|price \/ 30/);
+
+    // Operator panel (display-only) is gone entirely -- the confirm-button
+    // guard that requires an on-duty operator to actually start a session
+    // is untouched (that's validation, not display), and currentOperator
+    // is still a prop the parent passes in.
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, />Operator</);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /Select an on-duty operator before starting/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /mode === "start" && !currentOperator/);
+    // The offline power-state notice survives as its own block, not
+    // nested inside the old Operator panel.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /Power state/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /PC is currently powered off/);
+
+    // Modal sizing: narrower than the shared .dialog's 640px default.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /sessionDialogFrame/);
+
+    // Notes is removed from the visible UI entirely (Start Session and Add
+    // Time share this one component, so this covers both) -- but the field
+    // stays optional in PaymentInput/buildPayment's return, so a
+    // submission simply omits it rather than sending an empty string; the
+    // backend schema (PaymentCreateRequest.notes: str | None = None) never
+    // required it, so old records and any caller that still sends notes
+    // keep working unchanged.
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /const \[notes, setNotes\]/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, />\s*Notes\s*<input/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /notes: notes \|\| undefined/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /setNotes/);
+
+    // Start Session / Add Time titles use the station's display name (VIP
+    // 1 for PC-15), never the raw internal pc_name -- pc.pc_name is still
+    // used as-is for the actual API calls (fetchMemberVipPreview) since
+    // that's an internal identifier, not user-facing text.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /const pcDisplayName = pc\.display_name \?\? pc\.pc_name;/);
+    assert.match(
+      sessionDialogSourceForOpenTimeRetirement,
+      /const title = mode === "start" \? `Start \$\{pcDisplayName\}` : `Add time to \$\{pcDisplayName\}`;/
+    );
+
+    // End Session dialog also uses the display name, same pattern.
+    const endSessionDialogSource = readFileSync("src/components/EndSessionDialog.tsx", "utf8");
+    assert.match(endSessionDialogSource, /`End \$\{pc\.display_name \?\? pc\.pc_name\} session`/);
+    assert.match(endSessionDialogSource, /<strong>\{pc\.display_name \?\? pc\.pc_name\}<\/strong>\?/);
+    assert.doesNotMatch(endSessionDialogSource, /`End \$\{pc\.pc_name\} session`/);
+
+    // Member tab: one search field (no separate dropdown), inline results,
+    // one compact selected-member card, one PIN field, one explanatory
+    // sentence -- the old separate MEMBER BALANCE / BALANCE PREVIEW panels
+    // and the "Set maximum time" cap are gone.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /Find member/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /Search username, name, or phone/);
+    // Scope the "no redundant dropdown" check to the member panel itself --
+    // the Standard/VIP payment-method field legitimately renders a native
+    // <select>, so a whole-file check would false-positive on that.
+    const memberTabBlock = sessionDialogSourceForOpenTimeRetirement.slice(
+      sessionDialogSourceForOpenTimeRetirement.indexOf('activeTab === "member" ? ('),
+      sessionDialogSourceForOpenTimeRetirement.indexOf(') : isStandardAmountMode ? (')
+    );
+    assert.ok(memberTabBlock.length > 0);
+    assert.doesNotMatch(memberTabBlock, /<select/);
+    assert.doesNotMatch(memberTabBlock, /Member username/);
+    assert.match(memberTabBlock, /memberResultList/);
+    assert.match(memberTabBlock, /memberCard/);
+    assert.match(memberTabBlock, /Available time balance/);
+    assert.doesNotMatch(memberTabBlock, /memberBalanceGrid/);
+    assert.doesNotMatch(memberTabBlock, /Balance preview/i);
+    assert.doesNotMatch(memberTabBlock, /Set maximum time/);
+    assert.doesNotMatch(memberTabBlock, /useMemberCap/);
+    assert.doesNotMatch(memberTabBlock, /memberMinutes/);
+    assert.match(
+      sessionDialogSourceForOpenTimeRetirement,
+      /Only the time actually used will be deducted from the member/
+    );
+    // Confirm stays disabled until a valid member + PIN are both present.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /isMemberSelectionValid/);
+    assert.match(
+      sessionDialogSourceForOpenTimeRetirement,
+      /activeTab === "member" && !isMemberSelectionValid/
+    );
+    // A member with no usable balance gets one clear inline message.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /showNoUsableBalanceMessage/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /has no playable VIP time/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /has no remaining time balance/);
+
+    // Background scroll lock while the dialog is mounted, same pattern as
+    // ActivityFeed/SalesManager.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /document\.body\.style\.overflow = "hidden"/);
+    // Header/body/footer split keeps the title and Cancel/Confirm visible
+    // even when the body scrolls.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /sessionDialogHeader/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /sessionDialogBody/);
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /sessionDialogFooter/);
 
     const monitorTileSource = readFileSync("src/components/PcMonitorTile.tsx", "utf8");
     assert.match(monitorTileSource, /monitorName/);
-    assert.match(monitorTileSource, /monitorStatusLight/);
-    assert.match(monitorTileSource, /monitorVipBadge/);
+    // Main PC card shows the station's display name (VIP 1 for PC-15),
+    // never the raw pc_name -- resolved once per tile and reused for both
+    // the visible label and the aria-label, so Setup/Layout stays the one
+    // authoritative place a display name is ever set.
+    assert.match(monitorTileSource, /const displayName = pc\.display_name \?\? pc\.pc_name;/);
+    assert.match(monitorTileSource, /aria-label=\{`Open \$\{displayName\} details`\}/);
+    assert.match(monitorTileSource, /<span className=\{styles\.monitorName\}>\{displayName\}<\/span>/);
+    // Standard/VIP badges are display-only removed from the main grid --
+    // pc.is_vip itself, station classification, and VIP rates are backend
+    // data untouched elsewhere (Setup/Layout, Rates, PcDetailsPanel); the
+    // grid card simply no longer renders a badge for it.
+    assert.doesNotMatch(monitorTileSource, /monitorVipBadge/);
+    assert.doesNotMatch(monitorTileSource, /monitorStandardBadge/);
+    assert.doesNotMatch(monitorTileSource, /pc\.is_vip/);
+    assert.doesNotMatch(monitorTileSource, />VIP</);
+    assert.doesNotMatch(monitorTileSource, />Standard</);
+    assert.doesNotMatch(monitorTileSource, /area_label/);
     assert.doesNotMatch(monitorTileSource, /Start Session|Add Time|End Session|Collect Payment|Start & Wake/);
+    // The stand/base are grouped with the screen in one shared, centered
+    // flex container (.monitorUnit) so their centers always coincide with
+    // the screen's, regardless of the grid column's actual width --
+    // .monitorTile's own align-items: stretch does not truly center
+    // fixed-width children. monitorStatusText stays outside the unit
+    // (unaffected, still centered via .monitorTile's text-align: center).
+    assert.match(
+      monitorTileSource,
+      /<span className=\{styles\.monitorUnit\}>[\s\S]*<span className=\{styles\.monitorScreen\}>/
+    );
+    const monitorUnitBlock = monitorTileSource.slice(
+      monitorTileSource.indexOf("styles.monitorUnit"),
+      monitorTileSource.indexOf("styles.monitorStatusText")
+    );
+    assert.match(monitorUnitBlock, /monitorScreen/);
+    assert.match(monitorUnitBlock, /monitorStand/);
+    assert.match(monitorUnitBlock, /monitorBase/);
+    // Grid cards never render a screenshot -- no <img>, no Blob URL prop,
+    // no thumbnail classes. The grid also no longer renders any
+    // monitoring-derived display element at all (no LIVE/STALE corner
+    // tag, no power/status dot) -- monitorStatus isn't even passed into
+    // this component anymore. The lightweight status and its display
+    // live only in the right-side PcDetailsPanel (see below), which
+    // still receives monitorStatus/frameUrl from DashboardClient.
+    assert.doesNotMatch(monitorTileSource, /<img/);
+    assert.doesNotMatch(monitorTileSource, /frameUrl/);
+    assert.doesNotMatch(monitorTileSource, /monitorThumbnail/);
+    assert.doesNotMatch(monitorTileSource, /monitorFrameBadge/);
+    assert.doesNotMatch(monitorTileSource, /monitorFrameBadgeLive/);
+    assert.doesNotMatch(monitorTileSource, /monitorFrameBadgeStale/);
+    assert.doesNotMatch(monitorTileSource, /monitorStatusLight/);
+    assert.doesNotMatch(monitorTileSource, /monitorStatus\?:/);
+    assert.doesNotMatch(monitorTileSource, /ScreenMonitorStatus/);
+    assert.doesNotMatch(monitorTileSource, />LIVE</);
+    assert.doesNotMatch(monitorTileSource, />STALE</);
+
+    const useMonitorFramesSource = readFileSync("src/hooks/useMonitorFrames.ts", "utf8");
+    // Only the selected PC's frame is ever fetched -- no loop downloading
+    // one per station.
+    assert.match(useMonitorFramesSource, /useMonitorFrames\(selectedPcName: string \| null\)/);
+    assert.match(useMonitorFramesSource, /if \(!pcName\) \{\s*return;/);
+    assert.doesNotMatch(useMonitorFramesSource, /Object\.values\(nextStatusByPcName\)/);
+    assert.doesNotMatch(useMonitorFramesSource, /\.map\(\(status\) => downloadFrame/);
+    // Unchanged frame_received_at does not redownload -- reuses the same
+    // shouldFetchFrame dedupe logic as before.
+    assert.match(useMonitorFramesSource, /shouldFetchFrame\(status, lastFetchedReceivedAtRef\.current\)/);
+    // A superseded/aborted response is discarded even if it resolves
+    // after a newer selection already took over.
+    assert.match(useMonitorFramesSource, /selectedPcNameRef\.current !== pcName/);
+    // Switching (or clearing) the selection aborts the in-flight request
+    // and revokes the Blob URL via the selection effect's own cleanup,
+    // which React runs on every dependency change AND on unmount.
+    assert.match(
+      useMonitorFramesSource,
+      /return \(\) => \{\s*abortControllerRef\.current\?\.abort\(\);\s*revokeCurrentFrame\(\);/
+    );
+    assert.match(useMonitorFramesSource, /\}, \[selectedPcName\]\);/);
 
     const dashboardCss = readFileSync("src/app/page.module.css", "utf8");
     assert.match(dashboardCss, /\.monitorTileSelected/);
+    // Operational colors: Available is cyan (the un-overridden base
+    // .monitorScreen rule), In Use is pink, Low Time is red with a
+    // stronger glow than In Use's, Powered Off stays muted gray with no
+    // bright glow -- never yellow for Low Time.
+    assert.match(dashboardCss, /border: 1px solid rgb\(34 211 238 \/ 0\.8\)/);
+    const activeScreenCss = dashboardCss.slice(
+      dashboardCss.indexOf(".monitorTileActive .monitorScreen {"),
+      dashboardCss.indexOf(".monitorTileActive .monitorScreen {") + 200
+    );
+    assert.match(activeScreenCss, /border-color: rgb\(236 72 153/);
+    assert.match(activeScreenCss, /box-shadow/);
+    const lowTimeScreenCss = dashboardCss.slice(
+      dashboardCss.indexOf(".monitorTileLowTime .monitorScreen {"),
+      dashboardCss.indexOf(".monitorTileLowTime .monitorScreen {") + 220
+    );
+    assert.match(lowTimeScreenCss, /border-color: rgb\(239 68 68/);
+    assert.match(lowTimeScreenCss, /box-shadow/);
+    assert.doesNotMatch(dashboardCss, /rgb\(251 191 36[^)]*\).*Low ?Time/i);
+    // Low Time's glow blur/opacity must read stronger than In Use's --
+    // getPcMonitorPresentation already returns mutually-exclusive
+    // classNames for the two, so this is purely a visual-weight check.
+    const activeGlowMatch = activeScreenCss.match(/0 0 (\d+)px rgb\(236 72 153 \/ ([\d.]+)\)/);
+    const lowTimeGlowMatch = lowTimeScreenCss.match(/0 0 (\d+)px rgb\(239 68 68 \/ ([\d.]+)\)/);
+    assert.ok(activeGlowMatch && lowTimeGlowMatch, "both glow declarations must be present");
+    assert.ok(
+      Number(lowTimeGlowMatch[1]) > Number(activeGlowMatch[1]) &&
+        Number(lowTimeGlowMatch[2]) > Number(activeGlowMatch[2]),
+      "Low Time's glow must be visibly stronger (larger blur and higher opacity) than In Use's"
+    );
+    assert.match(dashboardCss, /\.monitorTileOffline \{\s*opacity: 0\.68;/);
+    assert.match(dashboardCss, /\.monitorTileOffline \.monitorScreen \{\s*border-color: rgb\(100 116 139/);
+    // Selection is an outer ring (outline), never a border/box-shadow
+    // override on .monitorScreen -- overriding those would hide whichever
+    // operational color (cyan/pink/red/gray) the tile is actually showing.
+    const selectedCss = dashboardCss.slice(
+      dashboardCss.indexOf(".monitorTileSelected .monitorScreen {"),
+      dashboardCss.indexOf(".monitorTileSelected .monitorScreen {") + 200
+    );
+    assert.match(selectedCss, /outline:/);
+    assert.doesNotMatch(selectedCss, /border-color:/);
+    assert.doesNotMatch(selectedCss, /box-shadow:/);
     assert.match(dashboardCss, /\.monitorGrid/);
-    assert.match(dashboardCss, /repeat\(auto-fill, minmax\(150px, 176px\)\)/);
-    assert.match(dashboardCss, /justify-content: start/);
+    // Desktop grid is exactly 5 columns (PC-01..05 / 06..10 / 11..15) --
+    // explicit column count, not auto-fill, so the row layout is
+    // deterministic. Card size itself stays capped/compact via
+    // .monitorScreen's width: min(156px, 100%), so wider columns only
+    // distribute the same cards evenly, never stretching them. The
+    // unified/numeric-order change lives in DashboardClient.tsx's
+    // orderedPcs, not in this CSS. Narrower breakpoints (900px/760px,
+    // unchanged below) still reduce columns responsively.
+    assert.match(dashboardCss, /grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
+    // .monitorUnit centers the screen+stand+base relative to each other
+    // (not the wider grid column) regardless of their differing widths.
+    const monitorUnitCss = dashboardCss.slice(
+      dashboardCss.indexOf(".monitorUnit {"),
+      dashboardCss.indexOf(".monitorUnit {") + dashboardCss.slice(dashboardCss.indexOf(".monitorUnit {")).indexOf("}")
+    );
+    assert.match(monitorUnitCss, /align-items: center/);
+    assert.match(monitorUnitCss, /display: flex/);
+    assert.match(monitorUnitCss, /flex-direction: column/);
+    // The LIVE/STALE corner-tag and power/status-dot styling are removed
+    // entirely (not just unused) -- the grid card returns to its clean
+    // original appearance: name/customer/time inside the monitor, with
+    // the operational status text underneath.
+    assert.doesNotMatch(dashboardCss, /\.monitorFrameBadge/);
+    assert.doesNotMatch(dashboardCss, /\.monitorFrameBadgeLive/);
+    assert.doesNotMatch(dashboardCss, /\.monitorFrameBadgeStale/);
+    assert.doesNotMatch(dashboardCss, /\.monitorStatusLight/);
     assert.match(dashboardCss, /\.dashboardWorkspace/);
+    // Details panel is the left column (fixed 340-400px), PC grid is the
+    // right column (flexible) -- same two widths as before, just swapped,
+    // so neither the panel nor the cards changed size.
+    assert.match(dashboardCss, /grid-template-columns: minmax\(340px, 400px\) minmax\(0, 1fr\)/);
+    // The swap is CSS order only -- DOM order (grid section, then the
+    // rail aside) is unchanged, so mobile stacking/tab order still follow
+    // plain document order once order resets to 0 at the 900px breakpoint.
+    const dashboardWorkspaceOrderCss = dashboardCss.slice(
+      dashboardCss.indexOf(".dashboardWorkspace {"),
+      dashboardCss.indexOf("@media (max-width: 900px)")
+    );
+    assert.match(dashboardWorkspaceOrderCss, /\.pcGrid\s*\{\s*order: 2;/);
+    assert.match(dashboardWorkspaceOrderCss, /\.selectedPcRail\s*\{\s*order: 1;/);
+    const responsiveBlock900 = dashboardCss.slice(
+      dashboardCss.indexOf("@media (max-width: 900px)"),
+      dashboardCss.indexOf("@media (max-width: 900px)") + 400
+    );
+    assert.match(responsiveBlock900, /\.pcGrid,\s*\.selectedPcRail\s*\{\s*order: 0;/);
+    // The left-side PC details area is the original permanent, in-flow
+    // sidebar -- never an overlay drawer/backdrop.
     assert.match(dashboardCss, /\.selectedPcRail/);
     assert.match(dashboardCss, /\.noSelectionPanel/);
+    assert.doesNotMatch(dashboardCss, /\.pcDrawerLayer/);
+    assert.doesNotMatch(dashboardCss, /\.pcDrawerBackdrop/);
     assert.match(dashboardCss, /\.pcControlDock/);
     assert.match(dashboardCss, /\.monitorTileGrace/);
     assert.match(dashboardCss, /\.monitorTileSettlement/);
     assert.match(dashboardCss, /\.monitorTileDanger/);
     assert.match(dashboardCss, /@media \(max-width: 900px\)/);
-    assert.match(dashboardCss, /max-height: calc\(100vh - 48px\)/);
+    // .dialog/.overlay: the Start Session modal must start below the
+    // fixed nav bar, not underneath/behind it -- .overlay now starts at
+    // `var(--global-header-height)` instead of `inset: 0` (which used to
+    // cover the whole viewport including the nav), and .dialog's
+    // max-height accounts for that offset so it still fits within the
+    // remaining viewport.
+    assert.doesNotMatch(dashboardCss, /inset: 0;\s*justify-content: center;/);
+    assert.match(dashboardCss, /top: var\(--global-header-height\);/);
+    assert.match(dashboardCss, /max-height: calc\(100vh - var\(--global-header-height\) - 48px\)/);
+    // Header/body/footer split (task 5): title and Cancel/Confirm never
+    // scroll away -- only .sessionDialogBody does.
+    assert.match(dashboardCss, /\.sessionDialogFrame\s*\{[^}]*overflow: hidden;/);
+    assert.match(dashboardCss, /\.sessionDialogHeader\s*\{[^}]*flex-shrink: 0;/);
+    assert.match(dashboardCss, /\.sessionDialogBody\s*\{[^}]*overflow: auto;/);
+    assert.match(dashboardCss, /\.sessionDialogFooter\s*\{[^}]*flex-shrink: 0;/);
+    // Compact chips (task 4): a flex-wrap row of small pill buttons, not a
+    // fixed grid of large cards -- wraps cleanly on narrow screens. VIP's 5
+    // options reuse this flex-wrap row as-is; Standard's 8 quick amounts
+    // add .amountChipGrid on top for a strict 4-column grid.
+    assert.match(dashboardCss, /\.amountChipRow\s*\{[^}]*flex-wrap: wrap;/);
+    assert.match(dashboardCss, /\.amountChipGrid\s*\{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
+    assert.match(dashboardCss, /\.amountChip\s*\{[^}]*min-height: 38px;/);
+    assert.match(dashboardCss, /\.amountChip:focus-visible/);
+    assert.match(dashboardCss, /\.amountChipSelected/);
+    // Reduced modal size (task 2): narrower than the shared .dialog's
+    // 640px default, tighter header/body/footer padding.
+    assert.match(dashboardCss, /\.sessionDialogFrame\s*\{[^}]*max-width: 600px;/);
+    // The amount input and its chip row sit 8-12px apart as one tight
+    // group, not spaced like the rest of the panel's fields.
+    assert.match(dashboardCss, /\.standardAmountInputGroup\s*\{[^}]*gap: 10px;/);
+    // Simplified member flow: search-result rows and the single selected-
+    // member card get their own compact styling, not reused from the old
+    // multi-panel balance/preview layout.
+    assert.match(dashboardCss, /\.memberResultList\s*\{/);
+    assert.match(dashboardCss, /\.memberResultItem\s*\{/);
+    assert.match(dashboardCss, /\.memberCard\s*\{/);
+    assert.match(dashboardCss, /\.memberCardHeader\s*\{/);
     assert.match(dashboardCss, /\.pcControlModal/);
     assert.match(dashboardCss, /width: min\(980px, 92vw\)/);
     assert.match(dashboardCss, /max-height: 88vh/);
     assert.match(dashboardCss, /\.pcControlGrid/);
-    assert.match(dashboardCss, /grid-template-columns: minmax\(0, 1fr\) minmax\(340px, 400px\)/);
     assert.match(dashboardCss, /backdrop-filter: none/);
+    // Income group / area is accounting-only data -- the operational grid
+    // CSS itself never groups by it (Setup/Layout's .pcLayoutGroup is a
+    // separate, owner-only section and is unaffected).
+    assert.match(dashboardCss, /\.pcLayoutGroup/);
+    // Income group / area is accounting-only data -- the operational grid
+    // CSS itself never groups by it (Setup/Layout's .pcLayoutGroup is a
+    // separate, owner-only section and is unaffected).
+    assert.match(dashboardCss, /\.pcLayoutGroup/);
 
     const pcDetailsSource = readFileSync("src/components/PcDetailsPanel.tsx", "utf8");
+    // Removing the grid's LIVE/STALE badge and power-dot is display-only
+    // on PcMonitorTile -- the left-side details panel keeps its own
+    // full Live Screen section (monitorStatus, frameUrl, frame age) fed
+    // by the same always-on status poll.
+    assert.match(pcDetailsSource, /Live Screen/);
+    assert.match(pcDetailsSource, /monitorStatus/);
+    assert.match(pcDetailsSource, /frameUrl/);
+    assert.match(pcDetailsSource, /getMonitorTileVisualState/);
     assert.match(pcDetailsSource, /variant = "modal"/);
     assert.match(pcDetailsSource, /pcControlDock/);
+    // "dock" stays a permanent, always-inline, no-backdrop panel (the
+    // right-side rail) -- only "modal" (the mobile dialog) gets the focus
+    // trap / dialog semantics.
     assert.match(pcDetailsSource, /role=\{variant === "modal" \? "dialog" : "region"\}/);
     assert.match(pcDetailsSource, /aria-modal=\{variant === "modal" \? "true" : undefined\}/);
+    assert.match(pcDetailsSource, /if \(variant === "dock"\) \{\s*return;/);
     assert.match(pcDetailsSource, /event\.key === "Escape"/);
     assert.match(pcDetailsSource, /querySelectorAll<HTMLElement>/);
     assert.match(pcDetailsSource, /Session Actions/);
     assert.match(pcDetailsSource, /Messaging/);
     assert.match(pcDetailsSource, /Power Controls/);
     assert.match(pcDetailsSource, /Advanced \/ Technical Details/);
+    // Section order: PC heading/status, Session, Billing, Session
+    // Actions, Messaging, Live Screen, then Power Controls -- Live
+    // Screen moved out from the very top (where it used to sit ahead of
+    // Session) to immediately between Messaging and Power Controls.
+    const headingIndex = pcDetailsSource.indexOf("<h2>{pc.display_name");
+    const sessionIndex = pcDetailsSource.indexOf('aria-label="Session summary"');
+    const billingIndex = pcDetailsSource.indexOf('aria-label="Billing summary"');
+    const sessionActionsIndex = pcDetailsSource.indexOf('aria-label="Session actions"');
+    const messagingIndex = pcDetailsSource.indexOf('aria-label="Messaging controls"');
+    const liveScreenIndex = pcDetailsSource.indexOf('aria-label="Live screen"');
+    const powerControlsIndex = pcDetailsSource.indexOf('aria-label="Power controls"');
+    assert.ok(headingIndex < sessionIndex, "PC heading must come before Session");
+    assert.ok(sessionIndex < billingIndex, "Session must come before Billing");
+    assert.ok(billingIndex < sessionActionsIndex, "Billing must come before Session Actions");
+    assert.ok(sessionActionsIndex < messagingIndex, "Session Actions must come before Messaging");
+    assert.ok(messagingIndex < liveScreenIndex, "Messaging must come before Live Screen");
+    assert.ok(liveScreenIndex < powerControlsIndex, "Live Screen must come immediately before Power Controls");
+
+    // Plan row removed from the Session section (display-only) -- the
+    // header subtitle is just the customer label now, never
+    // "<customer> / <plan>". planLabel itself is gone entirely since it
+    // had no other caller; session_mode/rate_name_snapshot are still read
+    // straight off `pc` everywhere else that needs them (billing, Setup),
+    // so no backend/history data was touched.
+    assert.doesNotMatch(pcDetailsSource, /planLabel/);
+    assert.doesNotMatch(pcDetailsSource, /<span>Plan<\/span>/);
+    assert.doesNotMatch(pcDetailsSource, /\{customerLabel\} \/ \{planLabel\}/);
+    assert.match(pcDetailsSource, /<p>\{customerLabel\}<\/p>/);
+
+    // Remount-bug regression: PcControlPanelContent used to be rendered
+    // as a JSX component (<PcControlPanelContent />). Since it is defined
+    // fresh inside PcDetailsPanel's own render body, that gave it a new
+    // component identity on every render -- including every keystroke in
+    // the message field (messageText lives in this same component) and
+    // every ~1s parent tick -- so React fully unmounted and remounted the
+    // entire section subtree each time, resetting scroll position and
+    // stealing input focus even though the state itself (owned by the
+    // outer PcDetailsPanel) survived. Calling it as a plain function
+    // ({PcControlPanelContent()}) makes its JSX merge directly into the
+    // parent's own render output instead of creating a separate component
+    // boundary, so the same DOM subtree (and thus scroll position and
+    // input focus) persists across re-renders.
+    assert.doesNotMatch(pcDetailsSource, /<PcControlPanelContent/);
+    assert.match(pcDetailsSource, /\{PcControlPanelContent\(\)\}/);
+
+    // Message branding: no editable title field anywhere -- every
+    // cashier-to-customer message is branded as SECRET GROUNDS, enforced
+    // server-side (MessageCommandRequest.enforce_canonical_title), not by
+    // hiding a dashboard control alone.
+    assert.doesNotMatch(pcDetailsSource, /Message title/);
+    assert.doesNotMatch(pcDetailsSource, /messageTitle/);
+    assert.match(pcDetailsSource, /Message to customer/);
+    assert.match(pcDetailsSource, /Type a message for this customer/);
+    assert.match(pcDetailsSource, /SECRET GROUNDS/);
+    // The message field is a textarea (not a single-line input) so a
+    // longer message stays visible while being typed.
+    const messagingSectionBlock = pcDetailsSource.slice(messagingIndex, liveScreenIndex);
+    assert.match(messagingSectionBlock, /<textarea/);
+    assert.doesNotMatch(messagingSectionBlock, /Message title/);
+    // Severity selection is untouched -- still controls message styling.
+    assert.match(messagingSectionBlock, /messageSeverity/);
+    assert.match(messagingSectionBlock, /option value="urgent"/);
     assert.match(pcDetailsSource, /<Icon name="message" \/>[\s\S]*Send Message/);
     assert.match(pcDetailsSource, /<Icon name="power" \/>[\s\S]*Wake PC/);
     assert.match(pcDetailsSource, /<Icon name="moon" \/>[\s\S]*Sleep/);
     assert.match(pcDetailsSource, /<Icon name="rotate" \/>[\s\S]*Restart/);
-    assert.match(pcDetailsSource, /<Icon name="powerOff" \/>[\s\S]*Shutdown/);
+    // Shutdown reuses the same well-formed "power" icon as Wake PC
+    // (the button's own danger styling already distinguishes it) --
+    // asserted with a tight adjacency match (no wildcard gap) so this
+    // can't pass merely because Wake PC's icon appears earlier in the
+    // file. The bespoke "powerOff" icon is gone entirely: its arc had a
+    // different sweep flag than "power"'s (a broken/incomplete ring) and
+    // a diagonal slash through the whole glyph, reading as malformed.
+    assert.doesNotMatch(pcDetailsSource, /powerOff/);
+    assert.match(pcDetailsSource, /<Icon name="power" \/>\s*Shutdown/);
     assert.match(pcDetailsSource, /strokeWidth: 2\.15/);
     assert.match(pcDetailsSource, /M18\.4 6\.6a9 9 0 1 1-12\.8 0/);
     assert.match(pcDetailsSource, /M21 12\.8A8\.5 8\.5 0 1 1/);
     assert.match(pcDetailsSource, /M20 12a8 8 0 1 1-2\.35-5\.65L21 9/);
-    assert.match(pcDetailsSource, /M3\.8 3\.8 20\.2 20\.2/);
+    // clockPlus's old plus-mark paths ("M19 19l2 2" + "M21 17v4") were a
+    // diagonal line crossing a misaligned vertical one -- not a "+" at
+    // all. Fixed to a horizontal + vertical stroke sharing the same
+    // center (16, 17.5), a real plus badge on the clock face.
+    assert.match(pcDetailsSource, /cx="10" cy="12" r="7"/);
+    assert.match(pcDetailsSource, /M10 9v3l2 1\.5/);
+    assert.match(pcDetailsSource, /M16 15v5/);
+    assert.match(pcDetailsSource, /M13\.5 17\.5h5/);
     assert.match(pcDetailsSource, /<Icon name="save" \/>[\s\S]*Save MAC/);
     assert.match(pcDetailsSource, /Wake-on-LAN is unavailable until a MAC address is saved/);
     assert.match(pcDetailsSource, /MAC address[\s\S]*<input[\s\S]*Save MAC/);
@@ -1100,6 +1613,21 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(loginSource, /placeholder="cashier"/);
 
     const dashboardSource = readFileSync("src/components/DashboardClient.tsx", "utf8");
+    // The Announcement button uses lucide-react's real Megaphone icon --
+    // the handmade MegaphoneIcon() SVG component is gone entirely.
+    assert.match(dashboardSource, /import \{ Megaphone \} from "lucide-react"/);
+    assert.match(dashboardSource, /<Megaphone aria-hidden="true" className=\{styles\.utilityIcon\} \/>/);
+    assert.doesNotMatch(dashboardSource, /function MegaphoneIcon/);
+    assert.doesNotMatch(dashboardSource, /<MegaphoneIcon \/>/);
+    // Session-ended/recovery toasts use the station's display name
+    // consistently (VIP 1, not the raw PC-15 pc_name), same pattern as the
+    // wake/cancel messages just above them in the file.
+    assert.match(dashboardSource, /`\$\{pc\.display_name \?\? pc\.pc_name\} open-time session ended\. Settlement is pending\.`/);
+    assert.match(dashboardSource, /`\$\{pc\.display_name \?\? pc\.pc_name\} session ended\.`/);
+    assert.match(dashboardSource, /`\$\{pc\.display_name \?\? pc\.pc_name\} recovery session force-ended\. Settlement is pending\.`/);
+    assert.match(dashboardSource, /`\$\{pc\.display_name \?\? pc\.pc_name\} recovery session resolved\.`/);
+    assert.doesNotMatch(dashboardSource, /`\$\{pc\.pc_name\} open-time session ended/);
+    assert.doesNotMatch(dashboardSource, /`\$\{pc\.pc_name\} recovery session/);
     assert.doesNotMatch(dashboardSource, /Sino ang naka-bantay ngayon/);
     assert.doesNotMatch(dashboardSource, /Current on-duty operator/);
     // Stage 7: the main-dashboard summary card is server-authoritative
@@ -1115,21 +1643,80 @@ async function runAsyncAssertions() {
     assert.match(dashboardSource, /window\.setInterval\(\(\) => void refresh\(\), pollIntervalMs\)/);
     assert.match(dashboardSource, /setOperatorSale\)/);
     assert.match(dashboardSource, /catch\(\(\) => setOperatorSale\(null\)\)/);
+    // displayAreaLabel/SECRET GROUNDS SHOP survive ONLY inside the
+    // owner-only Setup/Layout section (groupedLayoutSlots) -- income
+    // group/area is accounting-only data and must never section the main
+    // operational PC grid. Confirmed structurally below via orderedPcs/
+    // sortPcsByStationNumber and the absence of any grouped rendering
+    // ahead of the PC Stations panel.
     assert.match(dashboardSource, /displayAreaLabel/);
     assert.match(dashboardSource, /SECRET GROUNDS SHOP/);
-    assert.match(dashboardSource, /Select a PC/);
-    assert.match(dashboardSource, /Choose a station to view session, billing, messaging, and power controls\./);
     assert.match(dashboardSource, /Register First PC/);
     assert.match(dashboardSource, /variant="dock"/);
 
-    // The selected-PC enlarged view (PcDetailsPanel, both the desktop dock
-    // and mobile modal usages) must read frames from the exact same
-    // useMonitorFrames() call that feeds the grid tiles -- never a second
-    // hook instance / second poll loop, so opening the enlarged view never
-    // triggers a duplicate frame download of what the tile already has.
-    assert.equal((dashboardSource.match(/useMonitorFrames\(\)/g) ?? []).length, 1);
-    assert.equal((dashboardSource.match(/frameUrlByPcName\[/g) ?? []).length, 3);
-    assert.equal((dashboardSource.match(/statusByPcName\[/g) ?? []).length, 3);
+    // Grid cards no longer receive monitorStatus at all (the display-only
+    // LIVE/STALE badge and power-dot were removed from PcMonitorTile), but
+    // the always-on status poll itself is untouched -- PcDetailsPanel
+    // still receives monitorStatus/frameUrl/frameHasError for the
+    // selected PC's Live Screen section.
+    const monitorTileInvocation = dashboardSource.slice(
+      dashboardSource.indexOf("<PcMonitorTile"),
+      dashboardSource.indexOf("<PcMonitorTile") + dashboardSource.slice(dashboardSource.indexOf("<PcMonitorTile")).indexOf("/>")
+    );
+    assert.doesNotMatch(monitorTileInvocation, /monitorStatus/);
+    const pcDetailsPanelInvocation = dashboardSource.slice(
+      dashboardSource.indexOf("<PcDetailsPanel"),
+      dashboardSource.indexOf("<PcDetailsPanel") + dashboardSource.slice(dashboardSource.indexOf("<PcDetailsPanel")).indexOf("/>")
+    );
+    assert.match(pcDetailsPanelInvocation, /monitorStatus=\{statusByPcName\[selectedPc\.pc_name\]\}/);
+    assert.match(pcDetailsPanelInvocation, /frameUrl=\{frameUrlByPcName\[selectedPc\.pc_name\]\}/);
+
+    // The operational PC grid is one unified panel in strict numeric
+    // order -- never grouped by income group/area, and never re-sectioned
+    // per group the way Setup/Layout still is.
+    assert.match(dashboardSource, /sortPcsByStationNumber/);
+    assert.match(dashboardSource, /aria-label="PC grid"/);
+    assert.match(dashboardSource, /orderedPcs\.map/);
+    assert.doesNotMatch(dashboardSource, /groupedPcs/);
+    assert.doesNotMatch(dashboardSource, /aria-label=\{groupLabel\}/);
+
+    // No income-group section headings/containers in the operational grid
+    // itself (Setup/Layout's .pcLayoutGroup, past .selectedPcRail in the
+    // source, is a separate owner-only section and keeps its own grouping).
+    const pcGridBlock = dashboardSource.slice(
+      dashboardSource.indexOf("dashboardWorkspace"),
+      dashboardSource.indexOf("selectedPcRail")
+    );
+    assert.doesNotMatch(pcGridBlock, /pcLayoutGroup/);
+    assert.doesNotMatch(pcGridBlock, /groupLabel/);
+
+    // Selecting a PC must update the SAME permanent right-side panel, not
+    // open an overlay -- PcDetailsPanel (dock) and the original
+    // "Select a PC" placeholder are the two mutually-exclusive children of
+    // one always-rendered .selectedPcRail aside inside .dashboardWorkspace.
+    assert.match(dashboardSource, /<aside className=\{styles\.selectedPcRail\}/);
+    assert.match(dashboardSource, /<h2>Select a PC<\/h2>/);
+    assert.match(dashboardSource, /Choose a station to view session, billing, messaging, and power controls\./);
+    assert.doesNotMatch(dashboardSource, /pcDrawerLayer/);
+    assert.doesNotMatch(dashboardSource, /pcDrawerBackdrop/);
+
+    // The grid never downloads or displays a screenshot -- useMonitorFrames
+    // is called exactly once, driven by selectedPcName, and only the
+    // right-side details panel reads frameUrlByPcName/frameHasError.
+    // Grid tiles no longer receive monitorStatus at all (display-only
+    // LIVE/STALE badge and power-dot were removed from the grid card) --
+    // statusByPcName is now only read once, for the details panel.
+    assert.equal((dashboardSource.match(/useMonitorFrames\(selectedPcName\)/g) ?? []).length, 1);
+    assert.equal((dashboardSource.match(/frameUrlByPcName\[/g) ?? []).length, 1);
+    assert.equal((dashboardSource.match(/frameHasError=\{frameErrorByPcName\[/g) ?? []).length, 1);
+    assert.equal((dashboardSource.match(/statusByPcName\[/g) ?? []).length, 1);
+    const gridTileBlock = dashboardSource.slice(
+      dashboardSource.indexOf("<PcMonitorTile"),
+      dashboardSource.indexOf("<aside")
+    );
+    assert.doesNotMatch(gridTileBlock, /frameUrl=/);
+    assert.doesNotMatch(gridTileBlock, /frameHasError=/);
+    assert.doesNotMatch(gridTileBlock, /statusByPcName/);
     assert.doesNotMatch(dashboardSource, /startOpenTimeSession/);
     assert.doesNotMatch(dashboardSource, /meteredRate/);
     // Historical open_time sessions (already active/settling before this
@@ -1467,6 +2054,13 @@ async function runAsyncAssertions() {
     assert.match(dashboardSummarySource, /icon: "operator"/);
     assert.match(dashboardSummarySource, /variant="dashboard"/);
     assert.doesNotMatch(dashboardSummarySource, /icon: "OK"/);
+
+    // In Use and Operator use real lucide-react icons (MonitorPlay,
+    // UserRoundCheck), never a handmade SVG path or a Unicode glyph, and
+    // are imported from the library rather than redefined locally.
+    assert.match(dashboardSummarySource, /import \{ MonitorPlay, UserRoundCheck \} from "lucide-react"/);
+    assert.match(dashboardSummarySource, /<MonitorPlay aria-hidden="true" className=\{styles\.statusCardGlyph\} \/>/);
+    assert.match(dashboardSummarySource, /<UserRoundCheck aria-hidden="true" className=\{styles\.statusCardGlyph\} \/>/);
 
     // Stage 7: main-dashboard card is Operator's Sale (Stage 5
     // server-authoritative), replacing Today's Sales on this card only.
@@ -1860,8 +2454,12 @@ async function runAsyncAssertions() {
     assert.match(pcCardSource, />Standard</);
     assert.match(pcCardSource, />VIP</);
     const pcMonitorTileSourceForStage5 = readFileSync("src/components/PcMonitorTile.tsx", "utf8");
-    assert.match(pcMonitorTileSourceForStage5, /monitorStandardBadge/);
-    assert.match(pcMonitorTileSourceForStage5, /monitorVipBadge/);
+    // Standard/VIP badges were later removed from the main grid card
+    // display-only (station classification/is_vip/VIP rates themselves
+    // are untouched -- see PcDetailsPanel and Rates for where VIP still
+    // surfaces in the UI).
+    assert.doesNotMatch(pcMonitorTileSourceForStage5, /monitorStandardBadge/);
+    assert.doesNotMatch(pcMonitorTileSourceForStage5, /monitorVipBadge/);
     // getPcMonitorPresentation and getPcCardTone never take is_vip as input
     // at all -- proving station type structurally cannot influence which
     // operational status badge/tone is shown, VIP or Standard.
@@ -1893,19 +2491,23 @@ async function runAsyncAssertions() {
     );
     assert.match(dashboardSource, /computerTypeToggle/);
 
-    // Start Session: Midnight Promo card labeling is data-driven (derived
-    // from the rate's own name/eligibility window), never hardcoded, and
-    // shows the eligibility window + guest-only note.
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /ratePromoLabel/);
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /ratePromoWindow/);
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /Guest only/);
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /formatClockTime/);
-    // Member tab clearly separates Standard Time / VIP Time balances and
-    // never phrases the Standard->VIP conversion as a raw multiplier.
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /memberBalanceGrid/);
-    assert.match(sessionDialogSourceForOpenTimeRetirement, />Standard Time</);
-    assert.match(sessionDialogSourceForOpenTimeRetirement, />VIP Time</);
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /contributes/);
+    // Start Session: the redesigned VIP tab has no Midnight Promo card, no
+    // eligibility-window copy, and no guest-only note -- the promo is now
+    // just the ₱250 chip, labeled purely from the rate's own name via
+    // formatChipLabel (already asserted above), with no separate promo
+    // affordance in the dashboard.
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /ratePromoLabel/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /ratePromoWindow/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /Guest only/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /formatClockTime/);
+    // The simplified Member tab shows one VIP summary (member balance +
+    // available VIP playtime, already asserted above), never a separate
+    // Standard Time / VIP Time grid, and never phrases the 2:1 conversion
+    // as a raw multiplier.
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /memberBalanceGrid/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, />Standard Time</);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, />VIP Time</);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /contributes/);
     assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /multiplier/i);
 
     // Active VIP member session: balance-source projection is fetched from

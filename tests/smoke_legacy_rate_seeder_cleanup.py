@@ -6,8 +6,10 @@ rate-30-minutes/rate-1-hour/rate-2-hours/rate-overnight) on any database
 whose rate_profiles table was still completely empty at first startup.
 seed_required_default_pricing() is now the single authoritative seeder for
 default package pricing. This file covers:
-  - a genuinely fresh database gets exactly the five owner-approved
-    packages and none of the four obsolete placeholders
+  - a genuinely fresh database gets exactly the eight owner-approved
+    packages (Standard Midnight Promo included until the owner ended it --
+    see tests/smoke_midnight_promo_retirement.py) and none of the four
+    obsolete placeholders
   - re-running initialize_database() never duplicates anything
   - deactivate_untouched_legacy_default_rates() conservatively deactivates
     (never deletes) a legacy-id row only when it is still exactly what the
@@ -22,8 +24,6 @@ import tempfile
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import HTTPException
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -31,8 +31,11 @@ APPROVED_PACKAGE_NAMES = [
     "Standard Guest - P5 (20 Minutes)",
     "Standard Guest - P10 (40 Minutes)",
     "Standard Guest - P15 (1 Hour)",
-    "Standard Midnight Promo",
     "VIP Guest - P30 (1 Hour)",
+    "VIP Guest - P60 (2 Hours)",
+    "VIP Guest - P90 (3 Hours)",
+    "VIP Guest - P120 (4 Hours)",
+    "VIP Guest - P250 (10 Hour Promo)",
 ]
 
 LEGACY_IDS = ["rate-30-minutes", "rate-1-hour", "rate-2-hours", "rate-overnight"]
@@ -54,7 +57,7 @@ def test_empty_db_initializes_cleanly(temp_directory: str) -> None:
     assert count > 0, "initialization must still seed something on a completely empty database"
 
 
-def test_fresh_db_has_exactly_the_five_approved_packages(temp_directory: str) -> None:
+def test_fresh_db_has_exactly_the_eight_approved_packages(temp_directory: str) -> None:
     fresh_db(temp_directory, "approved.sqlite3")
     from server.database import initialize_database, get_connection
 
@@ -311,50 +314,50 @@ def test_legacy_row_already_disabled_by_owner_is_left_alone(temp_directory: str)
     assert row["is_active"] == 0
 
 
-def test_midnight_and_vip_eligibility_unaffected(temp_directory: str) -> None:
+def test_midnight_promo_absent_and_vip_eligibility_unaffected(temp_directory: str) -> None:
     fresh_db(temp_directory, "eligibility.sqlite3")
     from server.database import initialize_database, get_connection
 
     initialize_database()
     with get_connection() as connection:
+        # Owner ended Midnight Promo -- a fresh install never seeds it.
         midnight = connection.execute(
-            "SELECT * FROM rate_profiles WHERE rate_id = 'rate-standard-midnight-promo'"
+            "SELECT 1 FROM rate_profiles WHERE rate_id = 'rate-standard-midnight-promo'"
         ).fetchone()
         vip_guest = connection.execute(
             "SELECT * FROM rate_profiles WHERE rate_id = 'rate-vip-guest-1hr'"
         ).fetchone()
-    assert midnight["guest_only"] == 1
-    assert midnight["eligible_start_local_time"] == "00:00"
-    assert midnight["eligible_end_local_time"] == "05:00"
+    assert midnight is None
     assert vip_guest["station_scope"] == "vip"
 
 
-def test_open_time_endpoints_remain_retired(temp_directory: str) -> None:
-    fresh_db(temp_directory, "open-time-retired.sqlite3")
+def test_metered_calculator_reactivated_for_standard_amount(temp_directory: str) -> None:
+    """GET /rates/metered and POST /rates/calculate-time back the Standard
+    tab's amount-based custom session -- reactivated for that purpose.
+    Creating/editing/reactivating a *new* metered rate through the rates
+    admin API remains permanently rejected (see tests/smoke_rates.py)."""
+    fresh_db(temp_directory, "metered-calculator.sqlite3")
     from server.database import initialize_database
     from server.main import get_metered_rate, calculate_time
     from server.schemas import CalculateTimeRequest
 
     initialize_database()
-    try:
-        get_metered_rate()
-    except HTTPException as error:
-        assert error.status_code == 410
-    else:
-        raise AssertionError("GET /rates/metered must remain retired")
+    rate = get_metered_rate()
+    assert rate.name == "Regular Rate"
+    assert rate.is_active is True
+    # ₱5 = 20 min, i.e. ₱1 = 4 minutes -- matches the authoritative
+    # Standard package pricing, not the old (incorrect) ₱1 = 5 minutes.
+    assert rate.price == Decimal("5.00")
+    assert rate.duration_seconds == 1200
 
-    try:
-        calculate_time(CalculateTimeRequest(amount=Decimal("20.00")))
-    except HTTPException as error:
-        assert error.status_code == 410
-    else:
-        raise AssertionError("POST /rates/calculate-time must remain retired")
+    calculated = calculate_time(CalculateTimeRequest(amount=Decimal("20.00")))
+    assert calculated.duration_seconds == 4800, "₱20 must buy 80 minutes (1 hr 20 min)"
 
 
 def main() -> None:
     tests = [
         test_empty_db_initializes_cleanly,
-        test_fresh_db_has_exactly_the_five_approved_packages,
+        test_fresh_db_has_exactly_the_eight_approved_packages,
         test_fresh_db_has_none_of_the_four_legacy_placeholders,
         test_second_initialization_creates_no_duplicates,
         test_existing_owner_edited_current_rate_remains_unchanged,
@@ -363,8 +366,8 @@ def main() -> None:
         test_untouched_legacy_placeholder_is_deactivated_not_deleted,
         test_owner_edited_legacy_id_row_is_never_destroyed,
         test_legacy_row_already_disabled_by_owner_is_left_alone,
-        test_midnight_and_vip_eligibility_unaffected,
-        test_open_time_endpoints_remain_retired,
+        test_midnight_promo_absent_and_vip_eligibility_unaffected,
+        test_metered_calculator_reactivated_for_standard_amount,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:

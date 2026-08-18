@@ -790,6 +790,12 @@ def ensure_sessions_accept_state_machine_statuses(connection: sqlite3.Connection
 
 
 def seed_default_metered_rate(connection: sqlite3.Connection) -> None:
+    """Fresh-install default for the Standard tab's amount-based custom
+    session. Must match the authoritative Standard package pricing (₱5 =
+    20 min, ₱10 = 40 min, ₱15 = 1 hour, i.e. ₱1 = 4 minutes) so a typed
+    amount and a package buy the same time -- NOT the old ₱1 = 5 minutes
+    figure (see correct_regular_metered_rate_pricing below for the
+    non-destructive migration of an existing install's row)."""
     existing_count = connection.execute(
         "SELECT COUNT(*) FROM rate_profiles WHERE rate_type = 'metered'"
     ).fetchone()[0]
@@ -817,8 +823,8 @@ def seed_default_metered_rate(connection: sqlite3.Connection) -> None:
         (
             "rate-regular-metered",
             "Regular Rate",
-            5 * 60,
-            "1.00",
+            20 * 60,
+            "5.00",
             1,
             0,
             "metered",
@@ -902,12 +908,37 @@ REQUIRED_DEFAULT_RATES = [
         "rate-standard-guest-15", "Standard Guest - P15 (1 Hour)", 60 * 60, "15.00", 3,
         "standard", 0, 1, None, None,
     ),
-    (
-        "rate-standard-midnight-promo", "Standard Midnight Promo", 60 * 60, "10.00", 4,
-        "standard", 1, 0, "00:00", "05:00",
-    ),
+    # rate-standard-midnight-promo intentionally removed here: the owner
+    # ended the Midnight Promo. A fresh install must never seed it again.
+    # Any existing install that already has this row from a prior startup
+    # is handled non-destructively by deactivate_untouched_midnight_promo_rate
+    # below -- this list only controls what gets newly INSERTed.
     (
         "rate-vip-guest-1hr", "VIP Guest - P30 (1 Hour)", 60 * 60, "30.00", 5,
+        "vip", 0, 1, None, None,
+    ),
+    # Ordinary VIP amounts follow the configured P30/hour rate exactly
+    # (P60=2hr, P90=3hr, P120=4hr are plain multiples) -- fixed package
+    # rows rather than a live calculator, same architecture as the
+    # Standard guest packages above. P250/10hr is a separate promotional
+    # package, deliberately NOT priced off P30/hour (P25/hour effective)
+    # -- see rate-vip-promo-10hr below.
+    (
+        "rate-vip-guest-2hr", "VIP Guest - P60 (2 Hours)", 2 * 60 * 60, "60.00", 6,
+        "vip", 0, 1, None, None,
+    ),
+    (
+        "rate-vip-guest-3hr", "VIP Guest - P90 (3 Hours)", 3 * 60 * 60, "90.00", 7,
+        "vip", 0, 1, None, None,
+    ),
+    (
+        "rate-vip-guest-4hr", "VIP Guest - P120 (4 Hours)", 4 * 60 * 60, "120.00", 8,
+        "vip", 0, 1, None, None,
+    ),
+    # Special VIP promo package -- fixed P250/10 hours, never computed
+    # from the P30/hour rate (see docstring above).
+    (
+        "rate-vip-promo-10hr", "VIP Guest - P250 (10 Hour Promo)", 10 * 60 * 60, "250.00", 9,
         "vip", 0, 1, None, None,
     ),
 ]
@@ -1072,6 +1103,86 @@ def deactivate_untouched_legacy_default_rates(connection: sqlite3.Connection) ->
         )
 
 
+def deactivate_untouched_midnight_promo_rate(connection: sqlite3.Connection) -> None:
+    """One-time retirement of the Midnight Promo package.
+
+    The owner ended Midnight Promo. rate-standard-midnight-promo is no
+    longer in REQUIRED_DEFAULT_RATES, so a fresh install never seeds it --
+    but any shop that already has the row (from a prior startup, before
+    this retirement) needs it turned off without touching history.
+
+    Same conservative one-time-transition guard as
+    deactivate_untouched_legacy_default_rates: only deactivates a row that
+    is still exactly what the seeder created (same name/duration/price/
+    scope/eligibility fields, never edited since -- updated_at ==
+    created_at). An owner who repriced, renamed, or already
+    activated/deactivated it themselves is left untouched. Deactivates
+    rather than deletes, so every historical session that used this
+    rate_id keeps resolving its rate name/amount for billing and reports.
+    Once is_active=0, this WHERE clause never matches the row again, so a
+    later owner reactivation is never silently undone by a future
+    restart re-running this.
+    """
+    connection.execute(
+        """
+        UPDATE rate_profiles
+        SET is_active = 0, updated_at = ?
+        WHERE rate_id = 'rate-standard-midnight-promo'
+          AND name = 'Standard Midnight Promo'
+          AND duration_seconds = 3600
+          AND price = '10.00'
+          AND rate_type = 'package'
+          AND station_scope = 'standard'
+          AND guest_only = 1
+          AND member_eligible = 0
+          AND eligible_start_local_time = '00:00'
+          AND eligible_end_local_time = '05:00'
+          AND is_active = 1
+          AND updated_at = created_at
+        """,
+        (current_utc_time().isoformat(),),
+    )
+
+
+def correct_regular_metered_rate_pricing(connection: sqlite3.Connection) -> None:
+    """One-time correction of the Standard metered rate's pricing.
+
+    The Regular Rate metered row was originally seeded at an incorrect
+    ₱1.00 = 5 minutes (300 seconds). It must match the authoritative
+    Standard package pricing instead -- ₱5 = 20 minutes (1200 seconds),
+    i.e. ₱1 = 4 minutes -- so a typed amount and a fixed package buy the
+    same time. seed_default_metered_rate above already seeds the
+    corrected value on a brand-new install; this corrects an existing
+    install's already-seeded row instead.
+
+    Same conservative one-time-transition guard used throughout this
+    file: only corrects a row that is still exactly what the old seeder
+    created (same id/name/rate_type/price/duration, never touched since
+    -- updated_at == created_at). An owner who has repriced this rate,
+    renamed it, or even just toggled its active status is left
+    completely untouched -- this can never overwrite a genuine owner
+    customization. Price/duration is corrected regardless of the row's
+    current is_active value (a currently-inactive-but-untouched row
+    should not keep the wrong numbers if it's ever reactivated); the
+    row's own active/inactive state is never changed here. Once
+    corrected, price is no longer '1.00', so this WHERE clause can never
+    match the row again on a later restart.
+    """
+    connection.execute(
+        """
+        UPDATE rate_profiles
+        SET price = '5.00', duration_seconds = 1200, updated_at = ?
+        WHERE rate_id = 'rate-regular-metered'
+          AND name = 'Regular Rate'
+          AND rate_type = 'metered'
+          AND price = '1.00'
+          AND duration_seconds = 300
+          AND updated_at = created_at
+        """,
+        (current_utc_time().isoformat(),),
+    )
+
+
 def activate_vip_promo_product_if_untouched(connection: sqlite3.Connection) -> None:
     """One-time Stage 2 -> Stage 3 transition.
 
@@ -1162,6 +1273,35 @@ def backfill_default_pc_income_groups(connection: sqlite3.Connection) -> None:
     )
 
 
+def rename_untouched_default_pc15_display_name(connection: sqlite3.Connection) -> None:
+    """One-time rename of PC-15's default display name from 'PC 15' to
+    'VIP 1'. seed_default_pc_layouts only ever runs against a completely
+    empty pc_layouts table, so any shop whose database already had rows
+    (i.e. everyone who installed before this rename) needs this instead to
+    pick up the new default without re-seeding.
+
+    Only updates the row when display_name is still the exact literal
+    default the seeder used to write ('PC 15') -- pc_layouts has no
+    created_at/updated_at-equality guard to lean on the way rate_profiles
+    does, but an owner-renamed row can never coincidentally read back as
+    that exact string once changed to anything else, so matching on the
+    literal value alone is a safe, conservative "still untouched" signal.
+    pc_name/is_vip/MAC assignment/session and billing history are never
+    touched -- this only ever writes display_name. Once the row no longer
+    reads 'PC 15', this WHERE clause never matches it again, so it can
+    never re-fight a later owner rename.
+    """
+    now = current_utc_time().isoformat()
+    connection.execute(
+        """
+        UPDATE pc_layouts
+        SET display_name = 'VIP 1', updated_at = ?
+        WHERE pc_name = 'PC-15' AND display_name = 'PC 15'
+        """,
+        (now,),
+    )
+
+
 def seed_default_pc_layouts(connection: sqlite3.Connection) -> None:
     existing_count = connection.execute(
         "SELECT COUNT(*) FROM pc_layouts"
@@ -1187,7 +1327,7 @@ def seed_default_pc_layouts(connection: sqlite3.Connection) -> None:
         ("PC-12", "PC 12", "ROGENE", 120, 0, 1),
         ("PC-13", "PC 13", "MAMA", 130, 0, 1),
         ("PC-14", "PC 14", "LALA", 140, 0, 1),
-        ("PC-15", "PC 15", "VIP", 150, 1, 1),
+        ("PC-15", "VIP 1", "VIP", 150, 1, 1),
     ]
     connection.executemany(
         """
@@ -2188,9 +2328,17 @@ def initialize_database() -> None:
             """
         )
         seed_default_metered_rate(connection)
+        # Corrects an existing install's already-seeded Regular Rate row
+        # from the old, incorrect ₱1 = 5 minutes to the authoritative ₱5 =
+        # 20 minutes (₱1 = 4 minutes) -- see the function's docstring for
+        # exactly what "untouched" means here.
+        correct_regular_metered_rate_pricing(connection)
         seed_default_membership_products(connection)
         seed_default_income_groups(connection)
         seed_default_pc_layouts(connection)
+        # Owner-facing rename of the default PC-15 label -- see the
+        # function's docstring for exactly what "untouched" means here.
+        rename_untouched_default_pc15_display_name(connection)
         backfill_default_pc_income_groups(connection)
         seed_family_operators(connection)
         # Station/eligibility enforcement (server/rate_eligibility.py) is
@@ -2204,6 +2352,9 @@ def initialize_database() -> None:
         # seed_default_rates() used to create -- see the function's
         # docstring for exactly what "untouched" means here.
         deactivate_untouched_legacy_default_rates(connection)
+        # Owner ended Midnight Promo -- see the function's docstring for
+        # exactly what "untouched" means here.
+        deactivate_untouched_midnight_promo_rate(connection)
         # Stage 3: atomic purchase/credit + non-refundable enforcement are
         # now implemented and tested, so the VIP promo product is safe to
         # sell. See activate_vip_promo_product_if_untouched's docstring for

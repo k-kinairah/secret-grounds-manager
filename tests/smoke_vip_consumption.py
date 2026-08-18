@@ -174,6 +174,40 @@ def test_vip_pc_standard_only(temp_directory: str) -> None:
     assert reservation == (14400, 0)
 
 
+def test_vip_pc_two_hour_standard_equals_one_vip_hour(temp_directory: str) -> None:
+    """Owner's literal example: a member with a 2-hour Standard balance and
+    no VIP balance gets exactly 1 hour of maximum VIP playtime."""
+    service, session_repository, member_repository = create_service(Path(temp_directory) / "vip-two-hour.sqlite3")
+    create_test_member(member_repository, "vip.twohour", vip_seconds=0, standard_seconds=2 * 3600)
+
+    started = asyncio.run(service.start_member_session("PC-VIP-7", "vip.twohour", None, "1234"))
+    assert started.session.station_type == "vip"
+    assert started.session.total_seconds == 3600, "2 Standard hours must convert to 1 VIP playable hour"
+    reservation = member_repository.get_active_reservation_totals(
+        started.session.member_id, started.session.session_id
+    )
+    assert reservation == (2 * 3600, 0)
+
+
+def test_vip_pc_early_end_deducts_only_actual_usage_at_conversion_rate(temp_directory: str) -> None:
+    """Owner's literal example: ending early on a pure-Standard-balance VIP
+    session deducts only 2x the actual time played, never the full
+    reservation -- 10 real minutes played deducts 20 Standard minutes."""
+    service, session_repository, member_repository = create_service(Path(temp_directory) / "vip-early-actual.sqlite3")
+    member = create_test_member(member_repository, "vip.earlyactual", vip_seconds=0, standard_seconds=2 * 3600)
+
+    started = asyncio.run(service.start_member_session("PC-VIP-8", "vip.earlyactual", None, "1234"))
+    assert started.session.total_seconds == 3600
+    rewind_session_start(session_repository, started.session.session_id, elapsed_seconds=600)  # 10 min
+    ended = asyncio.run(service.end_session(started.session.session_id))
+    assert ended.session.vip_seconds_consumed == 0
+    assert ended.session.standard_seconds_consumed_at_vip_rate == 1200, "10 real minutes * 2 = 20 Standard minutes"
+    assert ended.session.conversion_applied is True
+    assert ended.session.billed_seconds == 600
+    reloaded = member_repository.get_member(member.member_id)
+    assert reloaded.time_balance_seconds == 2 * 3600 - 1200, "only the actual 20 converted minutes are deducted"
+
+
 def test_vip_pc_mixed_matches_owner_example(temp_directory: str) -> None:
     service, session_repository, member_repository = create_service(Path(temp_directory) / "vip-mixed.sqlite3")
     create_test_member(member_repository, "vip.mixed", vip_seconds=2 * 3600, standard_seconds=6 * 3600)
@@ -727,6 +761,8 @@ def main() -> None:
         test_standard_pc_reserves_standard_only,
         test_vip_pc_vip_only,
         test_vip_pc_standard_only,
+        test_vip_pc_two_hour_standard_equals_one_vip_hour,
+        test_vip_pc_early_end_deducts_only_actual_usage_at_conversion_rate,
         test_vip_pc_mixed_matches_owner_example,
         test_vip_pc_zero_balance_rejected,
         test_member_cannot_start_second_session_while_reservation_active,

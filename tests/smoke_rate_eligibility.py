@@ -202,6 +202,35 @@ def get_rate_id(rate_repository, name: str) -> str:
     return next(rate.rate_id for rate in rates if rate.name == name)
 
 
+def insert_time_windowed_test_rate(rate_id: str, name: str) -> None:
+    """Fabricates a Standard/guest-only/00:00-05:00 package rate directly in
+    the DB, in the exact shape the (now-retired) Standard Midnight Promo
+    used to have. RateProfileCreate/RateProfileUpdate don't expose
+    guest_only/eligible_start_local_time/eligible_end_local_time, so this
+    is inserted the same way seed_required_default_pricing does -- this
+    test is about rate_eligibility.py's window/guest-only/station-scope
+    logic in general, not the retired promo specifically, and that logic
+    needs *some* time-windowed rate to exercise now that Midnight Promo is
+    gone from fresh installs."""
+    from server.database import get_connection
+    from server.time_utils import current_utc_time
+
+    now = current_utc_time().isoformat()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO rate_profiles (
+                rate_id, name, duration_seconds, price, is_active, sort_order,
+                rate_type, station_scope, guest_only, member_eligible,
+                eligible_start_local_time, eligible_end_local_time,
+                created_at, updated_at
+            )
+            VALUES (?, ?, 3600, '10.00', 1, 50, 'package', 'standard', 1, 0, '00:00', '05:00', ?, ?)
+            """,
+            (rate_id, name, now, now),
+        )
+
+
 def test_station_and_midnight_enforcement(temp_directory: str) -> None:
     import server.session_service as session_service_module
     from server.rate_repository import RateRepository
@@ -210,7 +239,8 @@ def test_station_and_midnight_enforcement(temp_directory: str) -> None:
     rate_repository = RateRepository()
     standard_5 = get_rate_id(rate_repository, "Standard Guest - P5 (20 Minutes)")
     vip_guest = get_rate_id(rate_repository, "VIP Guest - P30 (1 Hour)")
-    midnight = get_rate_id(rate_repository, "Standard Midnight Promo")
+    insert_time_windowed_test_rate("test-standard-overnight-window", "Test Standard Overnight Window")
+    midnight = get_rate_id(rate_repository, "Test Standard Overnight Window")
 
     # 1. Standard package on Standard PC -> allowed.
     started = asyncio.run(service.start_session("PC-STD", rate_id=standard_5))

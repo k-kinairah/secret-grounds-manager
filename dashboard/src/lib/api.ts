@@ -1,5 +1,6 @@
 import type {
   BillingSummary,
+  CalculatedTimeResponse,
   CashierShiftDetail,
   CashierShiftRecord,
   AdminSettings,
@@ -649,7 +650,6 @@ export async function updatePcMacAddress(
 export async function sendPcMessage(
   pcName: string,
   input: {
-    title: string;
     message: string;
     severity: MessageSeverity;
     duration_seconds?: number;
@@ -706,7 +706,6 @@ export async function setCurrentOperator(operatorId: string): Promise<{ operator
 }
 
 export async function broadcastAnnouncement(input: {
-  title: string;
   message: string;
   severity: MessageSeverity;
   duration_seconds?: number;
@@ -812,6 +811,14 @@ export async function fetchMemberVipPreview(
     `${getApiBaseUrl()}/members/${memberId}/vip-preview?${query.toString()}`,
     { cache: "no-store" }
   );
+}
+
+export async function fetchCalculatedTime(amount: string): Promise<CalculatedTimeResponse> {
+  return requestJson<CalculatedTimeResponse>(`${getApiBaseUrl()}/rates/calculate-time`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ amount })
+  });
 }
 
 export async function fetchSessionBalanceSource(sessionId: string): Promise<SessionBalanceSourceProjection> {

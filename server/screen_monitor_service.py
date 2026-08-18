@@ -1,3 +1,4 @@
+import itertools
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -51,6 +52,59 @@ class ScreenMonitorService:
     def __init__(self) -> None:
         self._frames: dict[str, StoredFrame] = {}
         self._last_upload_monotonic: dict[str, float] = {}
+        # Connection ownership, in-memory only: each /ws/screens/{pc_name}
+        # connection gets a unique token when it connects, and is the
+        # "current owner" for that pc_name until a newer connection takes
+        # over. This closes the race where an old connection's cleanup
+        # (on disconnect, or a stray late frame) could stomp on a newer
+        # connection's already-uploaded frame -- see acquire_connection,
+        # store_frame_if_owner, and release_connection below. Never
+        # persisted; a restart simply drops all ownership along with the
+        # (already in-memory-only) frame cache.
+        self._owner_tokens: dict[str, int] = {}
+        self._next_token = itertools.count(1)
+
+    def acquire_connection(self, pc_name: str) -> int:
+        """Register a new screen connection as pc_name's current owner,
+        superseding whatever connection (if any) held that spot before.
+        Returns the fresh token the caller must present to store frames or
+        release ownership on disconnect."""
+        token = next(self._next_token)
+        self._owner_tokens[pc_name] = token
+        return token
+
+    def is_current_owner(self, pc_name: str, token: int) -> bool:
+        return self._owner_tokens.get(pc_name) == token
+
+    def store_frame_if_owner(
+        self,
+        pc_name: str,
+        token: int,
+        content_type: str,
+        data: bytes,
+        sequence: int | None = None,
+    ) -> StoredFrame:
+        """Same as store_frame, except a connection that has been
+        superseded by a newer one for this pc_name is rejected (409)
+        before ever reaching validate_upload/store -- an old, still-open
+        socket can never overwrite a newer connection's frame."""
+        if not self.is_current_owner(pc_name, token):
+            raise HTTPException(
+                status_code=409,
+                detail="Screen connection superseded by a newer connection for this PC",
+            )
+        return self.store_frame(pc_name, content_type, data, sequence)
+
+    def release_connection(self, pc_name: str, token: int) -> None:
+        """Disconnect-time cleanup for one specific connection: clears the
+        frame and ownership only if `token` is still the current owner. A
+        superseded connection disconnecting later (its own cleanup running
+        after a newer connection already took over) is a no-op -- it must
+        never clear the newer connection's frame."""
+        if not self.is_current_owner(pc_name, token):
+            return
+        self.clear_frame(pc_name)
+        self._owner_tokens.pop(pc_name, None)
 
     def validate_upload(self, pc_name: str, content_type: str, byte_size: int) -> None:
         if content_type not in ALLOWED_FRAME_CONTENT_TYPES:

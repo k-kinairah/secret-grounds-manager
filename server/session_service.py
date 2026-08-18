@@ -13,6 +13,7 @@ from server.billing_service import calculate_open_time_estimate
 from server.income_attribution import sweep_pending_purchases_for_member
 from server.payment_repository import PaymentRepository
 from server.pc_layout_repository import IncomeGroupRepository, PCLayoutRepository
+from server.rate_calculator import calculate_metered_time
 from server.rate_eligibility import validate_rate_for_station_and_context
 from server.rate_repository import RateRepository
 from server.schemas import (
@@ -175,17 +176,26 @@ class SessionService:
             return rate.duration_seconds, rate.rate_id, rate.name, rate.price
 
         if amount is not None:
-            # Enter Amount relied on the active metered rate purely as a
-            # money-to-time conversion table. Metered/Open Time pricing is
-            # permanently retired for active use, so this path is retired
-            # with it -- new sessions must use a package or member balance.
-            raise HTTPException(
-                status_code=410,
-                detail=(
-                    "Enter Amount sessions are no longer offered. "
-                    "Start a package or member-balance session instead."
-                ),
+            # Standard tab: custom-amount sessions convert cash to time via
+            # the shop's single active metered rate, the same conversion
+            # table calculate_time()/get_metered_rate() expose for the
+            # dashboard's live preview. Already normalized/positive by the
+            # request schema's own validator, so no re-validation here.
+            metered_rate = self.rate_repository.get_active_metered_rate()
+            if metered_rate is None:
+                raise HTTPException(status_code=409, detail="No active metered rate is configured")
+            # Same station/eligibility choke point as the rate_id branch
+            # above -- a VIP station must never be silently priced off the
+            # Standard metered rate just because a caller sent `amount`.
+            validate_rate_for_station_and_context(
+                metered_rate,
+                is_vip_station=is_vip_station,
+                is_member_context=False,
+                now_utc=current_utc_time(),
+                timezone_name=get_runtime_shop_timezone_display(),
             )
+            calculated = calculate_metered_time(amount, metered_rate)
+            return calculated.duration_seconds, None, metered_rate.name, amount
 
         if custom_seconds is None or custom_seconds <= 0:
             raise HTTPException(

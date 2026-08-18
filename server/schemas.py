@@ -417,14 +417,26 @@ class PowerCommandRequest(BaseModel):
     confirm: bool = False
 
 
+CANONICAL_MESSAGE_TITLE = "SECRET GROUNDS"
+
+
 class MessageCommandRequest(BaseModel):
-    title: str = Field(..., min_length=1, max_length=80)
+    # title is never trusted from the caller -- every cashier-to-customer
+    # message is branded as the shop itself, never a cashier-chosen or
+    # spoofable sender name, so it is unconditionally overridden below
+    # regardless of what (if anything) the dashboard/API sends.
+    title: str = CANONICAL_MESSAGE_TITLE
     message: str = Field(..., min_length=1, max_length=500)
     severity: MessageSeverity = "info"
     duration_seconds: int | None = Field(default=None, ge=5, le=3600)
     require_acknowledgement: bool = False
 
-    @field_validator("title", "message")
+    @field_validator("title", mode="before")
+    @classmethod
+    def enforce_canonical_title(cls, _value: object) -> str:
+        return CANONICAL_MESSAGE_TITLE
+
+    @field_validator("message")
     @classmethod
     def clean_message_text(cls, value: str) -> str:
         cleaned = " ".join(value.replace("\x00", "").split())

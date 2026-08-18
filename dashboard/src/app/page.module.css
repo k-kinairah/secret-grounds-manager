@@ -634,7 +634,22 @@
   align-items: start;
   display: grid;
   gap: 14px;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 400px);
+  grid-template-columns: minmax(340px, 400px) minmax(0, 1fr);
+}
+
+/* Visual-only reorder: DOM order stays unchanged (PC grid section, then
+   the details rail aside), which is what mobile stacking and tab order
+   still follow -- `order` only flips which one appears in the left vs.
+   right grid column on desktop, without touching markup or either
+   column's width. Reset to the default order at the 900px breakpoint
+   below, where the grid collapses to a single column and must go back
+   to stacking in plain document order. */
+.pcGrid {
+  order: 2;
+}
+
+.selectedPcRail {
+  order: 1;
 }
 
 .statusMessage {
@@ -675,15 +690,19 @@
   text-transform: uppercase;
 }
 
+/* Exactly 5 columns on desktop (PC-01..05 / 06..10 / 11..15) -- explicit
+   count, not auto-fill, so the row layout is deterministic regardless of
+   the left panel's exact width. Card size itself is still capped by
+   .monitorScreen's width: min(156px, 100%), so wider columns just
+   distribute the same compact cards evenly, never stretching them. */
 .monitorGrid {
   display: grid;
   gap: 12px 14px;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 176px));
-  justify-content: start;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .monitorTile {
-  align-items: center;
+  align-items: stretch;
   appearance: none;
   background: transparent;
   border: 0;
@@ -709,13 +728,41 @@
   transform: translateY(-2px);
 }
 
-.monitorTile:focus-visible .monitorScreen,
-.monitorTileSelected .monitorScreen {
+.monitorTile:focus-visible .monitorScreen {
   border-color: #f8fafc;
   box-shadow:
     inset 0 0 24px rgb(255 255 255 / 0.08),
     0 0 0 2px rgb(248 250 252 / 0.35),
     0 0 30px rgb(34 211 238 / 0.55);
+}
+
+/* Selection is a separate outer ring (outline), never a border/box-shadow
+   override -- those two properties are what carry each tile's operational
+   color (cyan/pink/red/gray), so overriding them here would hide whether a
+   selected PC is Available/In Use/Low Time/Offline. `outline` paints
+   outside the border box on its own layer and is immune to the
+   operational-state rules below overriding it. */
+.monitorTileSelected .monitorScreen {
+  outline: 3px solid rgb(248 250 252 / 0.85);
+  outline-offset: 3px;
+}
+
+/* .monitorTile's own align-items: stretch does not truly center children
+   that have an explicit (non-auto) width -- per the flexbox spec, stretch
+   falls back to flex-start for those, so .monitorScreen (capped at 156px)
+   and .monitorStand/.monitorBase (fixed 44px/88px) could end up with
+   mismatched left edges instead of shared centers whenever the grid
+   column is wider than the screen's own cap. Grouping them in their own
+   centered flex column fixes that regardless of individual widths, and
+   keeps monitorStatusText (still centered via .monitorTile's own
+   text-align: center) at its original vertical position below.
+*/
+.monitorUnit {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
 }
 
 .monitorScreen {
@@ -724,12 +771,12 @@
   background:
     radial-gradient(circle at 50% 48%, rgb(34 211 238 / 0.06), transparent 56%),
     linear-gradient(145deg, #151922, #080b12 58%, #05070c);
-  border: 1px solid rgb(34 211 238 / 0.78);
+  border: 1px solid rgb(34 211 238 / 0.8);
   border-radius: 5px;
   box-shadow:
     inset 0 0 22px rgb(255 255 255 / 0.04),
-    inset 0 0 40px rgb(34 211 238 / 0.04),
-    0 0 18px rgb(34 211 238 / 0.28);
+    inset 0 0 40px rgb(34 211 238 / 0.05),
+    0 0 22px rgb(34 211 238 / 0.4);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -778,17 +825,6 @@
   z-index: 1;
 }
 
-.monitorStatusLight {
-  border-radius: 999px;
-  bottom: 7px;
-  box-shadow: 0 0 10px currentColor;
-  color: #22d3ee;
-  height: 6px;
-  position: absolute;
-  right: 8px;
-  width: 6px;
-}
-
 .monitorVipBadge,
 .monitorStandardBadge,
 .monitorWarningBadge {
@@ -821,72 +857,6 @@
   right: auto;
 }
 
-.monitorThumbnail {
-  border-radius: 4px;
-  height: 100%;
-  inset: 0;
-  object-fit: cover;
-  opacity: 0.85;
-  position: absolute;
-  width: 100%;
-  z-index: 0;
-}
-
-.monitorThumbnailStale {
-  filter: grayscale(0.65) brightness(0.55);
-}
-
-.monitorStaleOverlay {
-  background: rgb(15 23 42 / 0.72);
-  border-radius: 999px;
-  color: #fbbf24;
-  font-size: 10px;
-  font-weight: 900;
-  left: 50%;
-  letter-spacing: 0.08em;
-  padding: 3px 9px;
-  position: absolute;
-  top: 8px;
-  transform: translateX(-50%);
-  z-index: 1;
-}
-
-.monitorNoImageHint {
-  bottom: 22px;
-  color: rgb(148 163 184 / 0.85);
-  font-size: 9px;
-  font-weight: 700;
-  left: 50%;
-  letter-spacing: 0.03em;
-  position: absolute;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  z-index: 1;
-}
-
-.monitorFrameBadge {
-  border-radius: 999px;
-  bottom: 7px;
-  font-size: 9px;
-  font-weight: 900;
-  left: 7px;
-  letter-spacing: 0.04em;
-  padding: 2px 6px;
-  position: absolute;
-  text-transform: uppercase;
-  z-index: 1;
-}
-
-.monitorFrameBadgeLive {
-  background: rgb(52 211 153 / 0.92);
-  color: #052e1a;
-}
-
-.monitorFrameBadgeError {
-  background: rgb(248 113 113 / 0.92);
-  color: #450a0a;
-}
-
 .monitorStand {
   border-left: 12px solid transparent;
   border-right: 12px solid transparent;
@@ -915,37 +885,27 @@
   text-transform: uppercase;
 }
 
-.monitorTileAvailable .monitorStatusLight {
-  color: #34d399;
-}
-
 .monitorTileActive .monitorScreen {
-  border-color: rgb(59 130 246 / 0.92);
+  border-color: rgb(236 72 153 / 0.92);
   box-shadow:
-    inset 0 0 26px rgb(59 130 246 / 0.08),
-    0 0 24px rgb(59 130 246 / 0.34);
+    inset 0 0 26px rgb(236 72 153 / 0.1),
+    0 0 26px rgb(236 72 153 / 0.4);
 }
 
-.monitorTileActive .monitorStatusLight {
-  color: #60a5fa;
-}
-
+/* Low Time is its own mutually-exclusive state (getPcMonitorPresentation
+   returns "monitorTileLowTime" instead of "monitorTileActive" once a
+   session drops under the threshold), so this never has to fight the pink
+   In Use styling above -- it just needs to be visibly red and stronger. */
 .monitorTileLowTime .monitorScreen {
-  border-color: rgb(251 191 36 / 0.94);
-}
-
-.monitorTileLowTime .monitorStatusLight {
-  color: #fbbf24;
+  border-color: rgb(239 68 68 / 0.96);
+  box-shadow:
+    inset 0 0 28px rgb(239 68 68 / 0.14),
+    0 0 34px rgb(239 68 68 / 0.6);
 }
 
 .monitorTileWarning .monitorScreen,
 .monitorTileGrace .monitorScreen {
   border-color: rgb(251 146 60 / 0.94);
-}
-
-.monitorTileWarning .monitorStatusLight,
-.monitorTileGrace .monitorStatusLight {
-  color: #fb923c;
 }
 
 .monitorTileGrace .monitorScreen,
@@ -958,16 +918,8 @@
   border-color: rgb(251 191 36 / 0.95);
 }
 
-.monitorTileGrace .monitorStatusLight {
-  color: #fbbf24;
-}
-
 .monitorTileSettlement .monitorScreen {
   border-color: rgb(251 146 60 / 0.96);
-}
-
-.monitorTileSettlement .monitorStatusLight {
-  color: #fb923c;
 }
 
 .monitorTileDanger .monitorScreen {
@@ -975,10 +927,6 @@
   box-shadow:
     inset 0 0 22px rgb(244 63 94 / 0.08),
     0 0 18px rgb(244 63 94 / 0.24);
-}
-
-.monitorTileDanger .monitorStatusLight {
-  color: #fb7185;
 }
 
 .monitorTileOffline {
@@ -998,8 +946,19 @@
   text-shadow: none;
 }
 
-.monitorTileOffline .monitorStatusLight {
-  color: #64748b;
+/* The stand's glow follows the same operational color as the screen above
+   it, so the whole monitor reads as one consistent unit rather than a
+   colored screen on a fixed-cyan stand. */
+.monitorTileActive .monitorStand {
+  filter: drop-shadow(0 0 9px rgb(236 72 153 / 0.4));
+}
+
+.monitorTileLowTime .monitorStand {
+  filter: drop-shadow(0 0 11px rgb(239 68 68 / 0.55));
+}
+
+.monitorTileOffline .monitorStand {
+  filter: none;
 }
 
 .monitorTileWaking .monitorScreen {
@@ -1007,19 +966,11 @@
   border-color: rgb(34 211 238 / 0.86);
 }
 
-.monitorTileWaking .monitorStatusLight {
-  color: #22d3ee;
-}
-
 .monitorTileLocked .monitorScreen {
   border-color: rgb(168 85 247 / 0.92);
   box-shadow:
     inset 0 0 26px rgb(168 85 247 / 0.08),
     0 0 24px rgb(168 85 247 / 0.3);
-}
-
-.monitorTileLocked .monitorStatusLight {
-  color: #c084fc;
 }
 
 .emptyState,
@@ -1537,11 +1488,21 @@
   align-items: center;
   animation: fadeIn 140ms ease-out;
   background: rgb(15 23 42 / 0.54);
+  bottom: 0;
   display: flex;
-  inset: 0;
   justify-content: center;
+  left: 0;
   padding: 24px;
   position: fixed;
+  right: 0;
+  /* Starts below the sticky nav (--global-header-height) instead of
+     `inset: 0`, which used to cover the whole viewport -- z-index alone
+     put the dialog visually above the nav rather than avoiding it, so the
+     modal always rendered underneath/behind the header. Centering (via
+     align-items/justify-content above) now happens within this reduced
+     area, so the dialog centers beneath the header rather than in the
+     true viewport center. */
+  top: var(--global-header-height);
   z-index: var(--z-modal-backdrop);
 }
 
@@ -1551,13 +1512,60 @@
   border: 1px solid rgb(255 255 255 / 0.9);
   border-radius: 8px;
   box-shadow: 0 24px 70px rgb(15 23 42 / 0.28);
-  max-height: calc(100vh - 48px);
+  /* Available height is the viewport minus the nav bar minus the
+     overlay's own 24px top+bottom padding (48px total) -- only this
+     element scrolls internally past that; the header/close stay put. */
+  max-height: calc(100vh - var(--global-header-height) - 48px);
   max-width: 640px;
   overflow: auto;
-  padding: 24px;
+  padding: 20px;
   position: relative;
   width: 100%;
   z-index: var(--z-modal);
+}
+
+/* Start Session/Add Time dialog only: splits the shared .dialog frame
+   into a fixed header (title), a scrollable body (everything else), and
+   a fixed footer (validation + Cancel/Confirm) -- so a tall Standard/
+   Member selection never scrolls the title or action buttons out of
+   view. Other dialogs keep the plain single-scroll .dialog behavior
+   above; this only applies where .sessionDialogFrame is also present. */
+.sessionDialogFrame {
+  display: flex;
+  flex-direction: column;
+  /* Narrower than the shared .dialog's 640px -- this modal's content
+     (amount input/chips, compact VIP buttons, payment fields) never
+     needed the wider default, and the extra width just added dead
+     space. */
+  max-width: 600px;
+  overflow: hidden;
+  padding: 0;
+}
+
+.sessionDialogHeader {
+  flex-shrink: 0;
+  padding: 14px 18px 0;
+}
+
+.sessionDialogBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 18px 14px;
+}
+
+.sessionDialogFooter {
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+  padding: 12px 18px;
+}
+
+.sessionDialogFooter .formError {
+  margin-bottom: 12px;
+}
+
+.sessionDialogFooter .dialogActions {
+  margin: 0;
 }
 
 .sidePanel {
@@ -1901,9 +1909,9 @@
 
 .optionGrid {
   display: grid;
-  gap: 14px;
+  gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
 
 .tabList {
@@ -1913,7 +1921,7 @@
   display: grid;
   gap: 6px;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  margin-bottom: 18px;
+  margin-bottom: 14px;
   padding: 5px;
 }
 
@@ -2000,13 +2008,82 @@
   background: #dbeafe;
 }
 
+.standardAmountPanel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+/* Amount input + its quick-amount chips read as one tight group (8-12px
+   apart) -- .field's own global margin-bottom is overridden to 0 here so
+   this grid's own gap is the only thing controlling that spacing. */
+.standardAmountInputGroup {
+  display: grid;
+  gap: 10px;
+}
+
+.standardAmountInputGroup .field {
+  margin-bottom: 0;
+}
+
+.vipModeHeading {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+/* Small suggestion chips (₱5/₱10/₱15/₱20/...) that fill the Amount field
+   -- never full-size .rateOption cards. Base layout wraps compactly (used
+   as-is for VIP's 5 price-point buttons); .amountChipGrid below forces a
+   strict 4-column/2-row grid for Standard's 8 amounts instead. */
+.amountChipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.amountChipGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.amountChip {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 900;
+  min-height: 38px;
+  padding: 0 16px;
+  text-align: center;
+}
+
+.amountChip:hover {
+  background: #dbeafe;
+}
+
+.amountChip:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 2px;
+}
+
+.amountChipRow .amountChipSelected {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+
 .amountPreview {
   background: #f8fafc;
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
   gap: 7px;
-  padding: 16px;
+  padding: 14px;
 }
 
 .amountPreview span {
@@ -2041,6 +2118,67 @@
   text-transform: none;
 }
 
+.memberResultList {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.memberResultItem {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.memberResultItem:hover {
+  border-color: #93c5fd;
+}
+
+.memberResultItem strong {
+  font-size: 13px;
+}
+
+.memberResultItem span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memberCard {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.memberCardHeader {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.memberCardHeader > div {
+  display: grid;
+  gap: 2px;
+}
+
+.memberCardHeader strong {
+  font-size: 15px;
+}
+
+.memberCardHeader span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .paymentSummary {
   align-items: center;
   background: #f8fafc;
@@ -2057,8 +2195,8 @@
   background: #f8fafc;
   border: 1px solid var(--line);
   border-radius: 8px;
-  margin-bottom: 18px;
-  padding: 16px;
+  margin-bottom: 14px;
+  padding: 14px;
 }
 
 .paymentSummary span {
@@ -2135,8 +2273,8 @@
   border-radius: 8px;
   display: grid;
   gap: 10px;
-  min-height: 148px;
-  padding: 18px;
+  min-height: 132px;
+  padding: 14px;
   text-align: left;
 }
 
@@ -2195,10 +2333,17 @@
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 11px 12px;
+}
+
+.field textarea {
+  font-family: inherit;
+  min-height: 72px;
+  resize: vertical;
 }
 
 .formError {
@@ -2292,6 +2437,11 @@
 @media (max-width: 900px) {
   .dashboardWorkspace {
     grid-template-columns: 1fr;
+  }
+
+  .pcGrid,
+  .selectedPcRail {
+    order: 0;
   }
 
   .selectedPcRail {
@@ -2419,7 +2569,9 @@
 .detailRow strong,
 .amountPreview strong,
 .paymentSummary strong,
-.rateTitle {
+.rateTitle,
+.memberResultItem strong,
+.memberCardHeader strong {
   color: var(--text);
 }
 
@@ -2432,7 +2584,9 @@
 .paymentBox,
 .dialog,
 .amountPreview,
-.indicator {
+.indicator,
+.memberResultItem,
+.memberCard {
   background: linear-gradient(180deg, rgba(17, 27, 45, 0.96), rgba(8, 17, 31, 0.96));
   border-color: var(--line);
 }
@@ -2602,16 +2756,26 @@
 }
 
 .quickAmountRow button,
-.rateOption {
+.rateOption,
+.amountChip {
   background: rgba(8, 17, 31, 0.82);
   border-color: rgba(56, 189, 248, 0.2);
   color: #bfdbfe;
 }
 
 .quickAmountRow button:hover,
-.rateOption:hover {
+.rateOption:hover,
+.amountChip:hover,
+.memberResultItem:hover {
   background: rgba(14, 165, 233, 0.13);
   border-color: rgba(34, 211, 238, 0.45);
+}
+
+.amountChipRow .amountChipSelected {
+  background: rgba(14, 165, 233, 0.18);
+  border-color: #22d3ee;
+  box-shadow: 0 0 0 3px rgb(34 211 238 / 0.12), 0 0 28px rgb(14 165 233 / 0.16);
+  color: var(--text);
 }
 
 .rateOptionSelected {
@@ -2633,19 +2797,22 @@
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   background: #08111f;
   border-color: rgba(56, 189, 248, 0.22);
   color: var(--text);
 }
 
-.field input::placeholder {
+.field input::placeholder,
+.field textarea::placeholder {
   color: #7f92b0;
   opacity: 1;
 }
 
 .field input:focus,
-.field select:focus {
+.field select:focus,
+.field textarea:focus {
   border-color: #22d3ee;
   box-shadow: 0 0 0 3px rgb(34 211 238 / 0.16);
   outline: none;

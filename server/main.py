@@ -164,6 +164,7 @@ from server.prepared_session_repository import PreparedSessionRepository
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
+from server.rate_calculator import calculate_metered_time
 from server.rate_repository import RateRepository
 from server.screen_monitor_service import ScreenMonitorService, sniff_image_content_type
 from server.settings import SCREEN_MONITORING_ENABLED
@@ -2201,6 +2202,12 @@ async def screen_upload_websocket(websocket: WebSocket, pc_name: str) -> None:
 
     await websocket.accept()
     print(f"Screen WebSocket connected: pc_name={cleaned_pc_name}")
+    # This connection becomes cleaned_pc_name's current owner, superseding
+    # whatever connection held that spot before -- every frame store and
+    # the eventual disconnect cleanup below are gated on still holding
+    # this exact token, so a superseded old connection can never stomp on
+    # a newer one's frame (store rejected 409, disconnect cleanup no-ops).
+    connection_token = screen_monitor_service.acquire_connection(cleaned_pc_name)
     pending_sequence: int | None = None
 
     try:
@@ -2238,7 +2245,9 @@ async def screen_upload_websocket(websocket: WebSocket, pc_name: str) -> None:
                 continue
 
             try:
-                frame = screen_monitor_service.store_frame(cleaned_pc_name, content_type, data, sequence)
+                frame = screen_monitor_service.store_frame_if_owner(
+                    cleaned_pc_name, connection_token, content_type, data, sequence
+                )
             except HTTPException as error:
                 await websocket.send_json({"type": "frame_rejected", "reason": error.detail})
                 continue
@@ -2254,7 +2263,9 @@ async def screen_upload_websocket(websocket: WebSocket, pc_name: str) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        screen_monitor_service.clear_frame(cleaned_pc_name)
+        # No-ops if a newer connection already superseded this one --
+        # only the still-current owner's disconnect may clear the frame.
+        screen_monitor_service.release_connection(cleaned_pc_name, connection_token)
         print(f"Screen WebSocket disconnected: pc_name={cleaned_pc_name}")
 
 
@@ -3544,14 +3555,10 @@ def get_rates(
 def get_metered_rate(
     _: object = Depends(require_role("cashier")),
 ) -> RateProfile:
-    # Metered/Open Time customer operation is permanently retired. Existing
-    # metered rate rows remain in the database for historical session
-    # settlement (see compute_open_time_final_amount), but are no longer
-    # exposed for active/normal use through this endpoint.
-    raise HTTPException(
-        status_code=410,
-        detail="Metered/Open Time rate lookup is permanently retired.",
-    )
+    rate = rate_repository.get_active_metered_rate()
+    if rate is None:
+        raise HTTPException(status_code=404, detail="No active metered rate is configured.")
+    return rate
 
 
 @app.post("/rates/calculate-time")
@@ -3559,14 +3566,10 @@ def calculate_time(
     request: CalculateTimeRequest,
     _: object = Depends(require_role("cashier")),
 ) -> CalculatedTimeResponse:
-    # Enter Amount / metered-rate time calculation is permanently retired.
-    raise HTTPException(
-        status_code=410,
-        detail=(
-            "Enter Amount sessions are no longer offered. "
-            "Start a package or member-balance session instead."
-        ),
-    )
+    rate = rate_repository.get_active_metered_rate()
+    if rate is None:
+        raise HTTPException(status_code=404, detail="No active metered rate is configured.")
+    return calculate_metered_time(request.amount, rate)
 
 
 @app.post("/rates", response_model=RateProfile)

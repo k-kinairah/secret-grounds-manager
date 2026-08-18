@@ -23,12 +23,12 @@ export function EndSessionDialog({
         className={styles.dialog}
         role="dialog"
         aria-modal="true"
-        aria-label={`End ${pc.pc_name} session`}
+        aria-label={`End ${pc.display_name ?? pc.pc_name} session`}
       >
         <h2>{recoveryMode ? "Resolve Session" : "End Session"}</h2>
         <p>
           {recoveryMode ? "Force-end the unresolved session on " : "End the current session on "}
-          <strong>{pc.pc_name}</strong>?
+          <strong>{pc.display_name ?? pc.pc_name}</strong>?
         </p>
         {recoveryMode ? (
           <p>
