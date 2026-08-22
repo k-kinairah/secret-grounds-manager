@@ -814,6 +814,13 @@ class StartSessionRequest(BaseModel):
 
 class PrepaidStartSessionRequest(StartSessionRequest):
     payment: "PaymentCreateRequest"
+    # Optional. When supplied, the server must independently resolve which
+    # promo (if any) applies and reject with 409 if that resolution
+    # doesn't match this exact promo_id -- never a way to force a promo,
+    # only a safety check against a stale quote. Existing callers that
+    # omit this continue to get the server's own automatic best-promo
+    # resolution unchanged.
+    expected_promo_id: str | None = None
 
 
 class AddTimeRequest(BaseModel):
@@ -829,6 +836,8 @@ class AddTimeRequest(BaseModel):
 
 class PrepaidAddTimeRequest(AddTimeRequest):
     payment: "PaymentCreateRequest"
+    # Same contract as PrepaidStartSessionRequest.expected_promo_id.
+    expected_promo_id: str | None = None
 
 
 class MemberSessionStartRequest(BaseModel):
@@ -935,8 +944,12 @@ class OpenTimeEndResponse(BaseModel):
 
 class SessionCommandResponse(BaseModel):
     session: SessionRecord
-    command: ClientCommand
-    acknowledgements: list[CommandAcknowledgement]
+    # Optional only for the idempotent-retry short-circuit (Stage 3B): a
+    # request reusing an already-completed idempotency_key returns the
+    # existing session with no new command, since no new command was ever
+    # sent. Every other path still always returns a real command.
+    command: ClientCommand | None = None
+    acknowledgements: list[CommandAcknowledgement] = Field(default_factory=list)
 
 
 class ForceEndSessionResponse(BaseModel):
@@ -1251,6 +1264,16 @@ class MemberRecord(BaseModel):
     created_by_user_id: str | None = None
     created_at: datetime
     updated_at: datetime
+    # Stage 5: populated ONLY by POST /members's response when a New
+    # Member promo (or the promo-gated payment path) was involved in this
+    # exact creation call -- every other MemberRecord read (list, get,
+    # update, ...) leaves these at their None/0 defaults, since
+    # row_to_member() never sets them. Purely additive: old callers that
+    # only read the pre-existing fields above are completely unaffected.
+    creation_payment: PaymentRecord | None = None
+    creation_applied_promo: "AppliedPromoSummary | None" = None
+    creation_base_seconds: int | None = None
+    creation_benefit_seconds: int | None = None
 
 
 class MemberCreateRequest(BaseModel):
@@ -1260,6 +1283,23 @@ class MemberCreateRequest(BaseModel):
     confirm_pin: str
     phone_number: str | None = None
     expires_at: datetime | None = None
+    # Stage 5: entirely optional, additive fields for the New Member promo
+    # path only. Omitting `amount` preserves the exact pre-Stage-5 bare
+    # account-creation behavior (no payment, no balance, zero balance
+    # member) -- these fields are never consulted at all in that case.
+    # When `amount` is supplied, it is used ONLY to resolve an eligible
+    # New Member promo; no ordinary (non-promo) paid signup path exists
+    # here, so if no promo matches, creation is rejected 409 rather than
+    # silently either dropping the payment or creating a free account.
+    amount: Decimal | None = None
+    payment_method: PaymentMethod | None = None
+    cash_received: Decimal | None = None
+    reference_number: str | None = None
+    notes: str | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
+    # Expectation only, never authority -- see PrepaidStartSessionRequest/
+    # MemberPurchaseRequest for the identical contract.
+    expected_promo_id: str | None = None
 
     @field_validator("username")
     @classmethod
@@ -1276,6 +1316,11 @@ class MemberCreateRequest(BaseModel):
         if pin is None:
             raise ValueError("Member PIN is required")
         return pin
+
+    @field_validator("amount", "cash_received")
+    @classmethod
+    def validate_money_fields(cls, value: Decimal | None) -> Decimal | None:
+        return normalize_positive_money(value) if value is not None else None
 
     @model_validator(mode="after")
     def validate_pin_confirmation(self) -> "MemberCreateRequest":
@@ -1369,6 +1414,11 @@ class MemberPurchaseRequest(BaseModel):
     reference_number: str | None = None
     notes: str | None = None
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
+    # Expectation only, never authority: the server independently resolves
+    # current promo eligibility from scratch. If supplied and no longer the
+    # best eligible promo, the request is rejected 409 before any payment
+    # or balance change. Omitted preserves prior behavior exactly.
+    expected_promo_id: str | None = None
 
     @field_validator("cash_received")
     @classmethod
@@ -1390,6 +1440,7 @@ class MemberTimeTransactionRecord(BaseModel):
     notes: str | None = None
     performed_by_user_id: str | None = None
     created_at: datetime
+    promo_redemption_id: str | None = None
 
 
 class MemberPurchaseResponse(BaseModel):
@@ -1397,6 +1448,14 @@ class MemberPurchaseResponse(BaseModel):
     product: MembershipProductRecord
     payment: PaymentRecord
     transaction: MemberTimeTransactionRecord
+    # Additive, minimal Stage 4 extension -- old callers and non-promo
+    # purchases are unaffected (applied_promo stays None, bonus_seconds
+    # stays 0, base_seconds/total_seconds_credited both equal the ordinary
+    # product time_seconds exactly as before).
+    applied_promo: "AppliedPromoSummary | None" = None
+    base_seconds: int = 0
+    bonus_seconds: int = 0
+    total_seconds_credited: int = 0
 
 
 class MemberPurchaseRefundRequest(BaseModel):
@@ -1421,6 +1480,13 @@ class MemberPurchaseRefundResponse(BaseModel):
     member: MemberRecord
     payment: PaymentRecord
     reversal_transaction: MemberTimeTransactionRecord
+    # Additive, minimal Stage 4 extension -- old callers and non-promo
+    # refunds are unaffected (applied_promo stays None, bonus_seconds
+    # stays 0).
+    applied_promo: "AppliedPromoSummary | None" = None
+    base_seconds: int = 0
+    bonus_seconds: int = 0
+    total_seconds_reversed: int = 0
 
 
 class UserPublic(BaseModel):
@@ -1677,3 +1743,254 @@ class UserStatusUpdate(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     password: str = Field(..., min_length=8)
+
+
+# --- Promo Maker (Stage 1: schema/repository/audit only) -------------------
+#
+# owner_state is the only value ever persisted (draft/enabled/disabled/
+# ended). Draft/Scheduled/Active/Ended/Disabled is a *display* value,
+# derived at read time by server/promo_status.py's derive_promo_status() and
+# never written to the database -- see the `status` field on Promo below.
+
+PromoAudience = Literal["standard", "vip", "member_topup", "new_member"]
+PromoOwnerState = Literal["draft", "enabled", "disabled", "ended"]
+PromoDisplayStatus = Literal["Draft", "Scheduled", "Active", "Ended", "Disabled"]
+PromoAmountMode = Literal["exact", "minimum"]
+PromoStationScope = Literal["standard", "vip"]
+PromoAppliesTo = Literal["start_session", "add_time", "both"]
+PromoAuditAction = Literal["created", "updated", "enabled", "disabled", "ended", "reactivated"]
+
+
+def _validate_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        raise ValueError("Datetime must be timezone-aware (canonical UTC)")
+    return value
+
+
+class PromoFields(BaseModel):
+    """Shared editable fields + cross-field validation for create/update.
+
+    Validation here is defense in depth alongside the DB CHECK constraints
+    in server/database.py -- not a replacement for them.
+    """
+
+    name: str = Field(..., min_length=1)
+    audience: PromoAudience
+    amount_mode: PromoAmountMode = "exact"
+    price: Decimal
+    granted_seconds: int = Field(..., gt=0)
+    station_scope: PromoStationScope | None = None
+    applies_to: PromoAppliesTo | None = None
+    starts_at: datetime
+    ends_at: datetime
+    priority: int = 0
+    per_member_redemption_limit: int | None = Field(default=None, gt=0)
+    total_redemption_limit: int | None = Field(default=None, gt=0)
+
+    @field_validator("price")
+    @classmethod
+    def validate_price(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+    @field_validator("starts_at", "ends_at")
+    @classmethod
+    def validate_utc(cls, value: datetime) -> datetime:
+        return _validate_utc_datetime(value)
+
+    @model_validator(mode="after")
+    def validate_cross_fields(self) -> "PromoFields":
+        if self.ends_at <= self.starts_at:
+            raise ValueError("ends_at must be later than starts_at")
+
+        if self.audience in ("standard", "vip"):
+            expected_scope = self.audience
+            if self.station_scope != expected_scope:
+                raise ValueError(f"{self.audience} promos must have station_scope='{expected_scope}'")
+            if self.applies_to is None:
+                raise ValueError(f"{self.audience} promos require applies_to")
+        else:
+            # member_topup / new_member
+            if self.station_scope is not None:
+                raise ValueError(f"{self.audience} promos must not set station_scope")
+            if self.applies_to is not None:
+                raise ValueError(f"{self.audience} promos must not set applies_to")
+
+        if self.audience != "member_topup" and self.per_member_redemption_limit is not None:
+            # standard/vip: no member identity exists on a walk-in cash
+            # redemption. new_member: meaningless -- the member doesn't
+            # exist until this exact redemption creates them, so there is
+            # no prior identity to count a per-member limit against.
+            raise ValueError(f"per_member_redemption_limit is not allowed for {self.audience} promos")
+
+        if self.amount_mode == "minimum" and self.audience != "member_topup":
+            raise ValueError("amount_mode='minimum' is only valid for member_topup promos")
+
+        return self
+
+
+class PromoCreate(PromoFields):
+    """created_by_user_id is deliberately absent -- it is taken from the
+    authenticated owner by the (future) API layer, never from client input."""
+
+
+class PromoUpdate(PromoFields):
+    """Same shape as create. Never touches promo_redemptions -- a promo's
+    already-recorded redemptions keep their own frozen *_snapshot columns
+    regardless of later edits here."""
+
+
+class PromoStateTransition(BaseModel):
+    owner_state: Literal["enabled", "disabled", "ended"]
+    # Required only when reactivating (owner_state="enabled" while the
+    # promo's current stored state is "ended") -- validated in
+    # PromoRepository.transition_state, not here, since that depends on
+    # the promo's current persisted state.
+    ends_at: datetime | None = None
+
+    @field_validator("ends_at")
+    @classmethod
+    def validate_utc(cls, value: datetime | None) -> datetime | None:
+        return value if value is None else _validate_utc_datetime(value)
+
+
+class Promo(BaseModel):
+    """API-facing representation: owner_state is the stored value; status
+    is derived fresh on every read (see server/promo_status.py) and is
+    never itself persisted."""
+
+    promo_id: str
+    name: str
+    audience: PromoAudience
+    owner_state: PromoOwnerState
+    status: PromoDisplayStatus
+    amount_mode: PromoAmountMode
+    price: Decimal
+    granted_seconds: int
+    station_scope: PromoStationScope | None
+    applies_to: PromoAppliesTo | None
+    starts_at: datetime
+    ends_at: datetime
+    priority: int
+    per_member_redemption_limit: int | None
+    total_redemption_limit: int | None
+    created_by_user_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+PromoQuoteAction = Literal["start_session", "add_time"]
+PromoQuoteSourceType = Literal["normal_rate", "normal_package", "promo", "none"]
+
+
+class PromoQuoteRequest(BaseModel):
+    pc_name: str = Field(..., min_length=1)
+    action: PromoQuoteAction
+    amount: Decimal
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+
+class PromoQuoteResponse(BaseModel):
+    """Advisory only -- see server/promo_session_integration.py. The final
+    Start Session/Add Time submission always independently re-resolves;
+    nothing here (including promo_id) is trusted back from the client."""
+
+    pc_name: str
+    action: PromoQuoteAction
+    amount: Decimal
+    station_scope: PromoStationScope
+    base_seconds: int | None
+    final_seconds: int | None
+    benefit_seconds: int
+    source_type: PromoQuoteSourceType
+    promo_id: str | None
+    promo_name: str | None
+    quoted_at: datetime
+
+
+class AppliedPromoSummary(BaseModel):
+    """What a session/billing response exposes about a claimed redemption
+    -- built entirely from the promo_redemptions snapshot, never from the
+    live (possibly since-edited) promos row. Existing rate_id/
+    rate_name_snapshot fields on SessionRecord are untouched by this;
+    this is purely additive."""
+
+    redemption_id: str
+    promo_id: str
+    promo_name_snapshot: str
+    audience_snapshot: PromoAudience
+    granted_seconds_snapshot: int
+    price_snapshot: Decimal
+    voided_at: datetime | None
+
+
+class PromoAuditEvent(BaseModel):
+    event_id: str
+    promo_id: str
+    action: PromoAuditAction
+    old_values: dict[str, object] | None
+    new_values: dict[str, object] | None
+    performed_by_user_id: str | None
+    created_at: datetime
+
+
+class MemberTopupPromoQuoteRequest(BaseModel):
+    """Input identifies the selected membership product only -- price/
+    seconds/promo are all server-resolved, never client-supplied."""
+
+    product_id: str = Field(..., min_length=1)
+
+
+class MemberTopupPromoQuoteResponse(BaseModel):
+    """Advisory only, same contract as PromoQuoteResponse: no database
+    writes, no redemption-slot reservation. The real purchase submission
+    always independently re-resolves eligibility from scratch."""
+
+    product_id: str
+    product_name: str
+    product_price: Decimal
+    base_seconds: int
+    promo_id: str | None
+    promo_name: str | None
+    bonus_seconds: int
+    total_seconds: int
+    promo_ends_at: datetime | None
+    quoted_at: datetime
+
+
+NewMemberPromoSourceType = Literal["normal_product", "promo"]
+
+
+class NewMemberPromoQuoteRequest(BaseModel):
+    """Input is the exact amount being paid at account creation -- no
+    username/PIN/member fields, since this is advisory only and never
+    creates or reserves anything."""
+
+    amount: Decimal
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+
+class NewMemberPromoQuoteResponse(BaseModel):
+    """Advisory only, same contract as PromoQuoteResponse/
+    MemberTopupPromoQuoteResponse: no database writes, no username/member
+    validation, no redemption-slot reservation. The real account-creation
+    submission always independently re-resolves eligibility from scratch."""
+
+    amount: Decimal
+    normal_product_id: str | None
+    normal_product_name: str | None
+    normal_seconds: int | None
+    promo_id: str | None
+    promo_name: str | None
+    final_seconds: int
+    benefit_seconds: int
+    promo_ends_at: datetime | None
+    quoted_at: datetime
+    source_type: NewMemberPromoSourceType

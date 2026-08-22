@@ -187,7 +187,13 @@ class PaymentRepository:
         payment_id: str,
         voided_by_user_id: str | None,
         reason: str,
+        connection: sqlite3.Connection | None = None,
     ) -> PaymentRecord | None:
+        """When `connection` is supplied, the update joins the caller's
+        transaction (no commit/close here) -- same pattern as
+        create_payment, used so a payment void and its linked promo
+        redemption void can be made atomic together (see
+        billing_service.void_payment)."""
         existing = self.get_payment(payment_id)
         if existing is None:
             return None
@@ -203,8 +209,9 @@ class PaymentRepository:
                 "void_reason": reason,
             }
         )
-        with get_connection() as connection:
-            connection.execute(
+
+        def _update(active_connection: sqlite3.Connection) -> None:
+            active_connection.execute(
                 """
                 UPDATE payments
                 SET status = 'voided', voided_by_user_id = ?, voided_at = ?, void_reason = ?
@@ -212,6 +219,12 @@ class PaymentRepository:
                 """,
                 (voided_by_user_id, now.isoformat(), reason, payment_id),
             )
+
+        if connection is not None:
+            _update(connection)
+        else:
+            with get_connection() as owned_connection:
+                _update(owned_connection)
 
         return updated
 

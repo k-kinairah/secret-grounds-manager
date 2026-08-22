@@ -72,8 +72,12 @@ from server.schemas import (
     MemberSessionStartRequest,
     MemberStatusUpdate,
     MemberTimeTransactionRecord,
+    MemberTopupPromoQuoteRequest,
+    MemberTopupPromoQuoteResponse,
     MemberUpdateRequest,
     MemberVipPlayablePreview,
+    NewMemberPromoQuoteRequest,
+    NewMemberPromoQuoteResponse,
     PasswordResetRequest,
     PreparedSessionResponse,
     PreparedSessionStartRequest,
@@ -133,9 +137,12 @@ from server.schemas import (
     UserRecord,
     UserStatusUpdate,
     UserUpdateRequest,
+    PromoQuoteRequest,
+    PromoQuoteResponse,
 )
 from server.admin_settings_service import AdminSettingsService
 from server.balance_conversion import split_vip_session
+from server.promo_quote_service import build_promo_quote
 from server.auth import (
     AUTH_COOKIE_NAME,
     auth_session_repository,
@@ -788,6 +795,18 @@ def get_session_balance_source(
     return session_service.get_balance_source_projection(session_id)
 
 
+@app.post("/members/new-member-promo-quote", response_model=NewMemberPromoQuoteResponse)
+def quote_new_member_promo(
+    request: NewMemberPromoQuoteRequest,
+    _: object = Depends(require_role("cashier")),
+) -> NewMemberPromoQuoteResponse:
+    """Advisory only -- no database writes, no username/member validation,
+    no redemption-slot reservation. The real POST /members submission
+    always independently re-resolves eligibility from scratch; nothing
+    here (including promo_id) is ever trusted back from the client."""
+    return member_repository.quote_new_member_promo(request.amount)
+
+
 @app.post("/members", response_model=MemberRecord)
 def create_member(
     request: MemberCreateRequest,
@@ -851,6 +870,19 @@ def get_member_ledger(
     if member_repository.get_member(member_id) is None:
         raise HTTPException(status_code=404, detail="Member not found")
     return member_repository.list_ledger(member_id)
+
+
+@app.post("/members/{member_id}/promo-quote", response_model=MemberTopupPromoQuoteResponse)
+def quote_member_topup_promo(
+    member_id: str,
+    request: MemberTopupPromoQuoteRequest,
+    _: object = Depends(require_role("cashier")),
+) -> MemberTopupPromoQuoteResponse:
+    """Advisory only -- no database writes, no redemption-slot reservation.
+    The real purchase submission (POST /members/{member_id}/purchase)
+    always independently re-resolves eligibility from scratch; nothing
+    here (including promo_id) is ever trusted back from the client."""
+    return member_repository.quote_member_topup_promo(member_id, request.product_id)
 
 
 @app.post("/members/{member_id}/purchase", response_model=MemberPurchaseResponse)
@@ -3247,6 +3279,7 @@ async def start_prepaid_session(
         request.rate_id,
         request.amount,
         get_on_duty_actor_user_id(current_user),
+        request.expected_promo_id,
     )
     recovery_flags.pop(response.session.pc_name, None)
     return response
@@ -3431,6 +3464,30 @@ async def add_prepaid_time_to_session(
         request.rate_id,
         request.amount,
         get_on_duty_actor_user_id(current_user),
+        request.expected_promo_id,
+    )
+
+
+@app.post("/sessions/promo-quote", response_model=PromoQuoteResponse)
+def quote_standard_or_vip_promo(
+    request: PromoQuoteRequest,
+    _: object = Depends(require_role("cashier")),
+) -> PromoQuoteResponse:
+    """Advisory only -- see server/promo_session_integration.py. The
+    server independently re-resolves at Start Session/Add Time
+    confirmation time regardless of what this returns; nothing here
+    (including promo_id) is ever trusted back from the client. Never
+    merges into GET /rates -- permanent rates/packages stay a separate,
+    owner-only administered resource."""
+    is_vip_station = session_service.is_vip_pc(request.pc_name.strip())
+    return build_promo_quote(
+        promo_repository=session_service.promo_repository,
+        rate_repository=rate_repository,
+        pc_name=request.pc_name.strip(),
+        is_vip_station=is_vip_station,
+        action=request.action,
+        amount=request.amount,
+        now=current_utc_time(),
     )
 
 

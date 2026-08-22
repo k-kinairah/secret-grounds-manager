@@ -378,11 +378,27 @@ class BillingService:
         if payment.status == "voided":
             raise HTTPException(status_code=409, detail="Payment is already voided")
 
-        voided_payment = self.payment_repository.void_payment(
-            payment_id,
-            actor_user_id,
-            cleaned_reason,
-        )
+        # Atomic with the payment void: if this payment funded a
+        # Standard/VIP promo redemption, void that too and free its
+        # total-limit slot in the same transaction -- a partial state
+        # (payment voided but redemption still counted, or vice versa)
+        # must never be observable. A no-op UPDATE (0 rows) when no
+        # redemption exists for this payment_id, so this runs
+        # unconditionally rather than branching on promo involvement.
+        void_now = current_utc_time()
+        from server.database import get_connection
+        from server.promo_repository import PromoRepository
+
+        with get_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            voided_payment = self.payment_repository.void_payment(
+                payment_id,
+                actor_user_id,
+                cleaned_reason,
+                connection=connection,
+            )
+            PromoRepository().void_redemption_for_payment(connection, payment_id, cleaned_reason, void_now)
+
         if voided_payment is None:
             raise HTTPException(status_code=404, detail="Payment not found")
 

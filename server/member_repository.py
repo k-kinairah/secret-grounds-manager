@@ -19,7 +19,16 @@ from server.income_attribution import (
 from server.payment_repository import PaymentRepository
 from server.passwords import hash_password, verify_password
 from server.pc_layout_repository import IncomeGroupRepository, PCLayoutRepository
+from server.promo_eligibility import select_best_promo
+from server.promo_member_topup_service import (
+    build_member_topup_quote,
+    claim_member_topup_promo,
+    is_member_topup_promo_eligible,
+)
+from server.promo_new_member_service import build_new_member_promo_quote, claim_new_member_promo
+from server.promo_repository import PromoRepository
 from server.schemas import (
+    AppliedPromoSummary,
     MemberCreateRequest,
     MemberPurchaseRefundRequest,
     MemberPurchaseRefundResponse,
@@ -31,7 +40,9 @@ from server.schemas import (
     MembershipProductUpdate,
     MemberStatusUpdate,
     MemberTimeTransactionRecord,
+    MemberTopupPromoQuoteResponse,
     MemberUpdateRequest,
+    NewMemberPromoQuoteResponse,
     PaymentCreateRequest,
     PaymentRecord,
     UserRecord,
@@ -122,6 +133,7 @@ def row_to_transaction(row: Any) -> MemberTimeTransactionRecord:
         notes=row["notes"],
         performed_by_user_id=row["performed_by_user_id"],
         created_at=datetime.fromisoformat(row["created_at"]),
+        promo_redemption_id=row["promo_redemption_id"] if "promo_redemption_id" in row.keys() else None,
     )
 
 
@@ -135,12 +147,14 @@ class MemberRepository:
         session_repository: SessionRepository | None = None,
         pc_layout_repository: PCLayoutRepository | None = None,
         income_group_repository: IncomeGroupRepository | None = None,
+        promo_repository: PromoRepository | None = None,
     ) -> None:
         self.payment_repository = payment_repository
         self.shift_repository = shift_repository
         self.session_repository = session_repository or SessionRepository()
         self.pc_layout_repository = pc_layout_repository or PCLayoutRepository()
         self.income_group_repository = income_group_repository or IncomeGroupRepository()
+        self.promo_repository = promo_repository or PromoRepository()
 
     def list_members(self, query: str | None = None) -> list[MemberRecord]:
         search = f"%{(query or '').strip()}%"
@@ -257,6 +271,18 @@ class MemberRepository:
         request: MemberCreateRequest,
         actor: UserRecord | None,
     ) -> MemberRecord:
+        if request.amount is None:
+            # Exact pre-Stage-5 behavior, byte-for-byte unchanged: no
+            # payment, no balance, zero-balance member. Every promo/payment
+            # field on MemberCreateRequest is simply never consulted.
+            return self._create_member_plain(request, actor)
+        return self._create_member_with_new_member_promo(request, actor)
+
+    def _create_member_plain(
+        self,
+        request: MemberCreateRequest,
+        actor: UserRecord | None,
+    ) -> MemberRecord:
         now = current_utc_time()
         username = request.username.strip()
         username_normalized = normalize_username(username)
@@ -328,6 +354,199 @@ class MemberRepository:
             except sqlite3.IntegrityError as error:
                 raise HTTPException(status_code=409, detail="Username already exists") from error
         return member
+
+    def quote_new_member_promo(self, amount: Decimal) -> NewMemberPromoQuoteResponse:
+        return build_new_member_promo_quote(
+            promo_repository=self.promo_repository,
+            member_repository=self,
+            amount=amount,
+            now=current_utc_time(),
+        )
+
+    def _new_member_benefit_seconds(self, amount: Decimal, granted_seconds: int) -> int:
+        from server.promo_new_member_service import resolve_normal_new_member_product
+
+        normal_product = resolve_normal_new_member_product(self, amount)
+        baseline = normal_product.time_seconds if normal_product is not None else 0
+        return granted_seconds - baseline
+
+    def _attach_creation_metadata(
+        self,
+        member: MemberRecord,
+        payment: PaymentRecord,
+        base_transaction: MemberTimeTransactionRecord,
+        benefit_seconds: int,
+    ) -> MemberRecord:
+        applied_promo = self._applied_promo_summary_for_redemption(base_transaction.promo_redemption_id)
+        return member.model_copy(
+            update={
+                "creation_payment": payment,
+                "creation_applied_promo": applied_promo,
+                "creation_base_seconds": base_transaction.seconds_delta,
+                "creation_benefit_seconds": benefit_seconds,
+            }
+        )
+
+    def _create_member_with_new_member_promo(
+        self,
+        request: MemberCreateRequest,
+        actor: UserRecord | None,
+    ) -> MemberRecord:
+        if request.payment_method is None:
+            raise HTTPException(status_code=400, detail="payment_method is required when amount is supplied")
+
+        # Idempotency short-circuit -- before any promo resolution or
+        # writes, so a retried request with the same idempotency_key never
+        # re-evaluates promo eligibility (which could legitimately differ
+        # between two real calls) or claims a second redemption.
+        if request.idempotency_key:
+            existing_payment = self.payment_repository.get_payment_by_idempotency_key(request.idempotency_key)
+            if existing_payment is not None:
+                base_transaction, _ = self.resolve_purchase_transactions(existing_payment.payment_id)
+                if base_transaction is None:
+                    raise HTTPException(
+                        status_code=409, detail="Duplicate transaction key belongs to another payment"
+                    )
+                member = self.get_member(base_transaction.member_id)
+                if member is None:
+                    raise HTTPException(status_code=500, detail="Member disappeared after creation")
+                benefit_seconds = self._new_member_benefit_seconds(existing_payment.amount, base_transaction.seconds_delta)
+                return self._attach_creation_metadata(member, existing_payment, base_transaction, benefit_seconds)
+
+        now = current_utc_time()
+        quote = build_new_member_promo_quote(
+            promo_repository=self.promo_repository, member_repository=self, amount=request.amount, now=now
+        )
+        resolved_promo_id = quote.promo_id
+        if request.expected_promo_id is not None and request.expected_promo_id != resolved_promo_id:
+            raise HTTPException(
+                status_code=409,
+                detail="The expected promo is no longer available. Please refresh and try again.",
+            )
+        if resolved_promo_id is None:
+            # No ordinary (non-promo) paid signup path exists here -- amount
+            # is 100% promo-gated. A cashier who does not want the promo
+            # uses the existing 2-step flow (bare POST /members, then a
+            # separate membership-fee purchase) unchanged.
+            raise HTTPException(
+                status_code=409,
+                detail="No active New Member promo currently matches this amount.",
+            )
+
+        cash_received = money(request.cash_received) if request.cash_received is not None else None
+        change_given: Decimal | None = None
+        if request.payment_method == "cash":
+            if cash_received is None:
+                raise HTTPException(status_code=400, detail="Cash received is required")
+            if cash_received < request.amount:
+                raise HTTPException(status_code=400, detail="Cash received cannot be lower than payment amount")
+            change_given = money(cash_received - request.amount)
+        else:
+            if cash_received is not None:
+                raise HTTPException(status_code=400, detail="Cash received is only valid for cash payments")
+            if not (request.reference_number or "").strip():
+                raise HTTPException(status_code=400, detail="Payment reference is required")
+
+        username = request.username.strip()
+        username_normalized = normalize_username(username)
+        display_name = clean_display_name(request.display_name)
+        pin_hash = hash_password(request.pin)
+        member_id = str(uuid4())
+        # A brand-new member has no active session anywhere -- attribution
+        # is always pending, same as any other purchase resolved against a
+        # member with no active session (see _resolve_purchase_attribution).
+        attribution = attribution_pending_unknown_pc()
+        open_shift = self.shift_repository.get_open_shift_for_user(actor.user_id) if actor else None
+        shift_id = open_shift.shift_id if open_shift is not None else None
+
+        payment = PaymentRecord(
+            payment_id=str(uuid4()),
+            session_id=None,
+            amount=request.amount,
+            payment_method=request.payment_method,
+            cash_received=cash_received,
+            change_given=change_given,
+            reference_number=request.reference_number,
+            notes=request.notes,
+            action_type="manual",
+            related_command_id=None,
+            review_required=False,
+            shift_id=shift_id,
+            recorded_by_user_id=actor.user_id if actor else None,
+            idempotency_key=request.idempotency_key,
+            status="completed",
+            created_at=now,
+            pc_name_snapshot=attribution.pc_name_snapshot,
+            income_group_id_snapshot=attribution.income_group_id_snapshot,
+            income_group_name_snapshot=attribution.income_group_name_snapshot,
+            attribution_status=attribution.status,  # type: ignore[arg-type]
+            attribution_assigned_at=attribution.assigned_at,
+            attribution_session_id=attribution.session_id,
+        )
+
+        def _insert_member(connection: sqlite3.Connection) -> None:
+            member_code = self.generate_member_code(connection)
+            member = MemberRecord(
+                member_id=member_id,
+                member_code=member_code,
+                username=username,
+                display_name=display_name,
+                full_name=display_name_for(username, display_name, ""),
+                phone_number=(request.phone_number or "").strip() or None,
+                has_pin=True,
+                requires_account_setup=False,
+                status="active",
+                time_balance_seconds=0,
+                joined_at=now,
+                expires_at=request.expires_at,
+                created_by_user_id=actor.user_id if actor else None,
+                created_at=now,
+                updated_at=now,
+            )
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO members (
+                        member_id, member_code, username, username_normalized, full_name,
+                        phone_number, pin_hash, requires_account_setup, pin_failed_attempts,
+                        pin_locked_until, status, time_balance_seconds, joined_at, expires_at,
+                        created_by_user_id, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        member.member_id, member.member_code, member.username, username_normalized,
+                        member.display_name or "", member.phone_number, pin_hash, 0, 0, None,
+                        member.status, member.time_balance_seconds, member.joined_at.isoformat(),
+                        member.expires_at.isoformat() if member.expires_at else None,
+                        member.created_by_user_id, member.created_at.isoformat(), member.updated_at.isoformat(),
+                    ),
+                )
+                self.record_member_audit(connection, "member_created", actor, member)
+            except sqlite3.IntegrityError as error:
+                raise HTTPException(status_code=409, detail="Username already exists") from error
+
+        # BEGIN IMMEDIATE opens and commits entirely inside claim_new_member_promo
+        # -- member creation, promo recheck, payment, the one initial-membership
+        # ledger row, and the redemption insert are all-or-nothing.
+        outcome = claim_new_member_promo(
+            member_repository=self,
+            payment_repository=self.payment_repository,
+            promo_repository=self.promo_repository,
+            promo_id=resolved_promo_id,
+            amount=request.amount,
+            member_id=member_id,
+            member_insert=_insert_member,
+            payment=payment,
+            actor=actor,
+            attribution=attribution,
+            now=now,
+        )
+        member = self.get_member(member_id)
+        if member is None:
+            raise HTTPException(status_code=500, detail="Member disappeared after creation")
+        benefit_seconds = self._new_member_benefit_seconds(request.amount, outcome.base_transaction.seconds_delta)
+        return self._attach_creation_metadata(member, outcome.payment, outcome.base_transaction, benefit_seconds)
 
     def update_member(
         self,
@@ -614,19 +833,105 @@ class MemberRepository:
             ).fetchall()
         return [row_to_transaction(row) for row in rows]
 
-    def get_transaction_by_payment_id(self, payment_id: str) -> MemberTimeTransactionRecord | None:
+    def get_transaction(self, transaction_id: str) -> MemberTimeTransactionRecord | None:
         with get_connection() as connection:
             row = connection.execute(
+                "SELECT * FROM member_time_transactions WHERE transaction_id = ?",
+                (transaction_id,),
+            ).fetchone()
+        return row_to_transaction(row) if row is not None else None
+
+    def _validate_redemption_linkage(
+        self,
+        redemption: dict,
+        base_transaction: MemberTimeTransactionRecord | None,
+        bonus_transaction: MemberTimeTransactionRecord | None,
+        payment_id: str,
+    ) -> None:
+        """Fails loudly (500 -- this is data corruption, never a normal
+        business conflict) BEFORE any caller has a chance to mutate a
+        payment or balance off a mismatched row. Every check here mirrors
+        an invariant claim_member_topup_promo already establishes at
+        write time; this is the read-time re-verification of that same
+        invariant. Deliberately does NOT check "does this member_id match
+        who the caller expected" -- that's an ordinary idempotency-key
+        collision, the same ambiguous-caller situation the non-promo path
+        already returns a normal transaction for and lets the caller turn
+        into its own 409, not a 500."""
+        problems: list[str] = []
+        if base_transaction is None:
+            problems.append("base_transaction_id does not exist")
+        if redemption["bonus_transaction_id"] is not None and bonus_transaction is None:
+            problems.append("bonus_transaction_id does not exist")
+        for label, transaction in (("base", base_transaction), ("bonus", bonus_transaction)):
+            if transaction is None:
+                continue
+            if transaction.related_payment_id != payment_id:
+                problems.append(f"{label} transaction does not belong to this payment")
+            if transaction.member_id != redemption["member_id"]:
+                problems.append(f"{label} transaction does not belong to this member")
+            if transaction.promo_redemption_id != redemption["redemption_id"]:
+                problems.append(f"{label} transaction is not linked to this redemption")
+        if problems:
+            raise HTTPException(
+                status_code=500,
+                detail="Promo redemption linkage is inconsistent: " + "; ".join(problems),
+            )
+
+    def resolve_purchase_transactions(
+        self,
+        payment_id: str,
+    ) -> tuple[MemberTimeTransactionRecord | None, MemberTimeTransactionRecord | None]:
+        """Deterministically resolves the base (and, for a promotional
+        purchase, bonus) member_time_transactions row(s) for a purchase
+        payment -- NEVER by ordering/limiting on created_at, since a
+        promo purchase's base and bonus rows can legitimately share the
+        same timestamp and SQL gives no tie-break guarantee. When a
+        promo_redemptions row exists for this payment, base/bonus are
+        looked up by their exact stored transaction ids and the linkage
+        is validated (raises 500 before any mutation on corruption).
+        Otherwise falls back to a single deterministic (created_at,
+        transaction_id) lookup for the ordinary non-promo case -- more
+        than one candidate row with no redemption to disambiguate them is
+        itself a corruption signal, not something to silently resolve by
+        picking one.
+
+        Returns (None, None) when no purchase transaction exists for this
+        payment at all (not an error -- callers decide what that means).
+        A member-identity check against a caller's expected member_id
+        (e.g. idempotency-key reuse across members) is deliberately left
+        to the caller, on the returned base_transaction -- see
+        _validate_redemption_linkage's docstring for why."""
+        redemption = self.promo_repository.get_redemption_by_payment_id(payment_id)
+        if redemption is not None and redemption["base_transaction_id"] is not None:
+            base_transaction = self.get_transaction(redemption["base_transaction_id"])
+            bonus_transaction = (
+                self.get_transaction(redemption["bonus_transaction_id"])
+                if redemption["bonus_transaction_id"] is not None
+                else None
+            )
+            self._validate_redemption_linkage(redemption, base_transaction, bonus_transaction, payment_id)
+            return base_transaction, bonus_transaction
+
+        with get_connection() as connection:
+            rows = connection.execute(
                 """
                 SELECT * FROM member_time_transactions
                 WHERE related_payment_id = ?
                   AND transaction_type IN ('membership_purchase', 'promo_topup')
-                ORDER BY created_at ASC
-                LIMIT 1
+                ORDER BY created_at ASC, transaction_id ASC
                 """,
                 (payment_id,),
-            ).fetchone()
-        return row_to_transaction(row) if row is not None else None
+            ).fetchall()
+        if not rows:
+            return None, None
+        if len(rows) > 1:
+            raise HTTPException(
+                status_code=500,
+                detail="Ambiguous member purchase transactions for this payment (no promo redemption to disambiguate).",
+            )
+        base_transaction = row_to_transaction(rows[0])
+        return base_transaction, None
 
     def get_refund_transaction_by_payment_id(self, payment_id: str) -> MemberTimeTransactionRecord | None:
         with get_connection() as connection:
@@ -654,12 +959,18 @@ class MemberRepository:
         notes: str | None = None,
         balance_type: str = "standard",
         connection: sqlite3.Connection | None = None,
+        promo_redemption_id: str | None = None,
     ) -> MemberTimeTransactionRecord:
         """Credits/debits exactly one balance (Standard or VIP -- never
         both) and records one ledger row for it. When `connection` is
         supplied, the update/insert join the caller's transaction (no
         commit/close here) so this can be made atomic with, e.g., the
-        payment that funds it -- see MemberRepository.purchase()."""
+        payment that funds it -- see MemberRepository.purchase().
+
+        `promo_redemption_id` links this row to the promo_redemptions row
+        it belongs to (Stage 4) -- shared between a promo purchase's base
+        and bonus rows, NULL for every ordinary (non-promo) transaction,
+        exactly like before this column existed."""
         zero_delta_types = {
             "session_reservation_created",
             "session_reservation_released",
@@ -704,9 +1015,10 @@ class MemberRepository:
                     related_payment_id,
                     notes,
                     performed_by_user_id,
-                    created_at
+                    created_at,
+                    promo_redemption_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     transaction_id,
@@ -722,6 +1034,7 @@ class MemberRepository:
                     notes,
                     actor_user_id,
                     now.isoformat(),
+                    promo_redemption_id,
                 ),
             )
             return before, after
@@ -746,6 +1059,7 @@ class MemberRepository:
                 notes=notes,
                 performed_by_user_id=actor_user_id,
                 created_at=now,
+                promo_redemption_id=promo_redemption_id,
             )
 
         with get_connection() as owned_connection:
@@ -1060,6 +1374,58 @@ class MemberRepository:
             now,
         )
 
+    def _applied_promo_summary_for_redemption(self, redemption_id: str | None) -> AppliedPromoSummary | None:
+        if redemption_id is None:
+            return None
+        with get_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM promo_redemptions WHERE redemption_id = ?", (redemption_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return AppliedPromoSummary(
+            redemption_id=row["redemption_id"],
+            promo_id=row["promo_id"],
+            promo_name_snapshot=row["promo_name_snapshot"],
+            audience_snapshot=row["audience_snapshot"],
+            granted_seconds_snapshot=row["granted_seconds_snapshot"],
+            price_snapshot=Decimal(row["price_snapshot"]),
+            voided_at=datetime.fromisoformat(row["voided_at"]) if row["voided_at"] else None,
+        )
+
+    def _build_purchase_response(
+        self,
+        member: MemberRecord,
+        product: MembershipProductRecord,
+        payment: PaymentRecord,
+        base_transaction: MemberTimeTransactionRecord,
+        bonus_seconds: int = 0,
+    ) -> MemberPurchaseResponse:
+        applied_promo = self._applied_promo_summary_for_redemption(base_transaction.promo_redemption_id)
+        base_seconds = base_transaction.seconds_delta
+        return MemberPurchaseResponse(
+            member=member,
+            product=product,
+            payment=payment,
+            transaction=base_transaction,
+            applied_promo=applied_promo,
+            base_seconds=base_seconds,
+            bonus_seconds=bonus_seconds,
+            total_seconds_credited=base_seconds + bonus_seconds,
+        )
+
+    def quote_member_topup_promo(self, member_id: str, product_id: str) -> MemberTopupPromoQuoteResponse:
+        self.require_usable_member(member_id)
+        product = self.get_product(product_id)
+        if product is None or not product.is_active:
+            raise HTTPException(status_code=404, detail="Membership product not found")
+        return build_member_topup_quote(
+            promo_repository=self.promo_repository,
+            product=product,
+            member_id=member_id,
+            now=current_utc_time(),
+        )
+
     def purchase(
         self,
         member_id: str,
@@ -1076,10 +1442,10 @@ class MemberRepository:
                 request.idempotency_key
             )
             if existing_payment is not None:
-                existing_transaction = self.get_transaction_by_payment_id(
+                base_transaction, bonus_transaction = self.resolve_purchase_transactions(
                     existing_payment.payment_id
                 )
-                if existing_transaction is None or existing_transaction.member_id != member_id:
+                if base_transaction is None or base_transaction.member_id != member_id:
                     raise HTTPException(
                         status_code=409,
                         detail="Duplicate transaction key belongs to another payment",
@@ -1087,11 +1453,9 @@ class MemberRepository:
                 updated_member = self.get_member(member_id)
                 if updated_member is None:
                     raise HTTPException(status_code=500, detail="Member disappeared after purchase")
-                return MemberPurchaseResponse(
-                    member=updated_member,
-                    product=product,
-                    payment=existing_payment,
-                    transaction=existing_transaction,
+                bonus_seconds = bonus_transaction.seconds_delta if bonus_transaction is not None else 0
+                return self._build_purchase_response(
+                    updated_member, product, existing_payment, base_transaction, bonus_seconds
                 )
 
         open_shift = self.shift_repository.get_open_shift_for_user(actor.user_id)
@@ -1120,6 +1484,48 @@ class MemberRepository:
 
         payment_created_at = current_utc_time()
         attribution = self._resolve_purchase_attribution(member.member_id, product, payment_created_at)
+
+        # Stage 4: advisory Member Top-up promo resolution -- only ever
+        # considered for eligible products (product_type == "member_topup"
+        # and balance_type == "standard"; see is_member_topup_promo_eligible).
+        # This never touches VIP-specific products, the ₱250 VIP product,
+        # initial_membership, or disabled products.
+        promo_selection = None
+        if is_member_topup_promo_eligible(product):
+            candidates = [
+                promo for promo in self.promo_repository.list(owner_states=["enabled"])
+                if promo.audience == "member_topup"
+            ]
+            total_counts = {
+                promo.promo_id: self.promo_repository.count_total_redemptions(promo.promo_id)
+                for promo in candidates
+            }
+            member_counts = {
+                promo.promo_id: self.promo_repository.count_member_redemptions(promo.promo_id, member_id)
+                for promo in candidates
+            }
+            promo_selection = select_best_promo(
+                candidates,
+                audience="member_topup",
+                amount=product.price,
+                now=payment_created_at,
+                member_id=member_id,
+                total_redemption_counts=total_counts,
+                member_redemption_counts=member_counts,
+                base_granted_seconds=0,
+            )
+
+        resolved_promo_id = (
+            promo_selection.snapshot.promo_id
+            if promo_selection is not None and promo_selection.selected_promo is not None
+            else None
+        )
+        if request.expected_promo_id is not None and request.expected_promo_id != resolved_promo_id:
+            raise HTTPException(
+                status_code=409,
+                detail="The expected promo is no longer available. Please refresh and try again.",
+            )
+
         payment = PaymentRecord(
             payment_id=str(uuid4()),
             session_id=None,
@@ -1144,10 +1550,40 @@ class MemberRepository:
             attribution_assigned_at=attribution.assigned_at,
             attribution_session_id=attribution.session_id,
         )
+
+        if resolved_promo_id is not None:
+            # BEGIN IMMEDIATE opens and commits entirely inside this call --
+            # re-verifies the promo from scratch (never trusts the advisory
+            # selection above) before writing payment/base/bonus/redemption
+            # together, all-or-nothing.
+            outcome = claim_member_topup_promo(
+                member_repository=self,
+                payment_repository=self.payment_repository,
+                promo_repository=self.promo_repository,
+                member_id=member_id,
+                product=product,
+                promo_id=resolved_promo_id,
+                payment=payment,
+                actor=actor,
+                attribution=attribution,
+                now=payment_created_at,
+            )
+            updated_member = self.get_member(member_id)
+            if updated_member is None:
+                raise HTTPException(status_code=500, detail="Member disappeared after purchase")
+            return self._build_purchase_response(
+                updated_member,
+                product,
+                outcome.payment,
+                outcome.base_transaction,
+                outcome.bonus_transaction.seconds_delta,
+            )
+
         # Atomic: the payment and the balance it funds are recorded in a
         # single SQLite transaction. If either step fails, nothing commits
         # -- there is no window where money/sale exists without the
-        # matching balance credit, or vice versa.
+        # matching balance credit, or vice versa. Unchanged from before
+        # Stage 4 -- no promo applied, so behavior is identical.
         with get_connection() as connection:
             self.payment_repository.create_payment(payment, connection=connection)
             transaction = self.apply_balance_delta(
@@ -1164,11 +1600,25 @@ class MemberRepository:
         updated_member = self.get_member(member_id)
         if updated_member is None:
             raise HTTPException(status_code=500, detail="Member disappeared after purchase")
-        return MemberPurchaseResponse(
-            member=updated_member,
-            product=product,
+        return self._build_purchase_response(updated_member, product, payment, transaction, 0)
+
+    def _build_refund_response(
+        self,
+        member: MemberRecord,
+        payment: PaymentRecord,
+        reversal_transaction: MemberTimeTransactionRecord,
+        base_seconds: int,
+        bonus_seconds: int,
+    ) -> MemberPurchaseRefundResponse:
+        applied_promo = self._applied_promo_summary_for_redemption(reversal_transaction.promo_redemption_id)
+        return MemberPurchaseRefundResponse(
+            member=member,
             payment=payment,
-            transaction=transaction,
+            reversal_transaction=reversal_transaction,
+            applied_promo=applied_promo,
+            base_seconds=base_seconds,
+            bonus_seconds=bonus_seconds,
+            total_seconds_reversed=base_seconds + bonus_seconds,
         )
 
     def refund_purchase(
@@ -1186,14 +1636,23 @@ class MemberRepository:
                 member = self.get_member(existing_refund.member_id)
                 if member is None:
                     raise HTTPException(status_code=500, detail="Member disappeared after refund")
-                return MemberPurchaseRefundResponse(
-                    member=member,
-                    payment=payment,
-                    reversal_transaction=existing_refund,
+                # existing_refund.seconds_delta is already the combined
+                # (base + bonus) reversal for a promo refund -- reported as
+                # base_seconds here with bonus_seconds=0 since the two are
+                # not separately recoverable from one combined ledger row,
+                # same total either way.
+                return self._build_refund_response(
+                    member, payment, existing_refund, -existing_refund.seconds_delta, 0
                 )
             raise HTTPException(status_code=409, detail="This transaction has already been voided")
 
-        original_transaction = self.get_transaction_by_payment_id(payment_id)
+        # Stage 4.1: base (and, for a promo purchase, bonus) are resolved
+        # by exact stored transaction id via the linked promo_redemptions
+        # row -- never by an ORDER BY created_at tie-break, since a promo
+        # purchase's base and bonus rows can legitimately share the same
+        # timestamp. Raises 500 before any mutation if the linkage is
+        # corrupted (see resolve_purchase_transactions's docstring).
+        original_transaction, bonus_transaction = self.resolve_purchase_transactions(payment_id)
         if original_transaction is None:
             raise HTTPException(status_code=409, detail="Payment is not a member purchase")
         # Owner-confirmed rule: VIP promo purchases are non-refundable, full
@@ -1214,7 +1673,13 @@ class MemberRepository:
                 status_code=409,
                 detail="This purchase cannot be refunded while the member has an active session",
             )
-        if member.time_balance_seconds < original_transaction.seconds_delta:
+
+        bonus_seconds = bonus_transaction.seconds_delta if bonus_transaction is not None else 0
+        redemption_id = original_transaction.promo_redemption_id
+        base_seconds = original_transaction.seconds_delta
+        total_seconds = base_seconds + bonus_seconds
+
+        if member.time_balance_seconds < total_seconds:
             raise HTTPException(
                 status_code=409,
                 detail="This purchase cannot be fully refunded because some of the time has already been used",
@@ -1223,23 +1688,34 @@ class MemberRepository:
         notes = request.reason
         if request.notes and request.notes.strip():
             notes = f"{notes}: {request.notes.strip()}"
-        voided_payment = self.payment_repository.void_payment(
-            payment_id,
-            actor.user_id,
-            notes,
-        )
-        if voided_payment is None:
-            raise HTTPException(status_code=404, detail="Payment not found")
 
-        reversal_transaction = self.apply_balance_delta(
-            member.member_id,
-            "purchase_refund",
-            -original_transaction.seconds_delta,
-            actor.user_id,
-            amount_paid=-payment.amount,
-            related_payment_id=payment.payment_id,
-            notes=notes,
-        )
+        # Atomic: payment void, balance reversal, and promo-redemption void
+        # (when applicable) all commit together or not at all -- mirrors
+        # the Stage 3 billing_service.void_payment pattern.
+        with get_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            voided_payment = self.payment_repository.void_payment(
+                payment_id,
+                actor.user_id,
+                notes,
+                connection=connection,
+            )
+            if voided_payment is None:
+                raise HTTPException(status_code=404, detail="Payment not found")
+            reversal_transaction = self.apply_balance_delta(
+                member.member_id,
+                "purchase_refund",
+                -total_seconds,
+                actor.user_id,
+                amount_paid=-payment.amount,
+                related_payment_id=payment.payment_id,
+                notes=notes,
+                connection=connection,
+                promo_redemption_id=redemption_id,
+            )
+            if redemption_id is not None:
+                self.promo_repository.void_redemption_for_payment(connection, payment_id, notes, current_utc_time())
+
         updated_member = self.get_member(member.member_id)
         if updated_member is None:
             raise HTTPException(status_code=500, detail="Member disappeared after refund")
@@ -1252,12 +1728,8 @@ class MemberRepository:
                 {
                     "payment_id": payment.payment_id,
                     "amount": str(payment.amount),
-                    "seconds_delta": original_transaction.seconds_delta,
+                    "seconds_delta": total_seconds,
                     "reason": request.reason,
                 },
             )
-        return MemberPurchaseRefundResponse(
-            member=updated_member,
-            payment=voided_payment,
-            reversal_transaction=reversal_transaction,
-        )
+        return self._build_refund_response(updated_member, voided_payment, reversal_transaction, base_seconds, bonus_seconds)

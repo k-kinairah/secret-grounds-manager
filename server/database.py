@@ -2104,6 +2104,19 @@ def initialize_database() -> None:
         # Every historical ledger row predates VIP balance and is correctly
         # backfilled as 'standard' by the column default.
         add_column_if_missing(connection, "member_time_transactions", "balance_type", "TEXT NOT NULL DEFAULT 'standard'")
+        # Stage 4: nullable linkage from a ledger row to the promo
+        # redemption that produced it (base and bonus rows from the same
+        # promotional top-up share one promo_redemption_id). Every
+        # historical row predates promos and is correctly backfilled NULL
+        # by the column default -- no CHECK/transaction_type rebuild.
+        add_column_if_missing(connection, "member_time_transactions", "promo_redemption_id", "TEXT")
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_member_time_transactions_promo_redemption
+            ON member_time_transactions (promo_redemption_id)
+            WHERE promo_redemption_id IS NOT NULL
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS member_time_reservations (
@@ -2327,6 +2340,153 @@ def initialize_database() -> None:
             WHERE rate_type = 'metered' AND is_active = 1
             """
         )
+        # Promo Maker Stage 1: schema only -- no eligibility resolution,
+        # session/member integration, or API routes exist yet. Owner state
+        # (draft/enabled/disabled/ended) is stored; Draft/Scheduled/Active/
+        # Ended/Disabled is a derived, never-persisted display value (see
+        # server/promo_status.py). No seeding: promos start empty until an
+        # owner creates one through a future Stage-5 API.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promos (
+                promo_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                audience TEXT NOT NULL CHECK (
+                    audience IN ('standard', 'vip', 'member_topup', 'new_member')
+                ),
+                owner_state TEXT NOT NULL DEFAULT 'draft' CHECK (
+                    owner_state IN ('draft', 'enabled', 'disabled', 'ended')
+                ),
+                amount_mode TEXT NOT NULL DEFAULT 'exact' CHECK (
+                    amount_mode IN ('exact', 'minimum')
+                ),
+                price TEXT NOT NULL,
+                granted_seconds INTEGER NOT NULL CHECK (granted_seconds > 0),
+                station_scope TEXT CHECK (station_scope IN ('standard', 'vip')),
+                applies_to TEXT CHECK (
+                    applies_to IN ('start_session', 'add_time', 'both')
+                ),
+                starts_at TEXT NOT NULL,
+                ends_at TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                per_member_redemption_limit INTEGER CHECK (
+                    per_member_redemption_limit IS NULL OR per_member_redemption_limit > 0
+                ),
+                total_redemption_limit INTEGER CHECK (
+                    total_redemption_limit IS NULL OR total_redemption_limit > 0
+                ),
+                created_by_user_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (created_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_promos_audience_state
+            ON promos (audience, owner_state)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_promos_state_dates
+            ON promos (owner_state, starts_at, ends_at)
+            """
+        )
+
+        # Every promos row mutation (create/update/state transition) writes
+        # exactly one of these in the same transaction -- mirrors
+        # rate_audit_events (server/rate_repository.py) exactly.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promo_audit_events (
+                event_id TEXT PRIMARY KEY,
+                promo_id TEXT NOT NULL,
+                action TEXT NOT NULL CHECK (
+                    action IN ('created', 'updated', 'enabled', 'disabled', 'ended', 'reactivated')
+                ),
+                old_values TEXT,
+                new_values TEXT,
+                performed_by_user_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (promo_id) REFERENCES promos(promo_id),
+                FOREIGN KEY (performed_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_promo_audit_events_promo
+            ON promo_audit_events (promo_id, created_at)
+            """
+        )
+
+        # Not written or read by anything in Stage 1 -- created now so the
+        # foreign keys below are valid, and so Stage 4's redemption-write
+        # path (see server/promo_repository.py's module docstring for the
+        # exact BEGIN IMMEDIATE requirement) has its table ready. Every
+        # nullable *_snapshot column here is intentionally nullable: which
+        # ones apply depends on audience (e.g. session_id is standard/vip
+        # only, member_id/base_transaction_id/bonus_transaction_id are
+        # member_topup/new_member only).
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promo_redemptions (
+                redemption_id TEXT PRIMARY KEY,
+                promo_id TEXT NOT NULL,
+                promo_name_snapshot TEXT NOT NULL,
+                audience_snapshot TEXT NOT NULL,
+                amount_mode_snapshot TEXT NOT NULL,
+                price_snapshot TEXT NOT NULL,
+                granted_seconds_snapshot INTEGER NOT NULL,
+                station_scope_snapshot TEXT,
+                applies_to_snapshot TEXT,
+                starts_at_snapshot TEXT NOT NULL,
+                ends_at_snapshot TEXT NOT NULL,
+                member_id TEXT,
+                session_id TEXT,
+                payment_id TEXT NOT NULL,
+                base_transaction_id TEXT,
+                bonus_transaction_id TEXT,
+                pc_name_snapshot TEXT,
+                income_group_id_snapshot TEXT,
+                income_group_name_snapshot TEXT,
+                operator_user_id TEXT,
+                voided_at TEXT,
+                void_reason TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (promo_id) REFERENCES promos(promo_id),
+                FOREIGN KEY (payment_id) REFERENCES payments(payment_id),
+                FOREIGN KEY (member_id) REFERENCES members(member_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_promo_redemptions_promo_active
+            ON promo_redemptions (promo_id)
+            WHERE voided_at IS NULL
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_promo_redemptions_promo_member_active
+            ON promo_redemptions (promo_id, member_id)
+            WHERE voided_at IS NULL
+            """
+        )
+        # Stage 3: exactly one redemption per payment -- a retried
+        # idempotency-key request that reuses the same payment_id can
+        # never insert a second redemption row.
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_redemptions_one_per_payment
+            ON promo_redemptions (payment_id)
+            """
+        )
+
         seed_default_metered_rate(connection)
         # Corrects an existing install's already-seeded Regular Rate row
         # from the old, incorrect ₱1 = 5 minutes to the authoritative ₱5 =

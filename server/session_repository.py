@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -113,8 +114,24 @@ def row_to_event(row: Any) -> SessionEventRecord:
 class SessionRepository:
     """SQLite persistence boundary for sessions and their audit events."""
 
-    def create_session(self, session: SessionRecord) -> SessionRecord:
-        with get_connection() as connection:
+    def create_session(
+        self, session: SessionRecord, connection: sqlite3.Connection | None = None
+    ) -> SessionRecord:
+        """When `connection` is supplied, the insert joins the caller's
+        transaction (no commit/close here) -- same pattern as
+        payment_repository.create_payment, used so a session and the
+        promo redemption it may claim can be made atomic together (see
+        server/promo_session_integration.py)."""
+        if connection is not None:
+            self._insert_session(connection, session)
+            return session
+
+        with get_connection() as owned_connection:
+            self._insert_session(owned_connection, session)
+
+        return session
+
+    def _insert_session(self, connection: sqlite3.Connection, session: SessionRecord) -> None:
             connection.execute(
                 """
                 INSERT INTO sessions (
@@ -200,8 +217,6 @@ class SessionRepository:
                     1 if session.conversion_applied else 0,
                 ),
             )
-
-        return session
 
     def add_event(self, event: SessionEventRecord) -> SessionEventRecord:
         with get_connection() as connection:
@@ -309,8 +324,21 @@ class SessionRepository:
 
         return [row_to_session(row) for row in rows]
 
-    def update_session(self, session: SessionRecord) -> SessionRecord:
-        with get_connection() as connection:
+    def update_session(
+        self, session: SessionRecord, connection: sqlite3.Connection | None = None
+    ) -> SessionRecord:
+        """Same connection-aware pattern as create_session -- see its
+        docstring."""
+        if connection is not None:
+            self._update_session(connection, session)
+            return session
+
+        with get_connection() as owned_connection:
+            self._update_session(owned_connection, session)
+
+        return session
+
+    def _update_session(self, connection: sqlite3.Connection, session: SessionRecord) -> None:
             connection.execute(
                 """
                 UPDATE sessions
@@ -395,8 +423,6 @@ class SessionRepository:
                     session.session_id,
                 ),
             )
-
-        return session
 
     def event_exists(self, session_id: str, event_type: str) -> bool:
         with get_connection() as connection:

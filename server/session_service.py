@@ -13,6 +13,9 @@ from server.billing_service import calculate_open_time_estimate
 from server.income_attribution import sweep_pending_purchases_for_member
 from server.payment_repository import PaymentRepository
 from server.pc_layout_repository import IncomeGroupRepository, PCLayoutRepository
+from server.promo_quote_service import build_promo_quote
+from server.promo_repository import PromoRepository
+from server.promo_session_integration import claim_standard_or_vip_promo
 from server.rate_calculator import calculate_metered_time
 from server.rate_eligibility import validate_rate_for_station_and_context
 from server.rate_repository import RateRepository
@@ -21,6 +24,7 @@ from server.schemas import (
     CommandAcknowledgement,
     ForceEndSessionResponse,
     PCRecord,
+    PaymentRecord,
     PreparedSessionRecord,
     PreparedSessionResponse,
     PreparedSessionActivationResponse,
@@ -59,6 +63,7 @@ class SessionService:
         pc_layout_repository: PCLayoutRepository | None = None,
         payment_repository: PaymentRepository | None = None,
         income_group_repository: IncomeGroupRepository | None = None,
+        promo_repository: PromoRepository | None = None,
     ) -> None:
         self.repository = repository
         self.rate_repository = rate_repository
@@ -71,6 +76,7 @@ class SessionService:
         self.pc_layout_repository = pc_layout_repository or PCLayoutRepository()
         self.payment_repository = payment_repository or PaymentRepository()
         self.income_group_repository = income_group_repository or IncomeGroupRepository()
+        self.promo_repository = promo_repository or PromoRepository()
 
     def is_vip_pc(self, pc_name: str) -> bool:
         """Station classification source of truth: pc_layouts.is_vip.
@@ -1058,6 +1064,84 @@ class SessionService:
             acknowledgements=acknowledgements,
         )
 
+    def _quote_and_validate_expected_promo(
+        self,
+        *,
+        pc_name: str,
+        is_vip_station: bool,
+        action: str,
+        base_amount: Decimal,
+        expected_promo_id: str | None,
+        now: datetime,
+    ):
+        """Stage 3B: resolves the same advisory quote a cashier would have
+        seen, then -- if the caller asserted `expected_promo_id` -- rejects
+        with 409 up front when the server's own fresh resolution no longer
+        matches it. Never a way to force a promo: the client can only ever
+        narrow ("I expect exactly this"), never widen, what the server
+        would otherwise decide on its own."""
+        quote = build_promo_quote(
+            promo_repository=self.promo_repository,
+            rate_repository=self.rate_repository,
+            pc_name=pc_name,
+            is_vip_station=is_vip_station,
+            action=action,
+            amount=base_amount,
+            now=now,
+        )
+        if expected_promo_id is not None:
+            resolved_promo_id = quote.promo_id if quote.source_type == "promo" else None
+            if resolved_promo_id != expected_promo_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The expected promo is no longer available. Please refresh and try again.",
+                )
+        return quote
+
+    def _build_draft_payment(
+        self,
+        request: PaymentCreateRequest,
+        amount: Decimal,
+        action_type: str,
+        actor_user_id: str | None,
+        session_id: str,
+    ) -> PaymentRecord:
+        """Builds a payment row's non-attribution fields for the
+        promo-claim path. Attribution (pc_name_snapshot/income_group_*) is
+        filled in atomically inside claim_standard_or_vip_promo, which
+        alone knows the real, final session context. Amount validity
+        (cash sufficiency, reference-number requirement) was already
+        checked by billing_service.validate_payment_for_amount before
+        this is ever called."""
+        normalized_amount = amount.quantize(Decimal("0.01"))
+        cash_received = (
+            request.cash_received.quantize(Decimal("0.01")) if request.cash_received is not None else None
+        )
+        change_given = (
+            (cash_received - normalized_amount).quantize(Decimal("0.01"))
+            if request.payment_method == "cash" and cash_received is not None
+            else None
+        )
+        shift_id = self.billing_service.get_payment_shift_id(actor_user_id) if self.billing_service else None
+        return PaymentRecord(
+            payment_id=str(uuid4()),
+            session_id=session_id,
+            amount=normalized_amount,
+            payment_method=request.payment_method,
+            cash_received=cash_received,
+            change_given=change_given,
+            reference_number=request.reference_number,
+            notes=request.notes,
+            action_type=action_type,  # type: ignore[arg-type]
+            related_command_id=None,
+            review_required=False,
+            shift_id=shift_id,
+            recorded_by_user_id=actor_user_id,
+            idempotency_key=request.idempotency_key,
+            status="completed",
+            created_at=current_utc_time(),
+        )
+
     async def start_prepaid_session(
         self,
         pc_name: str,
@@ -1066,6 +1150,7 @@ class SessionService:
         rate_id: str | None = None,
         amount: Decimal | None = None,
         actor_user_id: str | None = None,
+        expected_promo_id: str | None = None,
     ) -> SessionCommandResponse:
         if self.billing_service is None:
             raise HTTPException(status_code=500, detail="Billing service is unavailable")
@@ -1083,6 +1168,21 @@ class SessionService:
         )
         self.billing_service.validate_payment_for_amount(payment, base_amount)
 
+        # Idempotency short-circuit -- before promo resolution or any
+        # writes, so a retried request with the same idempotency_key never
+        # re-evaluates promo eligibility (which could legitimately differ
+        # between two real calls) or claims a second redemption. The
+        # non-promo path's own idempotency handling inside
+        # billing_service.record_payment, below, is untouched.
+        if payment.idempotency_key:
+            existing_payment = self.payment_repository.get_payment_by_idempotency_key(
+                payment.idempotency_key
+            )
+            if existing_payment is not None and existing_payment.session_id:
+                existing_session = self.repository.get_session(existing_payment.session_id)
+                if existing_session is not None:
+                    return SessionCommandResponse(session=existing_session)
+
         self.require_available_client(cleaned_pc_name)
         if self.repository.get_active_session_for_pc(cleaned_pc_name) is not None:
             raise HTTPException(
@@ -1091,37 +1191,102 @@ class SessionService:
             )
 
         now = current_utc_time()
-        session = SessionRecord(
-            session_id=str(uuid4()),
+
+        # Stage 3B: Standard/VIP promo check, compared against base_amount
+        # (the actual amount this payment charges) -- never against a
+        # client-supplied seconds/benefit/price. Advisory only; the atomic
+        # claim below re-verifies everything from scratch.
+        promo_quote = self._quote_and_validate_expected_promo(
             pc_name=cleaned_pc_name,
-            status="active",
-            started_at=now,
-            scheduled_end_at=now + timedelta(seconds=duration_seconds),
-            ended_at=None,
-            original_seconds=duration_seconds,
-            added_seconds=0,
-            total_seconds=duration_seconds,
-            amount_paid=None,
-            ended_reason=None,
-            created_at=now,
-            rate_id=resolved_rate_id,
-            rate_name_snapshot=rate_name_snapshot,
+            is_vip_station=is_vip_station,
+            action="start_session",
             base_amount=base_amount,
-            additional_amount=Decimal("0.00"),
-            total_amount=base_amount,
-            session_mode="prepaid",
-            station_type="vip" if is_vip_station else "standard",
-            created_by_user_id=actor_user_id,
+            expected_promo_id=expected_promo_id,
+            now=now,
         )
-        self.repository.create_session(session)
-        billing = self.billing_service.record_payment(
-            session.session_id,
-            payment,
-            action_type="session_start",
-            max_amount=base_amount,
-            actor_user_id=actor_user_id,
-        )
-        recorded_payment = billing.payments[-1]
+
+        if promo_quote.source_type == "promo" and promo_quote.final_seconds is not None:
+            duration_seconds = promo_quote.final_seconds
+            session = SessionRecord(
+                session_id=str(uuid4()),
+                pc_name=cleaned_pc_name,
+                status="active",
+                started_at=now,
+                scheduled_end_at=now + timedelta(seconds=duration_seconds),
+                ended_at=None,
+                original_seconds=duration_seconds,
+                added_seconds=0,
+                total_seconds=duration_seconds,
+                amount_paid=None,
+                ended_reason=None,
+                created_at=now,
+                rate_id=resolved_rate_id,
+                rate_name_snapshot=rate_name_snapshot,
+                base_amount=base_amount,
+                additional_amount=Decimal("0.00"),
+                total_amount=base_amount,
+                session_mode="prepaid",
+                station_type="vip" if is_vip_station else "standard",
+                created_by_user_id=actor_user_id,
+            )
+            draft_payment = self._build_draft_payment(
+                payment, base_amount, "session_start", actor_user_id, session.session_id
+            )
+            # The BEGIN IMMEDIATE transaction opens and commits entirely
+            # inside claim_standard_or_vip_promo -- never held across the
+            # await self.send_required_command(...) call further below.
+            outcome = claim_standard_or_vip_promo(
+                session_repository=self.repository,
+                payment_repository=self.payment_repository,
+                promo_repository=self.promo_repository,
+                pc_layout_repository=self.pc_layout_repository,
+                income_group_repository=self.income_group_repository,
+                session=session,
+                payment=draft_payment,
+                promo_id=promo_quote.promo_id,
+                audience="vip" if is_vip_station else "standard",
+                action="start_session",
+                station_scope="vip" if is_vip_station else "standard",
+                amount=base_amount,
+                is_update=False,
+                now=now,
+                actor_user_id=actor_user_id,
+            )
+            session = outcome.session
+            recorded_payment = outcome.payment
+        else:
+            session = SessionRecord(
+                session_id=str(uuid4()),
+                pc_name=cleaned_pc_name,
+                status="active",
+                started_at=now,
+                scheduled_end_at=now + timedelta(seconds=duration_seconds),
+                ended_at=None,
+                original_seconds=duration_seconds,
+                added_seconds=0,
+                total_seconds=duration_seconds,
+                amount_paid=None,
+                ended_reason=None,
+                created_at=now,
+                rate_id=resolved_rate_id,
+                rate_name_snapshot=rate_name_snapshot,
+                base_amount=base_amount,
+                additional_amount=Decimal("0.00"),
+                total_amount=base_amount,
+                session_mode="prepaid",
+                station_type="vip" if is_vip_station else "standard",
+                created_by_user_id=actor_user_id,
+            )
+            self.repository.create_session(session)
+            billing = self.billing_service.record_payment(
+                session.session_id,
+                payment,
+                action_type="session_start",
+                max_amount=base_amount,
+                actor_user_id=actor_user_id,
+            )
+            recorded_payment = billing.payments[-1]
+
         self.create_event(
             session.session_id,
             "prepaid_start_paid",
@@ -1187,6 +1352,7 @@ class SessionService:
         rate_id: str | None = None,
         amount: Decimal | None = None,
         actor_user_id: str | None = None,
+        expected_promo_id: str | None = None,
     ) -> SessionCommandResponse:
         if self.billing_service is None:
             raise HTTPException(status_code=500, detail="Billing service is unavailable")
@@ -1213,32 +1379,102 @@ class SessionService:
         )
         self.billing_service.validate_payment_for_amount(payment, amount_due)
 
+        # Idempotency short-circuit -- same rationale as start_prepaid_session.
+        if payment.idempotency_key:
+            existing_payment = self.payment_repository.get_payment_by_idempotency_key(
+                payment.idempotency_key
+            )
+            if existing_payment is not None and existing_payment.session_id == session.session_id:
+                current_session = self.repository.get_session(session.session_id)
+                if current_session is not None:
+                    return SessionCommandResponse(session=current_session)
+
         now = current_utc_time()
         self.require_available_client(session.pc_name)
-        updated_session = session.model_copy(
-            update={
-                "status": "active",
-                "added_seconds": session.added_seconds + seconds,
-                "total_seconds": session.total_seconds + seconds,
-                "scheduled_end_at": (
-                    now + timedelta(seconds=seconds)
-                    if is_grace_rescue
-                    else session.scheduled_end_at + timedelta(seconds=seconds)
-                ),
-                "additional_amount": session.additional_amount + amount_due,
-                "total_amount": session.total_amount + amount_due,
-                "grace_started_at": None,
-                "shutdown_at": None,
-            }
+        is_vip_station = self.is_vip_pc(session.pc_name)
+
+        # Stage 3B: Standard/VIP promo check, compared against amount_due
+        # (the actual amount this payment charges) -- never against a
+        # client-supplied seconds/benefit/price.
+        promo_quote = self._quote_and_validate_expected_promo(
+            pc_name=session.pc_name,
+            is_vip_station=is_vip_station,
+            action="add_time",
+            base_amount=amount_due,
+            expected_promo_id=expected_promo_id,
+            now=now,
         )
-        billing = self.billing_service.record_payment(
-            session.session_id,
-            payment,
-            action_type="add_time",
-            max_amount=amount_due,
-            actor_user_id=actor_user_id,
-        )
-        recorded_payment = billing.payments[-1]
+
+        if promo_quote.source_type == "promo" and promo_quote.final_seconds is not None:
+            seconds = promo_quote.final_seconds
+            updated_session = session.model_copy(
+                update={
+                    "status": "active",
+                    "added_seconds": session.added_seconds + seconds,
+                    "total_seconds": session.total_seconds + seconds,
+                    "scheduled_end_at": (
+                        now + timedelta(seconds=seconds)
+                        if is_grace_rescue
+                        else session.scheduled_end_at + timedelta(seconds=seconds)
+                    ),
+                    "additional_amount": session.additional_amount + amount_due,
+                    "total_amount": session.total_amount + amount_due,
+                    "grace_started_at": None,
+                    "shutdown_at": None,
+                }
+            )
+            draft_payment = self._build_draft_payment(
+                payment, amount_due, "add_time", actor_user_id, session.session_id
+            )
+            # BEGIN IMMEDIATE opens and commits entirely inside this call --
+            # never held across the WebSocket send below.
+            outcome = claim_standard_or_vip_promo(
+                session_repository=self.repository,
+                payment_repository=self.payment_repository,
+                promo_repository=self.promo_repository,
+                pc_layout_repository=self.pc_layout_repository,
+                income_group_repository=self.income_group_repository,
+                session=updated_session,
+                payment=draft_payment,
+                promo_id=promo_quote.promo_id,
+                audience="vip" if is_vip_station else "standard",
+                action="add_time",
+                station_scope="vip" if is_vip_station else "standard",
+                amount=amount_due,
+                is_update=True,
+                now=now,
+                actor_user_id=actor_user_id,
+            )
+            updated_session = outcome.session
+            recorded_payment = outcome.payment
+            session_already_persisted = True
+        else:
+            updated_session = session.model_copy(
+                update={
+                    "status": "active",
+                    "added_seconds": session.added_seconds + seconds,
+                    "total_seconds": session.total_seconds + seconds,
+                    "scheduled_end_at": (
+                        now + timedelta(seconds=seconds)
+                        if is_grace_rescue
+                        else session.scheduled_end_at + timedelta(seconds=seconds)
+                    ),
+                    "additional_amount": session.additional_amount + amount_due,
+                    "total_amount": session.total_amount + amount_due,
+                    "grace_started_at": None,
+                    "shutdown_at": None,
+                }
+            )
+            billing = self.billing_service.record_payment(
+                session.session_id,
+                payment,
+                action_type="add_time",
+                max_amount=amount_due,
+                actor_user_id=actor_user_id,
+            )
+            recorded_payment = billing.payments[-1]
+            session_already_persisted = False
+
         command = self.create_command(
             "add_time",
             {
@@ -1268,7 +1504,8 @@ class SessionService:
                 detail=f"Payment was recorded but add-time command failed and needs review: {error}",
             ) from error
 
-        self.repository.update_session(updated_session)
+        if not session_already_persisted:
+            self.repository.update_session(updated_session)
         self.create_event(
             session.session_id,
             "time_added_during_grace" if is_grace_rescue else "prepaid_add_time_paid",
