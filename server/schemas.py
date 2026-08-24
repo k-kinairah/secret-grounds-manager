@@ -1937,6 +1937,38 @@ class PromoAuditEvent(BaseModel):
     created_at: datetime
 
 
+class PromoRedemption(BaseModel):
+    """Stage 6: the full promo_redemptions row, API-facing -- mirrors the
+    table 1:1 (same pattern as Promo/PromoAuditEvent), never a narrowed
+    view. This is history only: every field here is a frozen snapshot
+    taken at claim time (see server/promo_repository.py's claim_* methods)
+    and is never recomputed from the live `promos` row."""
+
+    redemption_id: str
+    promo_id: str
+    promo_name_snapshot: str
+    audience_snapshot: PromoAudience
+    amount_mode_snapshot: PromoAmountMode
+    price_snapshot: Decimal
+    granted_seconds_snapshot: int
+    station_scope_snapshot: PromoStationScope | None
+    applies_to_snapshot: PromoAppliesTo | None
+    starts_at_snapshot: datetime
+    ends_at_snapshot: datetime
+    member_id: str | None
+    session_id: str | None
+    payment_id: str
+    base_transaction_id: str | None
+    bonus_transaction_id: str | None
+    pc_name_snapshot: str | None
+    income_group_id_snapshot: str | None
+    income_group_name_snapshot: str | None
+    operator_user_id: str | None
+    voided_at: datetime | None
+    void_reason: str | None
+    created_at: datetime
+
+
 class MemberTopupPromoQuoteRequest(BaseModel):
     """Input identifies the selected membership product only -- price/
     seconds/promo are all server-resolved, never client-supplied."""

@@ -48,6 +48,7 @@ from server.schemas import (
     PromoAuditEvent,
     PromoCreate,
     PromoOwnerState,
+    PromoRedemption,
     PromoStateTransition,
     PromoUpdate,
 )
@@ -92,6 +93,37 @@ def row_to_audit_event(row: Any) -> PromoAuditEvent:
         old_values=json.loads(row["old_values"]) if row["old_values"] is not None else None,
         new_values=json.loads(row["new_values"]) if row["new_values"] is not None else None,
         performed_by_user_id=row["performed_by_user_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def row_to_redemption(row: Any) -> PromoRedemption:
+    """Mirrors the promo_redemptions row 1:1 -- every field here is a
+    frozen snapshot, never re-derived from the live promos row (which may
+    have since been edited)."""
+    return PromoRedemption(
+        redemption_id=row["redemption_id"],
+        promo_id=row["promo_id"],
+        promo_name_snapshot=row["promo_name_snapshot"],
+        audience_snapshot=row["audience_snapshot"],
+        amount_mode_snapshot=row["amount_mode_snapshot"],
+        price_snapshot=Decimal(row["price_snapshot"]),
+        granted_seconds_snapshot=row["granted_seconds_snapshot"],
+        station_scope_snapshot=row["station_scope_snapshot"],
+        applies_to_snapshot=row["applies_to_snapshot"],
+        starts_at_snapshot=datetime.fromisoformat(row["starts_at_snapshot"]),
+        ends_at_snapshot=datetime.fromisoformat(row["ends_at_snapshot"]),
+        member_id=row["member_id"],
+        session_id=row["session_id"],
+        payment_id=row["payment_id"],
+        base_transaction_id=row["base_transaction_id"],
+        bonus_transaction_id=row["bonus_transaction_id"],
+        pc_name_snapshot=row["pc_name_snapshot"],
+        income_group_id_snapshot=row["income_group_id_snapshot"],
+        income_group_name_snapshot=row["income_group_name_snapshot"],
+        operator_user_id=row["operator_user_id"],
+        voided_at=datetime.fromisoformat(row["voided_at"]) if row["voided_at"] is not None else None,
+        void_reason=row["void_reason"],
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -633,6 +665,21 @@ class PromoRepository:
                 (promo_id,),
             ).fetchall()
         return [row_to_audit_event(row) for row in rows]
+
+    def list_redemptions(self, promo_id: str) -> list[PromoRedemption]:
+        """History only -- read-only, never mutates redemption state.
+        Deterministic ordering matches list()/list_audit_events()'s
+        convention (created_at then a stable unique id)."""
+        with get_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM promo_redemptions
+                WHERE promo_id = ?
+                ORDER BY created_at ASC, redemption_id ASC
+                """,
+                (promo_id,),
+            ).fetchall()
+        return [row_to_redemption(row) for row in rows]
 
     def _add_audit_event(
         self,

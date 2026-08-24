@@ -139,6 +139,13 @@ from server.schemas import (
     UserUpdateRequest,
     PromoQuoteRequest,
     PromoQuoteResponse,
+    Promo,
+    PromoAuditEvent,
+    PromoCreate,
+    PromoOwnerState,
+    PromoRedemption,
+    PromoStateTransition,
+    PromoUpdate,
 )
 from server.admin_settings_service import AdminSettingsService
 from server.balance_conversion import split_vip_session
@@ -3489,6 +3496,88 @@ def quote_standard_or_vip_promo(
         amount=request.amount,
         now=current_utc_time(),
     )
+
+
+# --- Stage 6: owner-facing promo management -------------------------------
+#
+# Read/write here is deliberately thin: authenticate -> (validate) ->
+# PromoRepository call -> return. All business rules (cross-field
+# validation, status derivation, audit trail, atomic redemption limits,
+# eligibility/selection) already live in server/schemas.py's PromoFields,
+# server/promo_status.py, server/promo_repository.py, and
+# server/promo_eligibility.py -- none of it is duplicated here. Every
+# mutation and every read is owner-only: this is promo *management*
+# (campaign configuration, redemption/audit history), distinct from the
+# cashier-facing quote endpoints above and in server/promo_quote_service.py
+# / server/promo_member_topup_service.py / server/promo_new_member_service.py,
+# which already give cashiers everything they need without browsing raw
+# promo rows.
+
+
+@app.get("/promos", response_model=list[Promo])
+def list_promos(
+    owner_states: list[PromoOwnerState] | None = Query(default=None),
+    _: object = Depends(require_owner),
+) -> list[Promo]:
+    return session_service.promo_repository.list(owner_states=owner_states)
+
+
+@app.get("/promos/{promo_id}", response_model=Promo)
+def get_promo(
+    promo_id: str,
+    _: object = Depends(require_owner),
+) -> Promo:
+    promo = session_service.promo_repository.get(promo_id)
+    if promo is None:
+        raise HTTPException(status_code=404, detail="Promo not found")
+    return promo
+
+
+@app.post("/promos", response_model=Promo)
+def create_promo(
+    request: PromoCreate,
+    current_user: object = Depends(require_owner),
+) -> Promo:
+    return session_service.promo_repository.create(request, get_actor_user_id(current_user))
+
+
+@app.patch("/promos/{promo_id}", response_model=Promo)
+def update_promo(
+    promo_id: str,
+    request: PromoUpdate,
+    current_user: object = Depends(require_owner),
+) -> Promo:
+    return session_service.promo_repository.update(promo_id, request, get_actor_user_id(current_user))
+
+
+@app.patch("/promos/{promo_id}/state", response_model=Promo)
+def transition_promo_state(
+    promo_id: str,
+    request: PromoStateTransition,
+    current_user: object = Depends(require_owner),
+) -> Promo:
+    return session_service.promo_repository.transition_state(promo_id, request, get_actor_user_id(current_user))
+
+
+@app.get("/promos/{promo_id}/audit", response_model=list[PromoAuditEvent])
+def list_promo_audit_events(
+    promo_id: str,
+    _: object = Depends(require_owner),
+) -> list[PromoAuditEvent]:
+    if session_service.promo_repository.get(promo_id) is None:
+        raise HTTPException(status_code=404, detail="Promo not found")
+    return session_service.promo_repository.list_audit_events(promo_id)
+
+
+@app.get("/promos/{promo_id}/redemptions", response_model=list[PromoRedemption])
+def list_promo_redemptions(
+    promo_id: str,
+    _: object = Depends(require_owner),
+) -> list[PromoRedemption]:
+    """History only -- read-only, never modifies redemption state."""
+    if session_service.promo_repository.get(promo_id) is None:
+        raise HTTPException(status_code=404, detail="Promo not found")
+    return session_service.promo_repository.list_redemptions(promo_id)
 
 
 @app.post("/sessions/{session_id}/add-time-member", response_model=SessionCommandResponse)
