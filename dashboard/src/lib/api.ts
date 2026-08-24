@@ -26,6 +26,12 @@ import type {
   PaymentInput,
   PreparedSessionSelection,
   PrepaidSessionSelection,
+  Promo,
+  PromoAuditEvent,
+  PromoInput,
+  PromoOwnerState,
+  PromoRedemption,
+  PromoStateTransitionInput,
   RemoteCommandRecord,
   RemoteCommandResponse,
   MessageSeverity,
@@ -1127,4 +1133,64 @@ export async function updateRateStatus(
       body: JSON.stringify({ is_active: isActive })
     }
   );
+}
+
+// Stage 6/7: owner-facing promo management. Mirrors the rate CRUD
+// functions above 1:1 -- same requestJson/parseResponse error handling,
+// same shape. The server (server/main.py's /promos routes,
+// server/promo_repository.py) remains the sole authority on validation,
+// state-machine transitions, and derived status; nothing here duplicates
+// that logic.
+export async function fetchPromos(ownerStates?: PromoOwnerState[]): Promise<Promo[]> {
+  const query = ownerStates && ownerStates.length > 0
+    ? `?${ownerStates.map((state) => `owner_states=${encodeURIComponent(state)}`).join("&")}`
+    : "";
+  return requestJson<Promo[]>(`${getApiBaseUrl()}/promos${query}`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchPromo(promoId: string): Promise<Promo> {
+  return requestJson<Promo>(`${getApiBaseUrl()}/promos/${promoId}`, {
+    cache: "no-store"
+  });
+}
+
+export async function createPromo(input: PromoInput): Promise<Promo> {
+  return requestJson<Promo>(`${getApiBaseUrl()}/promos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updatePromo(promoId: string, input: PromoInput): Promise<Promo> {
+  return requestJson<Promo>(`${getApiBaseUrl()}/promos/${promoId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function transitionPromoState(
+  promoId: string,
+  input: PromoStateTransitionInput
+): Promise<Promo> {
+  return requestJson<Promo>(`${getApiBaseUrl()}/promos/${promoId}/state`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function fetchPromoAudit(promoId: string): Promise<PromoAuditEvent[]> {
+  return requestJson<PromoAuditEvent[]>(`${getApiBaseUrl()}/promos/${promoId}/audit`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchPromoRedemptions(promoId: string): Promise<PromoRedemption[]> {
+  return requestJson<PromoRedemption[]>(`${getApiBaseUrl()}/promos/${promoId}/redemptions`, {
+    cache: "no-store"
+  });
 }

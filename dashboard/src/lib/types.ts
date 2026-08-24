@@ -290,6 +290,103 @@ export interface RateProfileInput {
   station_scope?: PackageStationScope;
 }
 
+export type PromoAudience = "standard" | "vip" | "member_topup" | "new_member";
+export type PromoOwnerState = "draft" | "enabled" | "disabled" | "ended";
+export type PromoDisplayStatus = "Draft" | "Scheduled" | "Active" | "Ended" | "Disabled";
+export type PromoAmountMode = "exact" | "minimum";
+export type PromoStationScope = "standard" | "vip";
+export type PromoAppliesTo = "start_session" | "add_time" | "both";
+export type PromoAuditAction = "created" | "updated" | "enabled" | "disabled" | "ended" | "reactivated";
+
+// Mirrors server/schemas.py's Promo exactly -- status is always derived
+// server-side (server/promo_status.py); the dashboard never recomputes it.
+export interface Promo {
+  promo_id: string;
+  name: string;
+  audience: PromoAudience;
+  owner_state: PromoOwnerState;
+  status: PromoDisplayStatus;
+  amount_mode: PromoAmountMode;
+  price: string;
+  granted_seconds: number;
+  station_scope: PromoStationScope | null;
+  applies_to: PromoAppliesTo | null;
+  starts_at: string;
+  ends_at: string;
+  priority: number;
+  per_member_redemption_limit: number | null;
+  total_redemption_limit: number | null;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Mirrors server/schemas.py's PromoCreate/PromoUpdate (both PromoFields) --
+// created_by_user_id/owner_state/status are deliberately absent; the
+// server derives/assigns all of those, never the client.
+export interface PromoInput {
+  name: string;
+  audience: PromoAudience;
+  amount_mode: PromoAmountMode;
+  price: string;
+  granted_seconds: number;
+  station_scope: PromoStationScope | null;
+  applies_to: PromoAppliesTo | null;
+  starts_at: string;
+  ends_at: string;
+  priority: number;
+  per_member_redemption_limit: number | null;
+  total_redemption_limit: number | null;
+}
+
+// Mirrors server/schemas.py's PromoStateTransition. ends_at is required
+// only when reactivating (owner_state="enabled" while currently "ended")
+// -- the server is the sole authority on that rule; this type just
+// carries the optional field through.
+export interface PromoStateTransitionInput {
+  owner_state: "enabled" | "disabled" | "ended";
+  ends_at?: string;
+}
+
+export interface PromoAuditEvent {
+  event_id: string;
+  promo_id: string;
+  action: PromoAuditAction;
+  old_values: Record<string, unknown> | null;
+  new_values: Record<string, unknown> | null;
+  performed_by_user_id: string | null;
+  created_at: string;
+}
+
+// Mirrors server/schemas.py's PromoRedemption 1:1 -- raw ids only (no
+// member/PC name enrichment; that is explicitly out of scope for this
+// stage, see server/main.py's GET /promos/{promo_id}/redemptions).
+export interface PromoRedemption {
+  redemption_id: string;
+  promo_id: string;
+  promo_name_snapshot: string;
+  audience_snapshot: PromoAudience;
+  amount_mode_snapshot: PromoAmountMode;
+  price_snapshot: string;
+  granted_seconds_snapshot: number;
+  station_scope_snapshot: PromoStationScope | null;
+  applies_to_snapshot: PromoAppliesTo | null;
+  starts_at_snapshot: string;
+  ends_at_snapshot: string;
+  member_id: string | null;
+  session_id: string | null;
+  payment_id: string;
+  base_transaction_id: string | null;
+  bonus_transaction_id: string | null;
+  pc_name_snapshot: string | null;
+  income_group_id_snapshot: string | null;
+  income_group_name_snapshot: string | null;
+  operator_user_id: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  created_at: string;
+}
+
 export interface CalculatedTimeResponse {
   amount: string;
   duration_seconds: number;

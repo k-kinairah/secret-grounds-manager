@@ -4,6 +4,7 @@ type PageTitleIconName =
   | "history"
   | "members"
   | "monitor-cog"
+  | "promotions"
   | "rates"
   | "receipt"
   | "settings"
@@ -36,6 +37,12 @@ const iconPaths: Record<PageTitleIconName, Array<string>> = {
     "M19.4 10.7l.7.7",
     "M14.9 11.4l.7-.7",
     "M19.4 6.3l.7-.7"
+  ],
+  promotions: [
+    "M4 4h11l5 5v11H4z",
+    "M15 4v5h5",
+    "M9.5 12.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+    "m8 17 8-8"
   ],
   rates: ["M4 7.5V4h3.5L19 15.5 15.5 19 4 7.5z", "M8 8h.01", "M14 10.5c-1-.7-2.5-.2-2.5 1s1.3 1.5 2.5 2 2.5.8 2.5 2-1.5 1.7-2.5 1"],
   receipt: ["M6 3h12v18l-2-1.2-2 1.2-2-1.2-2 1.2-2-1.2L6 21V3z", "M9 7h6", "M9 11h6", "M9 15h3"],

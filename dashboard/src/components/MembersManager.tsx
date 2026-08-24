@@ -240,7 +240,7 @@ function describeActivity(transaction: MemberTimeTransaction): {
   }
 }
 
-function useModalFocus(
+export function useModalFocus(
   isOpen: boolean,
   modalRef: RefObject<HTMLElement | null>,
   onClose: () => void

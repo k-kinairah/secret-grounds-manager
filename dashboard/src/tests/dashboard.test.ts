@@ -5,9 +5,14 @@ import {
   adminOperatorLogin,
   assignStation,
   createUser,
+  createPromo,
   createRate,
   fetchAdminSettings,
   fetchAssignedStations,
+  fetchPromo,
+  fetchPromoAudit,
+  fetchPromoRedemptions,
+  fetchPromos,
   fetchCurrentUser,
   fetchDashboardTodaySales,
   fetchLoginOperators,
@@ -47,7 +52,9 @@ import {
   startMemberSession,
   startSession,
   toCashierMessage,
+  transitionPromoState,
   updateAdminSettings,
+  updatePromo,
   updateRate,
   updatePcLayout,
   updateRateStatus,
@@ -78,6 +85,15 @@ import {
   shouldFetchFrame,
   type FrameUrlCache
 } from "../lib/pcMonitor";
+import {
+  applyAudienceRules,
+  availableTransitionActions,
+  emptyPromoForm,
+  promoAudienceRules,
+  promoFormToInput,
+  promoToForm,
+  transitionActionToOwnerState
+} from "../lib/promoForm";
 import { saveRateProfile } from "../lib/rateActions";
 import { rateFormToInput, rateToForm } from "../lib/rateForm";
 import {
@@ -90,7 +106,14 @@ import {
   minutesToSeconds,
   secondsFromStartedAt
 } from "../lib/time";
-import type { OperatorActivityRecord, PcSummary, RateProfile, RateProfileInput, ScreenMonitorStatus } from "../lib/types";
+import type {
+  OperatorActivityRecord,
+  PcSummary,
+  Promo,
+  RateProfile,
+  RateProfileInput,
+  ScreenMonitorStatus
+} from "../lib/types";
 
 function makePc(overrides: Partial<PcSummary> = {}): PcSummary {
   return {
@@ -540,6 +563,204 @@ assert.deepEqual(
   }
 );
 
+// --- Stage 7: promoForm.ts pure-function coverage -------------------------
+
+const standardRules = promoAudienceRules("standard");
+assert.deepEqual(standardRules, {
+  stationScopeRequired: true,
+  appliesToRequired: true,
+  allowedAmountModes: ["exact"],
+  perMemberLimitAllowed: false
+});
+const vipRules = promoAudienceRules("vip");
+assert.deepEqual(vipRules, {
+  stationScopeRequired: true,
+  appliesToRequired: true,
+  allowedAmountModes: ["exact"],
+  perMemberLimitAllowed: false
+});
+const memberTopupRules = promoAudienceRules("member_topup");
+assert.deepEqual(memberTopupRules, {
+  stationScopeRequired: false,
+  appliesToRequired: false,
+  allowedAmountModes: ["exact", "minimum"],
+  perMemberLimitAllowed: true
+});
+const newMemberRules = promoAudienceRules("new_member");
+assert.deepEqual(newMemberRules, {
+  stationScopeRequired: false,
+  appliesToRequired: false,
+  allowedAmountModes: ["exact"],
+  perMemberLimitAllowed: false
+});
+
+// Switching audience clears fields the new audience forbids, matching
+// server/schemas.py's PromoFields.validate_cross_fields rules (UX
+// guidance only -- the server remains authoritative).
+const standardForm = emptyPromoForm("standard");
+assert.equal(standardForm.stationScope, "standard");
+assert.equal(standardForm.appliesTo, "start_session");
+assert.equal(standardForm.amountMode, "exact");
+
+const switchedToMemberTopup = applyAudienceRules({ ...standardForm, audience: "member_topup", amountMode: "minimum" });
+assert.equal(switchedToMemberTopup.stationScope, "");
+assert.equal(switchedToMemberTopup.appliesTo, "");
+assert.equal(switchedToMemberTopup.amountMode, "minimum");
+
+const switchedToNewMember = applyAudienceRules({
+  ...switchedToMemberTopup,
+  audience: "new_member",
+  perMemberLimit: "3"
+});
+assert.equal(switchedToNewMember.stationScope, "");
+assert.equal(switchedToNewMember.appliesTo, "");
+assert.equal(switchedToNewMember.amountMode, "exact", "new_member only allows exact -- minimum must be reset");
+assert.equal(switchedToNewMember.perMemberLimit, "", "new_member forbids a per-member limit");
+
+const switchedToVip = applyAudienceRules({ ...switchedToNewMember, audience: "vip" });
+assert.equal(switchedToVip.stationScope, "vip");
+assert.equal(switchedToVip.appliesTo, "start_session");
+
+// promoFormToInput validation (client-side UX pre-checks only). Each case
+// supplies valid values for every field checked BEFORE the one under
+// test, so the assertion actually exercises the intended check rather
+// than tripping over an earlier one.
+assert.throws(() => promoFormToInput({ ...standardForm, name: "  " }), /name/i);
+assert.throws(() => promoFormToInput({ ...standardForm, name: "Valid Name", price: "0" }), /price/i);
+assert.throws(
+  () => promoFormToInput({ ...standardForm, name: "Valid Name", price: "20.00", grantedMinutes: "0" }),
+  /granted time/i
+);
+assert.throws(
+  () =>
+    promoFormToInput({
+      ...standardForm,
+      name: "Valid Name",
+      price: "20.00",
+      grantedMinutes: "60",
+      stationScope: ""
+    }),
+  /station scope/i,
+  "standard promos require a station scope"
+);
+assert.throws(
+  () => promoFormToInput({ ...standardForm, name: "Valid Name", price: "20.00", grantedMinutes: "60" }),
+  /start date/i,
+  "emptyPromoForm leaves startsAt blank -- submitting without picking one must be rejected client-side"
+);
+assert.throws(
+  () =>
+    promoFormToInput({
+      ...standardForm,
+      name: "Valid Name",
+      price: "20.00",
+      grantedMinutes: "60",
+      startsAt: "2026-02-01T00:00",
+      endsAt: "2026-01-01T00:00"
+    }),
+  /later than/i,
+  "ends_at must be after starts_at"
+);
+
+function memberTopupFormFixture(): typeof standardForm {
+  return {
+    ...applyAudienceRules({ ...standardForm, audience: "member_topup" }),
+    startsAt: "2026-01-01T00:00",
+    endsAt: "2026-02-01T00:00"
+  };
+}
+
+const validStandardInput = promoFormToInput({
+  ...standardForm,
+  name: "Weeknight Special",
+  price: "20.00",
+  grantedMinutes: "100",
+  startsAt: "2026-01-01T09:00",
+  endsAt: "2026-01-01T23:00",
+  priority: "5",
+  totalLimit: "50"
+});
+assert.deepEqual(validStandardInput, {
+  name: "Weeknight Special",
+  audience: "standard",
+  amount_mode: "exact",
+  price: "20.00",
+  granted_seconds: 6000,
+  station_scope: "standard",
+  applies_to: "start_session",
+  starts_at: new Date("2026-01-01T09:00").toISOString(),
+  ends_at: new Date("2026-01-01T23:00").toISOString(),
+  priority: 5,
+  per_member_redemption_limit: null,
+  total_redemption_limit: 50
+});
+
+const validMemberTopupInput = promoFormToInput({
+  ...memberTopupFormFixture(),
+  name: "Load 100 Get Bonus",
+  price: "100.00",
+  grantedMinutes: "60",
+  perMemberLimit: "2"
+});
+assert.equal(validMemberTopupInput.station_scope, null);
+assert.equal(validMemberTopupInput.applies_to, null);
+assert.equal(validMemberTopupInput.per_member_redemption_limit, 2);
+
+// promoToForm -> promoFormToInput round-trips the business fields
+// (dates compared by instant, not by exact string, since the local
+// datetime-local round-trip is timezone-dependent on the test machine).
+const sampleStandardPromo: Promo = {
+  promo_id: "promo-1",
+  name: "Weeknight Special",
+  audience: "standard",
+  owner_state: "enabled",
+  status: "Active",
+  amount_mode: "exact",
+  price: "20.00",
+  granted_seconds: 6000,
+  station_scope: "standard",
+  applies_to: "start_session",
+  starts_at: "2026-01-01T09:00:00.000Z",
+  ends_at: "2026-01-01T23:00:00.000Z",
+  priority: 5,
+  per_member_redemption_limit: null,
+  total_redemption_limit: 50,
+  created_by_user_id: "owner-1",
+  created_at: "2025-12-01T00:00:00.000Z",
+  updated_at: "2025-12-01T00:00:00.000Z"
+};
+const roundTripInput = promoFormToInput(promoToForm(sampleStandardPromo));
+assert.equal(roundTripInput.name, sampleStandardPromo.name);
+assert.equal(roundTripInput.price, sampleStandardPromo.price);
+assert.equal(roundTripInput.granted_seconds, sampleStandardPromo.granted_seconds);
+assert.equal(roundTripInput.station_scope, sampleStandardPromo.station_scope);
+assert.equal(roundTripInput.applies_to, sampleStandardPromo.applies_to);
+assert.equal(roundTripInput.priority, sampleStandardPromo.priority);
+assert.equal(roundTripInput.total_redemption_limit, sampleStandardPromo.total_redemption_limit);
+assert.equal(
+  new Date(roundTripInput.starts_at).getTime(),
+  new Date(sampleStandardPromo.starts_at).getTime()
+);
+assert.equal(
+  new Date(roundTripInput.ends_at).getTime(),
+  new Date(sampleStandardPromo.ends_at).getTime()
+);
+
+// State-transition action availability per derived status -- this is a
+// UI-level "which buttons to show" question only. The server
+// (server/promo_repository.py's transition_state) remains the sole
+// authority on whether a submitted transition is actually valid.
+assert.deepEqual(availableTransitionActions({ ...sampleStandardPromo, status: "Draft" }), ["enable"]);
+assert.deepEqual(availableTransitionActions({ ...sampleStandardPromo, status: "Scheduled" }), ["disable", "end"]);
+assert.deepEqual(availableTransitionActions({ ...sampleStandardPromo, status: "Active" }), ["disable", "end"]);
+assert.deepEqual(availableTransitionActions({ ...sampleStandardPromo, status: "Disabled" }), ["enable", "end"]);
+assert.deepEqual(availableTransitionActions({ ...sampleStandardPromo, status: "Ended" }), ["reactivate"]);
+
+assert.equal(transitionActionToOwnerState("enable"), "enabled");
+assert.equal(transitionActionToOwnerState("reactivate"), "enabled");
+assert.equal(transitionActionToOwnerState("disable"), "disabled");
+assert.equal(transitionActionToOwnerState("end"), "ended");
+
 const standardGuestRate: RateProfile = {
   ...sampleRate,
   rate_id: "rate-standard-guest-5",
@@ -861,6 +1082,49 @@ async function runAsyncAssertions() {
     // comment in lib/api.ts); a plain <img src> would never send it.
     await fetchMonitorFrame("PC-11");
 
+    // Stage 7: promo management API request-shape smoke coverage.
+    // fetchCalls[48]/[49]: owner_states must be sent as REPEATED query
+    // parameters, never a single comma-joined value.
+    await fetchPromos();
+    await fetchPromos(["enabled", "draft"]);
+    await fetchPromo("promo-1");
+    await createPromo({
+      name: "Test Promo",
+      audience: "standard",
+      amount_mode: "exact",
+      price: "20.00",
+      granted_seconds: 6000,
+      station_scope: "standard",
+      applies_to: "start_session",
+      starts_at: "2026-01-01T00:00:00.000Z",
+      ends_at: "2026-02-01T00:00:00.000Z",
+      priority: 0,
+      per_member_redemption_limit: null,
+      total_redemption_limit: null
+    });
+    await updatePromo("promo-1", {
+      name: "Updated Promo",
+      audience: "member_topup",
+      amount_mode: "minimum",
+      price: "100.00",
+      granted_seconds: 3600,
+      station_scope: null,
+      applies_to: null,
+      starts_at: "2026-01-01T00:00:00.000Z",
+      ends_at: "2026-02-01T00:00:00.000Z",
+      priority: 1,
+      per_member_redemption_limit: 2,
+      total_redemption_limit: 10
+    });
+    await transitionPromoState("promo-1", { owner_state: "enabled" });
+    // fetchCalls[54]: reactivation carries the new ends_at through untouched.
+    await transitionPromoState("promo-1", {
+      owner_state: "enabled",
+      ends_at: "2026-03-01T00:00:00.000Z"
+    });
+    await fetchPromoAudit("promo-1");
+    await fetchPromoRedemptions("promo-1");
+
     assert.deepEqual(
       fetchCalls.map((call) => ({ method: call.method, url: call.url })),
       [
@@ -911,7 +1175,16 @@ async function runAsyncAssertions() {
         { method: "POST", url: "http://localhost:8000/stations/AA%3ABB%3ACC%3ADD%3AEE%3A01/reassign" },
         { method: "POST", url: "http://localhost:8000/stations/AA%3ABB%3ACC%3ADD%3AEE%3AFF/revoke" },
         { method: "GET", url: "http://localhost:8000/monitor/pcs" },
-        { method: "GET", url: "http://localhost:8000/monitor/pcs/PC-11/frame" }
+        { method: "GET", url: "http://localhost:8000/monitor/pcs/PC-11/frame" },
+        { method: "GET", url: "http://localhost:8000/promos" },
+        { method: "GET", url: "http://localhost:8000/promos?owner_states=enabled&owner_states=draft" },
+        { method: "GET", url: "http://localhost:8000/promos/promo-1" },
+        { method: "POST", url: "http://localhost:8000/promos" },
+        { method: "PATCH", url: "http://localhost:8000/promos/promo-1" },
+        { method: "PATCH", url: "http://localhost:8000/promos/promo-1/state" },
+        { method: "PATCH", url: "http://localhost:8000/promos/promo-1/state" },
+        { method: "GET", url: "http://localhost:8000/promos/promo-1/audit" },
+        { method: "GET", url: "http://localhost:8000/promos/promo-1/redemptions" }
       ]
     );
     assert.equal(fetchCalls.every((call) => call.credentials === "include"), true);
@@ -921,6 +1194,54 @@ async function runAsyncAssertions() {
     assert.equal(fetchCalls[46].url, "http://localhost:8000/monitor/pcs");
     assert.equal(fetchCalls[47].url, "http://localhost:8000/monitor/pcs/PC-11/frame");
     assert.equal(fetchCalls[47].credentials, "include");
+
+    // Stage 7 promo API body/URL shape checks.
+    assert.deepEqual(fetchCalls[48].body, null);
+    assert.deepEqual(fetchCalls[49].body, null);
+    assert.deepEqual(fetchCalls[50].body, null);
+    assert.deepEqual(fetchCalls[51].body, {
+      name: "Test Promo",
+      audience: "standard",
+      amount_mode: "exact",
+      price: "20.00",
+      granted_seconds: 6000,
+      station_scope: "standard",
+      applies_to: "start_session",
+      starts_at: "2026-01-01T00:00:00.000Z",
+      ends_at: "2026-02-01T00:00:00.000Z",
+      priority: 0,
+      per_member_redemption_limit: null,
+      total_redemption_limit: null
+    });
+    // Confirms PromoInput never carries created_by_user_id/owner_state/
+    // status -- the request body sent over the wire has no such keys at
+    // all, matching server/schemas.py's PromoCreate (those fields are
+    // deliberately absent from the client type, not just unset).
+    assert.equal("created_by_user_id" in (fetchCalls[51].body as object), false);
+    assert.equal("owner_state" in (fetchCalls[51].body as object), false);
+    assert.equal("status" in (fetchCalls[51].body as object), false);
+    assert.deepEqual(fetchCalls[52].body, {
+      name: "Updated Promo",
+      audience: "member_topup",
+      amount_mode: "minimum",
+      price: "100.00",
+      granted_seconds: 3600,
+      station_scope: null,
+      applies_to: null,
+      starts_at: "2026-01-01T00:00:00.000Z",
+      ends_at: "2026-02-01T00:00:00.000Z",
+      priority: 1,
+      per_member_redemption_limit: 2,
+      total_redemption_limit: 10
+    });
+    assert.deepEqual(fetchCalls[53].body, { owner_state: "enabled" });
+    assert.deepEqual(fetchCalls[54].body, {
+      owner_state: "enabled",
+      ends_at: "2026-03-01T00:00:00.000Z"
+    });
+    assert.deepEqual(fetchCalls[55].body, null);
+    assert.deepEqual(fetchCalls[56].body, null);
+
     assert.deepEqual(fetchCalls[0].body, {
       username: "owner",
       password: "password123"

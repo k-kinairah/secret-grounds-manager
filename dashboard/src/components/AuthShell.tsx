@@ -16,6 +16,7 @@ const ROLE_RANK: Record<UserRole, number> = {
 const ADMIN_ONLY_PATHS = [
   "/operator-activity",
   "/operators",
+  "/promotions",
   "/sales",
   "/settings",
   "/system",
@@ -27,6 +28,7 @@ const ADMIN_NAV_ITEMS = [
   { href: "/history", icon: HistoryNavIcon, label: "History" },
   { href: "/operators", icon: UsersNavIcon, label: "Staff" },
   { href: "/operator-activity", icon: HistoryNavIcon, label: "Operator Activity" },
+  { href: "/promotions", icon: PromotionsNavIcon, label: "Promotions" },
   { href: "/remote-commands", icon: CommandsNavIcon, label: "Remote Commands" },
   { href: "/settings", icon: SettingsNavIcon, label: "Settings" },
   { href: "/system", icon: SystemNavIcon, label: "System" }
@@ -429,6 +431,17 @@ function RatesNavIcon() {
       <path d="M4 7.5V4h3.5L19 15.5 15.5 19 4 7.5z" />
       <path d="M8 8h.01" />
       <path d="M14 10.5c-1-.7-2.5-.2-2.5 1s1.3 1.5 2.5 2 2.5.8 2.5 2-1.5 1.7-2.5 1" />
+    </svg>
+  );
+}
+
+function PromotionsNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M4 4h11l5 5v11H4z" />
+      <path d="M15 4v5h5" />
+      <path d="M9.5 12.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
+      <path d="m8 17 8-8" />
     </svg>
   );
 }
