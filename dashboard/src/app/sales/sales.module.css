@@ -321,14 +321,15 @@
 }
 
 .collectionToolbar {
+  align-items: flex-end;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 48%),
     rgba(8, 17, 31, 0.58);
   border: 1px solid rgba(56, 189, 248, 0.16);
   border-radius: 14px;
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(210px, auto);
   margin-bottom: 16px;
   padding: 12px;
 }
@@ -336,10 +337,13 @@
 .collectionFilters {
   align-items: end;
   display: grid;
-  flex: 1 1 620px;
+  /* Grows to fill the row (so there's no dead space after the action
+     buttons), while the action cell itself stays fixed-width right next to
+     it -- see .collectionActionCell. The grid's own 1fr tracks then share
+     that grown width evenly across every field. */
+  flex: 1 1 auto;
   gap: 12px;
   grid-template-columns: repeat(4, minmax(160px, 1fr));
-  min-width: 0;
 }
 
 .collectionFilters > div {
@@ -1209,10 +1213,6 @@
 
   .collectionFilters {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .collectionToolbar {
-    grid-template-columns: 1fr;
   }
 }
 

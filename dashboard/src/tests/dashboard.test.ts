@@ -2103,8 +2103,10 @@ async function runAsyncAssertions() {
     assert.match(membersSource, /getMemberAvatarInitial/);
     assert.match(membersSource, /getMemberLastActivityLabel/);
     assert.match(membersSource, /memberCardList/);
-    assert.match(membersSource, /memberListCard/);
-    assert.match(membersSource, /memberListCardSelected/);
+    assert.match(membersSource, /memberCardTopRow/);
+    assert.match(membersSource, /memberCardStatsGrid/);
+    assert.match(membersSource, /memberCardFooter/);
+    assert.match(membersSource, /memberCardSelected/);
     assert.match(membersSource, /memberAvatar/);
     assert.match(membersSource, /memberUsernameMissing/);
     assert.match(membersSource, /\["all", "active", "setup", "inactive"\] as const/);
@@ -2130,12 +2132,14 @@ async function runAsyncAssertions() {
     assert.match(membersCss, /\.memberDetailTabs/);
     assert.match(membersCss, /\.memberDetailTabActive/);
     assert.match(membersCss, /\.memberCardList/);
-    assert.match(membersCss, /\.memberListCard/);
-    assert.match(membersCss, /\.memberListCardSelected/);
+    assert.match(membersCss, /\.memberCard\s*\{/);
+    assert.match(membersCss, /\.memberCardSelected/);
+    assert.match(membersCss, /\.memberCardTopRow/);
+    assert.match(membersCss, /\.memberCardStatsGrid/);
+    assert.match(membersCss, /\.memberCardFooter/);
     assert.match(membersCss, /\.memberAvatar/);
     assert.match(membersCss, /\.memberAvatarSetup/);
     assert.match(membersCss, /\.memberCardStat/);
-    assert.match(membersCss, /\.memberCardActions/);
     assert.match(membersCss, /\.memberListEnd/);
     assert.match(membersCss, /\.memberSecurityError/);
     assert.match(membersCss, /\.memberStatus-ready/);
@@ -2151,8 +2155,7 @@ async function runAsyncAssertions() {
     assert.match(membersCss, /position: fixed/);
     assert.match(membersCss, /z-index: 80/);
     assert.match(membersCss, /@media \(max-width: 760px\)/);
-    assert.match(membersCss, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\) auto/);
-    assert.match(membersCss, /grid-column: 1 \/ 3/);
+    assert.match(membersCss, /\.memberCardStatsGrid \{\s*\n\s*display: grid;/);
 
     const authShellSource = readFileSync("src/components/AuthShell.tsx", "utf8");
     assert.match(authShellSource, /isAdminOperator/);
@@ -2280,7 +2283,7 @@ async function runAsyncAssertions() {
     assert.match(operatorsCss, /grid-template-columns: 1fr auto/);
 
     const operatorActivitySource = readFileSync("src/components/OperatorActivity.tsx", "utf8");
-    assert.match(operatorActivitySource, /summaryStrip/);
+    assert.match(operatorActivitySource, /summaryCards/);
     assert.match(operatorActivitySource, /Operators Active/);
     assert.match(operatorActivitySource, /humanizeAction/);
     assert.match(operatorActivitySource, /activityContext/);
@@ -2486,7 +2489,7 @@ async function runAsyncAssertions() {
 
     const historySource = readFileSync("src/components/HistoryTable.tsx", "utf8");
     assert.match(historySource, /pageSize = 25/);
-    assert.match(historySource, /summaryStrip/);
+    assert.match(historySource, /summaryCards/);
     assert.match(historySource, /Clear Filters/);
     assert.match(historySource, /View Details/);
     assert.match(historySource, /readableDuration/);
@@ -2495,7 +2498,7 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(historySource, /Original|Added Amount|Payment Status/);
 
     const historyCss = readFileSync("src/app/history/history.module.css", "utf8");
-    assert.match(historyCss, /\.summaryStrip/);
+    assert.match(historyCss, /\.summaryCard \{/);
     assert.match(historyCss, /\.filters/);
     assert.match(historyCss, /\.historyCards/);
     assert.match(historyCss, /\.pagination/);

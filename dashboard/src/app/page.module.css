@@ -2337,7 +2337,9 @@
 .field textarea {
   border: 1px solid var(--line);
   border-radius: 6px;
+  min-width: 0;
   padding: 11px 12px;
+  width: 100%;
 }
 
 .field textarea {
@@ -2962,11 +2964,11 @@
 
 .memberCardList {
   display: grid;
-  gap: 12px;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
 }
 
-.memberListCard {
-  align-items: center;
+.memberCard {
   background:
     linear-gradient(180deg, rgba(17, 27, 45, 0.86), rgba(8, 17, 31, 0.86));
   border: 1px solid rgba(56, 189, 248, 0.16);
@@ -2975,17 +2977,9 @@
   color: #dbeafe;
   cursor: pointer;
   display: grid;
-  gap: 16px;
-  grid-template-columns:
-    minmax(260px, 1.5fr)
-    minmax(100px, 0.5fr)
-    minmax(140px, 0.6fr)
-    minmax(150px, 0.7fr)
-    minmax(170px, 0.8fr)
-    auto;
-  min-height: 88px;
+  gap: 14px;
   outline: none;
-  padding: 14px 16px;
+  padding: 16px;
   transition:
     background-color 170ms ease,
     border-color 170ms ease,
@@ -2993,18 +2987,18 @@
     transform 170ms ease;
 }
 
-.memberListCard:hover,
-.memberListCard:focus-visible {
+.memberCard:hover,
+.memberCard:focus-visible {
   background:
     linear-gradient(180deg, rgba(22, 37, 59, 0.92), rgba(9, 22, 40, 0.92));
   border-color: rgba(56, 189, 248, 0.34);
   box-shadow:
     0 18px 42px rgb(0 0 0 / 0.24),
     0 0 24px rgb(14 165 233 / 0.1);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
 }
 
-.memberListCardSelected {
+.memberCardSelected {
   background:
     linear-gradient(180deg, rgba(14, 43, 67, 0.9), rgba(8, 24, 43, 0.9));
   border-color: rgba(56, 189, 248, 0.44);
@@ -3013,11 +3007,18 @@
     0 18px 42px rgb(0 0 0 / 0.24);
 }
 
+.memberCardTopRow {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
 .memberCardIdentity {
   align-items: center;
   display: grid;
   gap: 13px;
-  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, 1fr);
   min-width: 0;
 }
 
@@ -3087,10 +3088,20 @@
   font-weight: 750;
 }
 
-.memberCardStat {
+.memberCardStatsGrid {
   display: grid;
-  gap: 4px;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.memberCardStat {
+  background: rgba(8, 17, 31, 0.44);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
   min-width: 0;
+  padding: 10px 12px;
 }
 
 .memberCardStat > span {
@@ -3103,15 +3114,36 @@
 
 .memberCardStat strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 900;
+  justify-self: start;
 }
 
-.memberCardActions {
-  align-items: center;
+.memberCardFooter {
+  align-items: baseline;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
   display: flex;
-  justify-content: flex-end;
-  min-width: 40px;
+  gap: 8px;
+  justify-content: space-between;
+  padding-top: 12px;
+}
+
+.memberCardFooter span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.memberCardFooter strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .memberListEnd {
@@ -3125,6 +3157,7 @@
 .memberBalance {
   color: #67e8f9;
   font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 16px;
   font-weight: 900;
   white-space: nowrap;
 }
@@ -3137,12 +3170,13 @@
   color: #cbd5e1;
   cursor: pointer;
   display: inline-flex;
+  flex: 0 0 auto;
   justify-content: center;
   line-height: 1;
   min-height: 34px;
-  opacity: 0.42;
+  opacity: 0.55;
   padding: 0;
-  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, opacity 160ms ease;
   width: 34px;
 }
 
@@ -3153,9 +3187,9 @@
   width: 19px;
 }
 
-.memberListCard:hover .memberMoreButton,
-.memberListCard:focus-within .memberMoreButton,
-.memberListCardSelected .memberMoreButton {
+.memberCard:hover .memberMoreButton,
+.memberCard:focus-within .memberMoreButton,
+.memberCardSelected .memberMoreButton {
   opacity: 1;
 }
 
@@ -3836,15 +3870,6 @@
     --member-modal-top: 124px;
   }
 
-  .memberListCard {
-    grid-template-columns: minmax(260px, 1fr) repeat(2, minmax(130px, 0.42fr)) auto;
-  }
-
-  .memberCardStat:nth-of-type(4),
-  .memberCardStat:nth-of-type(5) {
-    grid-column: auto;
-  }
-
   .memberModalContent,
   .memberOverviewGrid,
   .memberDetailGrid,
@@ -3895,28 +3920,8 @@
     width: 100%;
   }
 
-  .memberListCard {
-    align-items: stretch;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
-  }
-
-  .memberCardIdentity {
-    grid-column: 1 / 3;
-    grid-row: 1;
-  }
-
-  .memberCardStat {
-    background: rgba(8, 17, 31, 0.44);
-    border: 1px solid rgba(148, 163, 184, 0.12);
-    border-radius: 8px;
-    grid-column: auto;
-    padding: 9px 10px;
-  }
-
-  .memberCardActions {
-    align-items: start;
-    grid-column: 3;
-    grid-row: 1;
+  .memberCardList {
+    grid-template-columns: 1fr;
   }
 }
 

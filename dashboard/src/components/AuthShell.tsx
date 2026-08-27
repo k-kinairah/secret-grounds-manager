@@ -438,10 +438,9 @@ function RatesNavIcon() {
 function PromotionsNavIcon() {
   return (
     <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
-      <path d="M4 4h11l5 5v11H4z" />
-      <path d="M15 4v5h5" />
-      <path d="M9.5 12.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
-      <path d="m8 17 8-8" />
+      <path d="M6 18 18 6" />
+      <path d="M7.5 10a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z" />
+      <path d="M16.5 19a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z" />
     </svg>
   );
 }
@@ -461,8 +460,12 @@ function CommandsNavIcon() {
 function SettingsNavIcon() {
   return (
     <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
-      <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" />
-      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3.4-.2-.1a1.7 1.7 0 0 0-1.9.1 7.8 7.8 0 0 1-1.6.9 1.7 1.7 0 0 0-1.1 1.6v.1H9v-.1a1.7 1.7 0 0 0-1.1-1.6 7.8 7.8 0 0 1-1.6-.9 1.7 1.7 0 0 0-1.9-.1l-.2.1-2-3.4.1-.1A1.7 1.7 0 0 0 2.6 15a7.7 7.7 0 0 1 0-1.9 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2-3.4.2.1a1.7 1.7 0 0 0 1.9-.1 7.8 7.8 0 0 1 1.6-.9A1.7 1.7 0 0 0 9 5.2V5h4v.2a1.7 1.7 0 0 0 1.1 1.6 7.8 7.8 0 0 1 1.6.9 1.7 1.7 0 0 0 1.9.1l.2-.1 2 3.4-.1.1a1.7 1.7 0 0 0-.3 1.9 7.7 7.7 0 0 1 0 1.9z" />
+      <path d="M4 6h16" />
+      <path d="M9 8.1a2.1 2.1 0 1 0 0-4.2 2.1 2.1 0 0 0 0 4.2z" />
+      <path d="M4 12h16" />
+      <path d="M16 14.1a2.1 2.1 0 1 0 0-4.2 2.1 2.1 0 0 0 0 4.2z" />
+      <path d="M4 18h16" />
+      <path d="M12 20.1a2.1 2.1 0 1 0 0-4.2 2.1 2.1 0 0 0 0 4.2z" />
     </svg>
   );
 }

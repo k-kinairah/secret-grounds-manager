@@ -857,8 +857,8 @@ export function MembersManager() {
 
               return (
                 <article
-                  className={`${styles.memberListCard} ${
-                    isSelected ? styles.memberListCardSelected : ""
+                  className={`${styles.memberCard} ${
+                    isSelected ? styles.memberCardSelected : ""
                   }`}
                   key={member.member_id}
                   onClick={() => void handleSelect(member)}
@@ -871,67 +871,28 @@ export function MembersManager() {
                   role="button"
                   tabIndex={0}
                 >
-                  <div className={styles.memberCardIdentity}>
-                    <div
-                      aria-hidden="true"
-                      className={`${styles.memberAvatar} ${
-                        accountState === "setup" ? styles.memberAvatarSetup : ""
-                      }`}
-                    >
-                      {getMemberAvatarInitial(member)}
-                    </div>
-                    <div className={styles.memberIdentityText}>
-                      <strong>{member.full_name}</strong>
-                      <span
-                        className={
-                          member.username ? styles.memberUsername : styles.memberUsernameMissing
-                        }
-                      >
-                        {member.username ? `@${member.username}` : "Not configured"}
-                      </span>
-                      <small>{member.phone_number || "No phone"}</small>
-                    </div>
-                  </div>
-
-                  <div className={styles.memberCardStat}>
-                    <span>Standard Time</span>
-                    <strong className={styles.memberBalance}>
-                      {formatMemberBalance(member.time_balance_seconds)}
-                    </strong>
-                  </div>
-
-                  <div className={styles.memberCardStat}>
-                    <span>VIP Time</span>
-                    <strong className={styles.memberBalance}>
-                      {formatMemberBalance(member.vip_balance_seconds)}
-                    </strong>
-                  </div>
-
-                  <div className={styles.memberCardStat}>
-                    <span>Status</span>
-                    <strong>
-                      <span
-                        className={`${styles.memberStatusBadge} ${
-                          styles[`memberStatus-${accountState}`]
+                  <div className={styles.memberCardTopRow}>
+                    <div className={styles.memberCardIdentity}>
+                      <div
+                        aria-hidden="true"
+                        className={`${styles.memberAvatar} ${
+                          accountState === "setup" ? styles.memberAvatarSetup : ""
                         }`}
                       >
-                        {getMemberAccountLabel(accountState)}
-                      </span>
-                    </strong>
-                  </div>
-
-                  <div className={styles.memberCardStat}>
-                    <span>Joined</span>
-                    <strong>{joined.date}</strong>
-                    <small>{joined.time}</small>
-                  </div>
-
-                  <div className={styles.memberCardStat}>
-                    <span>Last activity</span>
-                    <strong>{getMemberLastActivityLabel(member)}</strong>
-                  </div>
-
-                  <div className={styles.memberCardActions}>
+                        {getMemberAvatarInitial(member)}
+                      </div>
+                      <div className={styles.memberIdentityText}>
+                        <strong>{member.full_name}</strong>
+                        <span
+                          className={
+                            member.username ? styles.memberUsername : styles.memberUsernameMissing
+                          }
+                        >
+                          {member.username ? `@${member.username}` : "Not configured"}
+                        </span>
+                        <small>{member.phone_number || "No phone"}</small>
+                      </div>
+                    </div>
                     <button
                       aria-expanded={openMemberMenu?.member.member_id === member.member_id}
                       aria-haspopup="menu"
@@ -946,6 +907,46 @@ export function MembersManager() {
                     >
                       <MoreVerticalIcon />
                     </button>
+                  </div>
+
+                  <div className={styles.memberCardStatsGrid}>
+                    <div className={styles.memberCardStat}>
+                      <span>Standard Time</span>
+                      <strong className={styles.memberBalance}>
+                        {formatMemberBalance(member.time_balance_seconds)}
+                      </strong>
+                    </div>
+
+                    <div className={styles.memberCardStat}>
+                      <span>VIP Time</span>
+                      <strong className={styles.memberBalance}>
+                        {formatMemberBalance(member.vip_balance_seconds)}
+                      </strong>
+                    </div>
+
+                    <div className={styles.memberCardStat}>
+                      <span>Status</span>
+                      <strong>
+                        <span
+                          className={`${styles.memberStatusBadge} ${
+                            styles[`memberStatus-${accountState}`]
+                          }`}
+                        >
+                          {getMemberAccountLabel(accountState)}
+                        </span>
+                      </strong>
+                    </div>
+
+                    <div className={styles.memberCardStat}>
+                      <span>Joined</span>
+                      <strong>{joined.date}</strong>
+                      <small>{joined.time}</small>
+                    </div>
+                  </div>
+
+                  <div className={styles.memberCardFooter}>
+                    <span>Last activity</span>
+                    <strong>{getMemberLastActivityLabel(member)}</strong>
                   </div>
                 </article>
               );

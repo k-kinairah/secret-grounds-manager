@@ -458,3 +458,673 @@
     max-width: none;
   }
 }
+
+/* Operator Activity "View Details" drawer.
+   Dedicated classes -- .overlay/.dialog/.dialogHeader/.detailsGrid/.billingList
+   above are shared with HistoryTable.tsx and remote-commands/page.tsx and are
+   intentionally left untouched. */
+
+.activityDrawer {
+  background: #0b1220;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 0.4);
+  display: grid;
+  gap: 16px;
+  max-width: 560px;
+  overflow: auto;
+  padding: 20px;
+  width: min(560px, 100%);
+}
+
+.activityDrawerHeader {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  display: grid;
+  gap: 14px;
+  padding-bottom: 16px;
+}
+
+.activityDrawerHeaderTop {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.activityBadge {
+  background: rgba(59, 130, 246, 0.16);
+  border: 1px solid rgba(96, 165, 250, 0.36);
+  border-radius: 999px;
+  color: #93c5fd;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 5px 11px;
+  text-transform: uppercase;
+  width: fit-content;
+}
+
+.activityDrawerHeader h2 {
+  color: #f8fafc;
+  font-size: 26px;
+  margin: 0;
+}
+
+.activityOperatorRow {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.activityOperatorIdentity {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.activityAvatar {
+  align-items: center;
+  background: linear-gradient(135deg, #22d3ee, #2563eb);
+  border: 1px solid rgba(125, 211, 252, 0.6);
+  border-radius: 999px;
+  color: #020617;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 15px;
+  font-weight: 900;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.activityOperatorIdentity strong {
+  color: var(--text);
+  display: block;
+  font-size: 14px;
+}
+
+.activityOperatorIdentity span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.activityDrawerTimestamp {
+  color: var(--text);
+  display: grid;
+  flex: 0 0 auto;
+  gap: 2px;
+  text-align: right;
+}
+
+.activityDrawerTimestamp span:first-child {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.activityDrawerTimestamp span:last-child {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.activitySummaryCard,
+.activityDetailsCard,
+.activityTimelineCard {
+  background: linear-gradient(180deg, rgba(24, 31, 48, 0.9), rgba(14, 20, 33, 0.9));
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 9px;
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.activitySummaryLabel,
+.activityDetailsLabel,
+.activityTimelineLabel,
+.activityAboutLabel {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.activitySummaryCard p {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.activityDetailsGrid {
+  display: grid;
+  gap: 12px 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.activityDetailRow {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.activityDetailRow span {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.activityDetailRow strong {
+  color: #f8fafc;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityTimeline {
+  display: grid;
+  gap: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.activityTimelineItem {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 16px minmax(0, 1fr);
+  padding-bottom: 16px;
+  position: relative;
+}
+
+.activityTimelineItem:last-child {
+  padding-bottom: 0;
+}
+
+.activityTimelineItem:not(:last-child)::before {
+  background: rgba(148, 163, 184, 0.24);
+  bottom: 0;
+  content: "";
+  left: 7px;
+  position: absolute;
+  top: 16px;
+  width: 2px;
+}
+
+.activityTimelineDot {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 999px;
+  height: 14px;
+  margin-top: 2px;
+  width: 14px;
+}
+
+.activityTimelineDot[data-current="true"] {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.2);
+}
+
+.activityTimelineItemHead {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.activityTimelineItemHead strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.activityTimelineItemHead time {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.activityTimeline p {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 2px 0 0;
+}
+
+.activityAbout {
+  display: grid;
+  gap: 4px;
+  padding: 0 2px;
+}
+
+.activityAbout p {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+@media (max-width: 560px) {
+  .activityDetailsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .activityOperatorRow {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .activityDrawerTimestamp {
+    text-align: left;
+  }
+}
+
+@media (max-width: 760px) {
+  .activityDrawer {
+    border-radius: 0;
+    max-width: none;
+  }
+}
+
+/* Operator Activity page layout: filter bar, table, and pagination.
+   Dedicated classes -- .filters/.field/.tableButton/.table/.pagination
+   above are shared with HistoryTable.tsx and remote-commands/page.tsx and
+   are intentionally left untouched. .tableWrap/.emptyState/.message are
+   reused as-is since their existing rules already fit here unmodified. */
+
+.activityPanel {
+  display: grid;
+  gap: 16px;
+}
+
+.activityTable {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 760px;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.activityTable th,
+.activityTable td {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  overflow: hidden;
+  padding: 9px 14px;
+  text-align: left;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.activityTable th {
+  background: rgba(8, 17, 31, 0.98);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  position: sticky;
+  text-transform: uppercase;
+  top: 0;
+  z-index: 1;
+}
+
+.activityTable td {
+  color: #dbe7ff;
+  font-size: 13px;
+}
+
+.activityTable td strong {
+  color: #f8fafc;
+}
+
+.activityTable tbody tr {
+  transition: background-color 140ms ease;
+}
+
+.activityTable tbody tr:hover {
+  background: rgba(45, 212, 191, 0.06);
+}
+
+.activityTable th:nth-child(1),
+.activityTable td:nth-child(1) {
+  width: 17%;
+}
+
+.activityTable th:nth-child(2),
+.activityTable td:nth-child(2) {
+  width: 11%;
+}
+
+.activityTable th:nth-child(3),
+.activityTable td:nth-child(3) {
+  width: 15%;
+}
+
+.activityTable th:nth-child(4),
+.activityTable td:nth-child(4) {
+  white-space: normal;
+  width: 24%;
+}
+
+.activityTable th:nth-child(5),
+.activityTable td:nth-child(5) {
+  width: 9%;
+}
+
+.activityTable th:nth-child(6),
+.activityTable td:nth-child(6) {
+  width: 12%;
+}
+
+.activityTable th:nth-child(7),
+.activityTable td:nth-child(7) {
+  padding-right: 16px;
+  text-align: right;
+  width: 12%;
+}
+
+.activityViewDetailsButton {
+  align-items: center;
+  background: rgba(59, 130, 246, 0.14);
+  border: 1px solid rgba(59, 130, 246, 0.32);
+  border-radius: 7px;
+  color: #bfdbfe;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12.5px;
+  font-weight: 900;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 10px;
+  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+  white-space: nowrap;
+  width: 96px;
+}
+
+.activityViewDetailsButton:hover:not(:disabled),
+.activityViewDetailsButton:focus-visible {
+  background: rgba(59, 130, 246, 0.24);
+  border-color: rgba(96, 165, 250, 0.5);
+  outline: none;
+}
+
+.activityViewDetailsButton:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.activityPagination {
+  align-items: center;
+  background: linear-gradient(180deg, rgba(20, 28, 42, 0.98), rgba(9, 15, 26, 0.98));
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0 0 8px 8px;
+  border-top: none;
+  color: var(--muted);
+  display: flex;
+  font-size: 12.5px;
+  font-weight: 700;
+  justify-content: space-between;
+  margin-top: -1px;
+  padding: 10px 14px;
+}
+
+.activityPaginationActions {
+  display: flex;
+  gap: 8px;
+}
+
+.activityPageButton {
+  align-items: center;
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 7px;
+  color: #dbeafe;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12.5px;
+  font-weight: 900;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 14px;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.activityPageButton:hover:not(:disabled) {
+  background: rgba(45, 212, 191, 0.12);
+  border-color: rgba(45, 212, 191, 0.4);
+}
+
+.activityPageButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+@media (max-width: 760px) {
+  .activityPagination {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .activityPaginationActions {
+    align-self: stretch;
+  }
+
+  .activityPaginationActions .activityPageButton {
+    flex: 1 1 0;
+  }
+}
+
+/* Sales-style filter toolbar, shared by Operator Activity, History, and
+   Remote Commands (all three already import this module). Mirrors the
+   visual pattern of .collectionToolbar/.collectionFilters/etc. in
+   sales.module.css -- that file is not touched; these are new, dedicated
+   names. The old .filters/.field classes above are left as-is (still
+   defined, no longer referenced by these three filter rows) since other
+   hidden consumers are not worth the risk of removing them. */
+
+.filterToolbar {
+  align-items: flex-end;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 48%),
+    rgba(8, 17, 31, 0.58);
+  border: 1px solid rgba(56, 189, 248, 0.16);
+  border-radius: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px;
+}
+
+.filterFields {
+  align-items: end;
+  display: grid;
+  /* Grows to fill the row (so there's no dead space after Clear), while
+     Clear itself stays fixed-width right next to it -- see .filterActionCell.
+     The grid's own 1fr tracks then share that grown width evenly across
+     every field, so they grow together and stay consistent with each other. */
+  flex: 1 1 auto;
+  gap: 12px;
+  /* Fixed track count, not auto-fit/auto-fill: as a flex item with no
+     explicit width, this grid's available inline size is indefinite, and
+     auto-fit/auto-fill collapse to a single track under an indefinite size
+     (that's what caused every field to stack in one column). A fixed
+     repeat() count doesn't have that failure mode. */
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+}
+
+.filterFieldsThree {
+  grid-template-columns: repeat(3, minmax(190px, 1fr));
+}
+
+.filterSearchField {
+  color: var(--muted);
+  display: grid;
+  font-size: 11px;
+  font-weight: 900;
+  gap: 6px;
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+.filterSearchField input {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 42%),
+    rgba(8, 17, 31, 0.84);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 12px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  height: 44px;
+  padding: 0 12px;
+  text-transform: none;
+  width: 100%;
+}
+
+.filterSearchField input::placeholder {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.filterSearchField input:focus {
+  border-color: rgba(103, 232, 249, 0.46);
+  outline: 3px solid rgba(56, 189, 248, 0.38);
+  outline-offset: 3px;
+}
+
+.filterActionCell {
+  align-content: start;
+  display: grid;
+  gap: 6px;
+}
+
+.filterActionSpacer {
+  color: transparent;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: normal;
+  pointer-events: none;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.filterActionRow {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.filterClearButton {
+  align-items: center;
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 10px;
+  color: #dbeafe;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12.5px;
+  font-weight: 900;
+  height: 44px;
+  justify-content: center;
+  min-width: 110px;
+  padding: 0 16px;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+  white-space: nowrap;
+}
+
+.filterClearButton:hover:not(:disabled) {
+  background: rgba(45, 212, 191, 0.12);
+  border-color: rgba(45, 212, 191, 0.42);
+  color: #f8fafc;
+}
+
+@media (max-width: 900px) {
+  .filterFields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .filterFields,
+  .filterActionCell {
+    width: 100%;
+  }
+
+  .filterFields {
+    grid-template-columns: 1fr;
+  }
+
+  .filterActionRow {
+    justify-content: stretch;
+  }
+
+  .filterClearButton {
+    width: 100%;
+  }
+}
+
+/* Sales-style individual summary cards, shared by Operator Activity,
+   History, and Remote Commands. Mirrors .summaryGrid/.metricCard in
+   sales.module.css (not touched -- these are new, dedicated names). The
+   old .summaryStrip class above is left as-is, no longer referenced by
+   these three summary rows. */
+
+.summaryCards {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.summaryCardsFive {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.summaryCard {
+  background: linear-gradient(180deg, rgba(17, 27, 45, 0.96), rgba(8, 17, 31, 0.96));
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 7px;
+  min-height: 86px;
+  padding: 12px;
+}
+
+.summaryCard span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.summaryCard strong {
+  color: var(--text);
+  font-size: clamp(19px, 1.45vw, 24px);
+  line-height: 1;
+}
+
+.summaryCard small {
+  color: #9fb4d3;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+@media (max-width: 900px) {
+  .summaryCards,
+  .summaryCardsFive {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .summaryCards,
+  .summaryCardsFive {
+    grid-template-columns: 1fr;
+  }
+}

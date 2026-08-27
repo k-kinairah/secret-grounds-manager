@@ -6,6 +6,7 @@ import { formatDateTime, formatMoney, formatNaturalDuration } from "@/lib/time";
 import type { BillingSummary, SessionRecord, SessionStatus } from "@/lib/types";
 import styles from "@/app/history/history.module.css";
 import { CloseButton } from "./CloseButton";
+import { SecretSelect, SelectGlyph, type SecretSelectOption } from "./SecretSelect";
 
 const pageSize = 25;
 const statuses: Array<SessionStatus | "all"> = [
@@ -20,6 +21,19 @@ const statuses: Array<SessionStatus | "all"> = [
 ];
 const dateRanges = ["all", "today", "yesterday", "this_week", "this_month"] as const;
 type DateRange = (typeof dateRanges)[number];
+const dateRangeLabels: Record<DateRange, string> = {
+  all: "All dates",
+  today: "Today",
+  yesterday: "Yesterday",
+  this_week: "This Week",
+  this_month: "This Month"
+};
+const sessionTypeOptions: SecretSelectOption[] = [
+  { value: "all", label: "All types" },
+  { value: "prepaid", label: "Prepaid" },
+  { value: "open_time", label: "Open Time" },
+  { value: "member_balance", label: "Member Time" }
+];
 
 const statusClassName: Record<SessionStatus, string> = {
   active: styles.statusActive,
@@ -47,6 +61,17 @@ function readableStatus(status: SessionStatus): string {
   };
   return labels[status];
 }
+
+const statusFilterOptions: SecretSelectOption[] = statuses.map((status) => ({
+  value: status,
+  label: status === "all" ? "All statuses" : readableStatus(status)
+}));
+// Deliberately not derived from the `dateRanges` array above -- that array's
+// order only matters for the DateRange type union. This preserves the exact
+// option order the native <select> previously rendered.
+const dateRangeOptions: SecretSelectOption[] = (["today", "yesterday", "this_week", "this_month", "all"] as const).map(
+  (range) => ({ value: range, label: dateRangeLabels[range] })
+);
 
 function readableDuration(seconds: number | null, active = false): string {
   if (seconds === null || seconds <= 0) {
@@ -212,53 +237,59 @@ export function HistoryTable() {
 
   return (
     <>
-      <section className={styles.summaryStrip} aria-label="Filtered history summary">
-        <div><span>Sessions</span><strong>{filteredSessions.length}</strong></div>
-        <div><span>Total Usage</span><strong>{readableDuration(summary.seconds)}</strong></div>
-        <div><span>Total Charged</span><strong>{formatMoney(summary.charged)}</strong></div>
-        <div><span>Total Paid</span><strong>{formatMoney(summary.paid)}</strong></div>
-        <div><span>Outstanding</span><strong className={summary.outstanding > 0 ? styles.balanceDue : ""}>{formatMoney(summary.outstanding)}</strong></div>
+      <section className={`${styles.summaryCards} ${styles.summaryCardsFive}`} aria-label="Filtered history summary">
+        <article className={styles.summaryCard}><span>Sessions</span><strong>{filteredSessions.length}</strong></article>
+        <article className={styles.summaryCard}><span>Total Usage</span><strong>{readableDuration(summary.seconds)}</strong></article>
+        <article className={styles.summaryCard}><span>Total Charged</span><strong>{formatMoney(summary.charged)}</strong></article>
+        <article className={styles.summaryCard}><span>Total Paid</span><strong>{formatMoney(summary.paid)}</strong></article>
+        <article className={styles.summaryCard}><span>Outstanding</span><strong className={summary.outstanding > 0 ? styles.balanceDue : ""}>{formatMoney(summary.outstanding)}</strong></article>
       </section>
 
-      <section className={styles.filters} aria-label="History filters">
-        <label className={styles.field}>
-          Search
-          <input
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setPage(1);
-            }}
-            placeholder="PC, customer, member, or operator"
-            type="search"
-            value={search}
+      <section className={styles.filterToolbar} aria-label="History filters">
+        <div className={styles.filterFields}>
+          <label className={styles.filterSearchField}>
+            Search
+            <input
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
+              placeholder="PC, customer, member, or operator"
+              type="search"
+              value={search}
+            />
+          </label>
+          <SecretSelect
+            active={statusFilter !== "all"}
+            label="Status"
+            leadingIcon={<SelectGlyph name="badge" />}
+            onChange={(nextValue) => setStatusFilter(nextValue as SessionStatus | "all")}
+            options={statusFilterOptions}
+            value={statusFilter}
           />
-        </label>
-        <label className={styles.field}>
-          Status
-          <select onChange={(event) => setStatusFilter(event.target.value as SessionStatus | "all")} value={statusFilter}>
-            {statuses.map((status) => <option key={status} value={status}>{status === "all" ? "All statuses" : readableStatus(status)}</option>)}
-          </select>
-        </label>
-        <label className={styles.field}>
-          Session Type
-          <select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}>
-            <option value="all">All types</option>
-            <option value="prepaid">Prepaid</option>
-            <option value="open_time">Open Time</option>
-            <option value="member_balance">Member Time</option>
-          </select>
-        </label>
-        <label className={styles.field}>
-          Date Range
-          <select onChange={(event) => setDateRange(event.target.value as DateRange)} value={dateRange}>
-            <option value="today">Today</option>
-            <option value="yesterday">Yesterday</option>
-            <option value="this_week">This Week</option>
-            <option value="this_month">This Month</option>
-            <option value="all">All dates</option>
-          </select>
-        </label>
-        <button className={styles.tableButton} onClick={clearFilters} type="button">Clear Filters</button>
+          <SecretSelect
+            active={typeFilter !== "all"}
+            label="Session Type"
+            leadingIcon={<SelectGlyph name="list-filter" />}
+            onChange={setTypeFilter}
+            options={sessionTypeOptions}
+            value={typeFilter}
+          />
+          <SecretSelect
+            active={dateRange !== "today"}
+            label="Date Range"
+            leadingIcon={<SelectGlyph name="calendar" />}
+            onChange={(nextValue) => setDateRange(nextValue as DateRange)}
+            options={dateRangeOptions}
+            value={dateRange}
+          />
+        </div>
+        <div className={styles.filterActionCell}>
+          <span aria-hidden="true" className={styles.filterActionSpacer}>Action</span>
+          <div className={styles.filterActionRow}>
+            <button className={styles.filterClearButton} onClick={clearFilters} type="button">Clear Filters</button>
+          </div>
+        </div>
       </section>
 
       {message ? <div className={styles.message}>{message}</div> : null}

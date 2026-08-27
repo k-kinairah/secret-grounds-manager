@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import styles from "@/app/history/history.module.css";
 import { PageTitleIcon } from "@/components/PageTitleIcon";
+import { SecretSelect, SelectGlyph, type SecretSelectOption } from "@/components/SecretSelect";
 import { fetchRemoteCommands } from "@/lib/api";
 import { formatDateTime } from "@/lib/time";
 import type { RemoteCommandRecord, RemoteCommandStatus, RemoteCommandType } from "@/lib/types";
@@ -52,6 +53,24 @@ function statusName(status: RemoteCommandStatus): string {
   };
   return labels[status];
 }
+
+const commandTypeOptions: SecretSelectOption[] = commandTypes.map((type) => ({
+  value: type,
+  label: type === "all" ? "All commands" : commandName(type)
+}));
+const statusFilterOptions: SecretSelectOption[] = statuses.map((status) => ({
+  value: status,
+  label: status === "all" ? "All statuses" : statusName(status)
+}));
+const dateRangeLabels: Record<DateRange, string> = {
+  today: "Today",
+  yesterday: "Yesterday",
+  this_week: "This Week",
+  this_month: "This Month",
+  custom: "Custom",
+  all: "All dates"
+};
+const dateRangeOptions: SecretSelectOption[] = dateRanges.map((range) => ({ value: range, label: dateRangeLabels[range] }));
 
 function statusClass(status: RemoteCommandStatus): string {
   if (status === "completed" || status === "received") {
@@ -196,55 +215,59 @@ export default function RemoteCommandsPage() {
         </div>
       </header>
 
-      <section className={styles.summaryStrip} aria-label="Remote command summary">
-        <div><span>Total Commands</span><strong>{summary.total}</strong></div>
-        <div><span>Completed</span><strong>{summary.completed}</strong></div>
-        <div><span>Failed</span><strong>{summary.failed}</strong></div>
-        <div><span>Pending</span><strong>{summary.pending}</strong></div>
-        <div><span>Forced</span><strong>{summary.forced}</strong></div>
+      <section className={`${styles.summaryCards} ${styles.summaryCardsFive}`} aria-label="Remote command summary">
+        <article className={styles.summaryCard}><span>Total Commands</span><strong>{summary.total}</strong></article>
+        <article className={styles.summaryCard}><span>Completed</span><strong>{summary.completed}</strong></article>
+        <article className={styles.summaryCard}><span>Failed</span><strong>{summary.failed}</strong></article>
+        <article className={styles.summaryCard}><span>Pending</span><strong>{summary.pending}</strong></article>
+        <article className={styles.summaryCard}><span>Forced</span><strong>{summary.forced}</strong></article>
       </section>
 
-      <section className={styles.filters} aria-label="Remote command filters">
-        <label className={styles.field}>
-          Search
-          <input
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setPage(1);
-            }}
-            placeholder="PC, operator, command, or message"
-            type="search"
-            value={search}
+      <section className={styles.filterToolbar} aria-label="Remote command filters">
+        <div className={styles.filterFields}>
+          <label className={styles.filterSearchField}>
+            Search
+            <input
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
+              placeholder="PC, operator, command, or message"
+              type="search"
+              value={search}
+            />
+          </label>
+          <SecretSelect
+            active={typeFilter !== "all"}
+            label="Command Type"
+            leadingIcon={<SelectGlyph name="list-filter" />}
+            onChange={(nextValue) => setTypeFilter(nextValue as RemoteCommandType | "all")}
+            options={commandTypeOptions}
+            value={typeFilter}
           />
-        </label>
-        <label className={styles.field}>
-          Command Type
-          <select onChange={(event) => setTypeFilter(event.target.value as RemoteCommandType | "all")} value={typeFilter}>
-            {commandTypes.map((type) => (
-              <option key={type} value={type}>{type === "all" ? "All commands" : commandName(type)}</option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          Status
-          <select onChange={(event) => setStatusFilter(event.target.value as RemoteCommandStatus | "all")} value={statusFilter}>
-            {statuses.map((status) => (
-              <option key={status} value={status}>{status === "all" ? "All statuses" : statusName(status)}</option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          Date Range
-          <select onChange={(event) => setDateRange(event.target.value as DateRange)} value={dateRange}>
-            <option value="today">Today</option>
-            <option value="yesterday">Yesterday</option>
-            <option value="this_week">This Week</option>
-            <option value="this_month">This Month</option>
-            <option value="custom">Custom</option>
-            <option value="all">All dates</option>
-          </select>
-        </label>
-        <button className={styles.tableButton} onClick={clearFilters} type="button">Clear Filters</button>
+          <SecretSelect
+            active={statusFilter !== "all"}
+            label="Status"
+            leadingIcon={<SelectGlyph name="badge" />}
+            onChange={(nextValue) => setStatusFilter(nextValue as RemoteCommandStatus | "all")}
+            options={statusFilterOptions}
+            value={statusFilter}
+          />
+          <SecretSelect
+            active={dateRange !== "today"}
+            label="Date Range"
+            leadingIcon={<SelectGlyph name="calendar" />}
+            onChange={(nextValue) => setDateRange(nextValue as DateRange)}
+            options={dateRangeOptions}
+            value={dateRange}
+          />
+        </div>
+        <div className={styles.filterActionCell}>
+          <span aria-hidden="true" className={styles.filterActionSpacer}>Action</span>
+          <div className={styles.filterActionRow}>
+            <button className={styles.filterClearButton} onClick={clearFilters} type="button">Clear Filters</button>
+          </div>
+        </div>
       </section>
 
       {message ? <div className={styles.message}>{message}</div> : null}

@@ -313,9 +313,10 @@ export function SecretSelect({
   );
 }
 
-export function SelectGlyph({ name }: { name: "badge" | "check" | "chevron" | "credit-card" | "list-filter" | "users" | "x" }) {
+export function SelectGlyph({ name }: { name: "badge" | "calendar" | "check" | "chevron" | "credit-card" | "list-filter" | "users" | "x" }) {
   const paths = {
     badge: ["M8 4h8l4 4v8l-4 4H8l-4-4V8z", "m8.5 12 2.2 2.2 4.8-5"],
+    calendar: ["M4 5h16v15H4z", "M4 9h16", "M8 3v4", "M16 3v4"],
     check: ["m5 12 4 4L19 6"],
     chevron: ["m6 9 6 6 6-6"],
     "credit-card": ["M3 6h18v12H3z", "M3 10h18", "M7 15h4"],

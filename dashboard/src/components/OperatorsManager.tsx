@@ -292,32 +292,32 @@ export function OperatorsManager() {
 
   return (
     <>
-      <section className={styles.staffPanel}>
-        <div className={styles.staffPageHeader}>
-          <div className="pageTitleLockup">
-            <PageTitleIcon name="shield" />
-            <div>
-              <h1>Staff</h1>
-              <p>Manage who can operate Secret Grounds.</p>
-              <span>{operators.length} operators / {activeCount} active</span>
-            </div>
-          </div>
-          <div className={styles.staffHeaderActions}>
-            <label className={styles.staffSearch}>
-              <span className="srOnly">Search operators</span>
-              <input
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search operators"
-                type="search"
-                value={query}
-              />
-            </label>
-            <button className={styles.primaryButton} onClick={() => { setFormError(null); setModal({ kind: "add" }); }} type="button">
-              Add Operator
-            </button>
+      <div className={styles.staffPageHeader}>
+        <div className="pageTitleLockup">
+          <PageTitleIcon name="shield" />
+          <div>
+            <h1>Staff</h1>
+            <p>Manage who can operate Secret Grounds.</p>
+            <span>{operators.length} operators / {activeCount} active</span>
           </div>
         </div>
+        <div className={styles.staffHeaderActions}>
+          <label className={styles.staffSearch}>
+            <span className="srOnly">Search operators</span>
+            <input
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search operators"
+              type="search"
+              value={query}
+            />
+          </label>
+          <button className={styles.primaryButton} onClick={() => { setFormError(null); setModal({ kind: "add" }); }} type="button">
+            Add Operator
+          </button>
+        </div>
+      </div>
 
+      <section className={styles.staffPanel}>
         {message ? <div className={styles.message}>{message}</div> : null}
 
         <div className={styles.staffDirectoryHeader} aria-hidden="true">
@@ -506,7 +506,7 @@ function OperatorFormDialog({
           </select>
         </label>
         {accessMethod === "quick" && !isProtected ? (
-          <p className={styles.staffWarning}>Quick Access allows this operator to sign in without a password from the shop dashboard.</p>
+          <p className={styles.staffWarning}>Signs in without a password from the shop dashboard.</p>
         ) : null}
         {!operator && accessMethod === "password" ? (
           <>
