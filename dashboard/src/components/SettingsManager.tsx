@@ -15,6 +15,7 @@ import type {
   AdminSettingsResponse
 } from "@/lib/types";
 import { formatRateDuration } from "@/lib/time";
+import { PricingConfirmDialog } from "./PricingConfirmDialog";
 import styles from "@/app/settings/settings.module.css";
 
 type SettingsCategoryKey = keyof AdminSettings;
@@ -490,6 +491,110 @@ function draftToUpdate(draft: PricingDraft): { update: AdminPricingUpdate } | { 
   };
 }
 
+// One row of the "Apply pricing" before/after confirmation. `beforeText` /
+// `afterText` are already formatted (₱ + duration) so the dialog stays dumb.
+export interface PricingChangeRow {
+  key: string;
+  label: string;
+  sublabel?: string;
+  beforeText: string;
+  afterText: string;
+}
+
+function moneyTimeText(entry: { price: string; seconds: number }): string {
+  return `${pesoText(Number(entry.price))} · ${formatRateDuration(entry.seconds)}`;
+}
+
+function moneyTimeEqual(
+  a: { price: string; seconds: number },
+  b: { price: string; seconds: number }
+): boolean {
+  return Number(a.price) === Number(b.price) && a.seconds === b.seconds;
+}
+
+// Pure. Returns ONLY the rows whose (price, seconds) actually differ between
+// the last-saved snapshot and the exact AdminPricingUpdate that will be PUT.
+// The VIP 2h/3h/4h tiers are derived exactly as
+// server/pricing_service.apply_pricing_update does -- hourly x multiple, with
+// the durations staying 3600 / 7200 / 10800 / 14400 -- and only appear when
+// the VIP hourly price changes. The promo is one logical row: the server
+// writes the same (price, seconds) to both the VIP guest promo package and
+// the VIP member promo product in one transaction.
+export function pricingChanges(
+  snapshot: AdminPricingSnapshot,
+  update: AdminPricingUpdate
+): PricingChangeRow[] {
+  const rows: PricingChangeRow[] = [];
+  const add = (
+    key: string,
+    label: string,
+    before: { price: string; seconds: number },
+    after: { price: string; seconds: number },
+    sublabel?: string
+  ) => {
+    if (!moneyTimeEqual(before, after)) {
+      rows.push({
+        key,
+        label,
+        sublabel,
+        beforeText: moneyTimeText(before),
+        afterText: moneyTimeText(after)
+      });
+    }
+  };
+
+  add("standard_guest", "Standard Guest", snapshot.standard_guest, update.standard_guest);
+  add(
+    "standard_member_new_account",
+    "Member — New Account",
+    snapshot.standard_member_new_account,
+    update.standard_member_new_account
+  );
+  add(
+    "standard_member_topup_small",
+    "Member — Top-up (small)",
+    snapshot.standard_member_topup_small,
+    update.standard_member_topup_small
+  );
+  add(
+    "standard_member_topup_large",
+    "Member — Top-up (large)",
+    snapshot.standard_member_topup_large,
+    update.standard_member_topup_large
+  );
+
+  if (!moneyTimeEqual(snapshot.vip_guest_hourly, update.vip_guest_hourly)) {
+    add("vip_guest_1hr", "VIP Guest — 1 hr", snapshot.vip_guest_hourly, update.vip_guest_hourly);
+    const hourlyPrice = Number(update.vip_guest_hourly.price);
+    for (const multiple of [2, 3, 4] as const) {
+      const tier = snapshot.vip_guest_tiers.find((entry) => entry.multiple === multiple);
+      const before = tier
+        ? { price: tier.price, seconds: tier.seconds }
+        : {
+            price: (Number(snapshot.vip_guest_hourly.price) * multiple).toFixed(2),
+            seconds: SECONDS_PER_HOUR * multiple
+          };
+      add(
+        `vip_guest_${multiple}hr`,
+        `VIP Guest — ${multiple} hr`,
+        before,
+        { price: (hourlyPrice * multiple).toFixed(2), seconds: SECONDS_PER_HOUR * multiple },
+        "Regenerated automatically from the hourly rate"
+      );
+    }
+  }
+
+  add(
+    "promo",
+    "VIP Promo",
+    snapshot.promo,
+    update.promo,
+    "Applies to the VIP guest promo package and the VIP member promo product together"
+  );
+
+  return rows;
+}
+
 // Mirrors server/rate_calculator.calculate_metered_time: floor(amount / price * duration).
 function meteredExample(amount: number, price: number, durationSeconds: number): string {
   if (!(price > 0) || !(durationSeconds > 0)) {
@@ -582,6 +687,9 @@ function RatesPricingPanel() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  // The exact AdminPricingUpdate awaiting confirmation. While non-null the
+  // "Apply pricing" dialog is open; the PUT has NOT been sent yet.
+  const [pendingUpdate, setPendingUpdate] = useState<AdminPricingUpdate | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -617,8 +725,10 @@ function RatesPricingPanel() {
     setMessage(null);
   }
 
-  async function save() {
-    if (draft === null || isSaving) {
+  // "Save pricing" only validates + builds the update and opens the
+  // confirmation dialog. It never calls the API or mutates saved pricing.
+  function save() {
+    if (draft === null || isSaving || pendingUpdate !== null) {
       return;
     }
     const built = draftToUpdate(draft);
@@ -627,11 +737,21 @@ function RatesPricingPanel() {
       setMessage(null);
       return;
     }
+    setError(null);
+    setMessage(null);
+    setPendingUpdate(built.update);
+  }
+
+  // The only path that calls PUT /admin/pricing. Invoked by "Apply pricing".
+  async function commit(update: AdminPricingUpdate) {
+    if (isSaving) {
+      return;
+    }
     setIsSaving(true);
     setError(null);
     setMessage(null);
     try {
-      const next = await updateAdminPricing(built.update);
+      const next = await updateAdminPricing(update);
       setSnapshot(next);
       setDraft(snapshotToDraft(next));
       setMessage("Pricing saved. New sessions and purchases will use the updated values.");
@@ -639,6 +759,7 @@ function RatesPricingPanel() {
       setError(saveError instanceof Error ? saveError.message : "Could not save pricing.");
     } finally {
       setIsSaving(false);
+      setPendingUpdate(null);
     }
   }
 
@@ -829,13 +950,27 @@ function RatesPricingPanel() {
               >
                 Discard changes
               </button>
-              <button className={styles.primaryButton} disabled={!hasChanges || isSaving} onClick={() => void save()} type="button">
+              <button
+                className={styles.primaryButton}
+                disabled={!hasChanges || isSaving || pendingUpdate !== null}
+                onClick={save}
+                type="button"
+              >
                 {isSaving ? "Saving…" : "Save pricing"}
               </button>
             </div>
           </div>
         </>
       )}
+
+      {pendingUpdate !== null && snapshot !== null ? (
+        <PricingConfirmDialog
+          changes={pricingChanges(snapshot, pendingUpdate)}
+          isLoading={isSaving}
+          onCancel={() => setPendingUpdate(null)}
+          onConfirm={() => void commit(pendingUpdate)}
+        />
+      ) : null}
     </section>
   );
 }
