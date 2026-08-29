@@ -38,6 +38,12 @@ def bootstrap_owner(database_path: str) -> None:
                 role="owner",
             )
         )
+    # /commands/test-ping is gated by require_system_admin (is_protected),
+    # not just require_role("admin"). Mark this test's owner persona as a
+    # protected account so it legitimately satisfies that gate -- the
+    # authorization rule itself is unchanged.
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("UPDATE users SET is_protected = 1 WHERE username = 'owner'")
 
 
 def login_owner() -> requests.Session:
