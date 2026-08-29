@@ -1,20 +1,9 @@
-import { RatesManager } from "@/components/RatesManager";
-import { PageTitleIcon } from "@/components/PageTitleIcon";
-import styles from "./rates.module.css";
+import { redirect } from "next/navigation";
 
+// The standalone Rates page has been retired. Rate/pricing configuration now
+// lives under Admin -> Settings -> Rates & Pricing. This redirect keeps old
+// bookmarks and links from 404ing -- any client hitting /rates is sent
+// straight to /settings.
 export default function RatesPage() {
-  return (
-    <main className={styles.page}>
-      <header className={styles.header}>
-        <div className="pageTitleLockup">
-          <PageTitleIcon name="rates" />
-          <div>
-            <h1>Rate Profiles</h1>
-            <p>Edit the cashier packages used when starting or extending sessions.</p>
-          </div>
-        </div>
-      </header>
-      <RatesManager />
-    </main>
-  );
+  redirect("/settings");
 }

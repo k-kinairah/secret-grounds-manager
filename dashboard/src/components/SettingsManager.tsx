@@ -1,11 +1,28 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { fetchAdminSettings, resetAdminSettings, updateAdminSettings } from "@/lib/api";
-import type { AdminSettings, AdminSettingsResponse } from "@/lib/types";
+import {
+  fetchAdminPricing,
+  fetchAdminSettings,
+  resetAdminSettings,
+  updateAdminPricing,
+  updateAdminSettings
+} from "@/lib/api";
+import type {
+  AdminPricingSnapshot,
+  AdminPricingUpdate,
+  AdminSettings,
+  AdminSettingsResponse
+} from "@/lib/types";
+import { formatRateDuration } from "@/lib/time";
 import styles from "@/app/settings/settings.module.css";
 
-type CategoryKey = keyof AdminSettings;
+type SettingsCategoryKey = keyof AdminSettings;
+// "rates_pricing" is a curated editor over fixed rate_profiles /
+// membership_products rows (GET/PUT /admin/pricing) -- not a persisted
+// AdminSettings category, so it carries its own draft/Save and is excluded
+// from the settings toolbar and the Protected Configuration block.
+type CategoryKey = SettingsCategoryKey | "rates_pricing";
 
 const categories: { key: CategoryKey; label: string; description: string }[] = [
   { key: "general", label: "General", description: "Shop identity and display defaults." },
@@ -13,7 +30,8 @@ const categories: { key: CategoryKey; label: string; description: string }[] = [
   { key: "customer_client", label: "Customer Client", description: "Customer-facing overlay and reminder presentation." },
   { key: "wake_power", label: "Wake & Power", description: "Safe power behavior and read-only power safety status." },
   { key: "members", label: "Members", description: "Supported member account defaults." },
-  { key: "reports", label: "Reports", description: "Default sales and export display preferences." }
+  { key: "reports", label: "Reports", description: "Default sales and export display preferences." },
+  { key: "rates_pricing", label: "Rates & Pricing", description: "Edit Standard, VIP, and member session pricing." }
 ];
 
 function cloneSettings(settings: AdminSettings): AdminSettings {
@@ -116,7 +134,7 @@ export function SettingsManager() {
     }
   }
 
-  async function resetCategory(category: CategoryKey | "all") {
+  async function resetCategory(category: SettingsCategoryKey | "all") {
     if (isResetting) {
       return;
     }
@@ -175,23 +193,25 @@ export function SettingsManager() {
           </div>
         ) : null}
 
-        <div className={styles.toolbar}>
-          <div>
-            <strong>{categories.find((category) => category.key === activeCategory)?.label}</strong>
-            <span>{hasUnsavedChanges ? "Unsaved changes" : "Saved settings"}</span>
+        {activeCategory !== "rates_pricing" ? (
+          <div className={styles.toolbar}>
+            <div>
+              <strong>{categories.find((category) => category.key === activeCategory)?.label}</strong>
+              <span>{hasUnsavedChanges ? "Unsaved changes" : "Saved settings"}</span>
+            </div>
+            <div className={styles.toolbarActions}>
+              <button className={styles.secondaryButton} disabled={!hasUnsavedChanges || isSaving} onClick={resetUnsavedChanges} type="button">
+                Reset Unsaved Changes
+              </button>
+              <button className={styles.secondaryButton} disabled={isResetting} onClick={() => void resetCategory(activeCategory)} type="button">
+                Reset Category
+              </button>
+              <button className={styles.primaryButton} disabled={isSaving} onClick={() => void saveSettings()} type="button">
+                {isSaving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
           </div>
-          <div className={styles.toolbarActions}>
-            <button className={styles.secondaryButton} disabled={!hasUnsavedChanges || isSaving} onClick={resetUnsavedChanges} type="button">
-              Reset Unsaved Changes
-            </button>
-            <button className={styles.secondaryButton} disabled={isResetting} onClick={() => void resetCategory(activeCategory)} type="button">
-              Reset Category
-            </button>
-            <button className={styles.primaryButton} disabled={isSaving} onClick={() => void saveSettings()} type="button">
-              {isSaving ? "Saving..." : "Save Changes"}
-            </button>
-          </div>
-        </div>
+        ) : null}
 
         {activeCategory === "general" ? (
           <SettingsPanel title="General">
@@ -337,24 +357,485 @@ export function SettingsManager() {
           </SettingsPanel>
         ) : null}
 
-        <section className={styles.diagnostics}>
-          <h2>Protected Configuration</h2>
-          <div className={styles.diagnosticGrid}>
-            {Object.entries(response?.environment_only ?? {}).map(([key, value]) => (
-              <div key={key}>
-                <span>{key.replaceAll("_", " ")}</span>
-                <strong>{value}</strong>
-              </div>
-            ))}
-            {Object.entries(response?.read_only ?? {}).map(([key, value]) => (
-              <div key={key}>
-                <span>{key.replaceAll("_", " ")}</span>
-                <strong>{value}</strong>
-              </div>
-            ))}
-          </div>
-        </section>
+        {activeCategory === "rates_pricing" ? <RatesPricingPanel /> : null}
+
+        {activeCategory !== "rates_pricing" ? (
+          <section className={styles.diagnostics}>
+            <h2>Protected Configuration</h2>
+            <div className={styles.diagnosticGrid}>
+              {Object.entries(response?.environment_only ?? {}).map(([key, value]) => (
+                <div key={key}>
+                  <span>{key.replaceAll("_", " ")}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
+              {Object.entries(response?.read_only ?? {}).map(([key, value]) => (
+                <div key={key}>
+                  <span>{key.replaceAll("_", " ")}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
+    </section>
+  );
+}
+
+const PRICING_DISCLAIMER =
+  "Changes apply to new sessions and new purchases only. Running sessions, existing balances, and past transactions are unaffected.";
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 3600;
+
+type KnobKey = "standardGuest" | "newAccount" | "topupSmall" | "topupLarge" | "promo";
+
+interface KnobDraft {
+  price: string;
+  amount: string;
+}
+
+interface PricingDraft {
+  standardGuest: KnobDraft;
+  newAccount: KnobDraft;
+  topupSmall: KnobDraft;
+  topupLarge: KnobDraft;
+  vipHourlyPrice: string;
+  promo: KnobDraft;
+}
+
+function trimZeros(value: string | number): string {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? String(numeric) : String(value);
+}
+
+function pesoText(value: number): string {
+  return `₱${trimZeros(value.toFixed(2))}`;
+}
+
+function snapshotToDraft(snapshot: AdminPricingSnapshot): PricingDraft {
+  return {
+    standardGuest: {
+      price: trimZeros(snapshot.standard_guest.price),
+      amount: trimZeros(snapshot.standard_guest.seconds / SECONDS_PER_MINUTE)
+    },
+    newAccount: {
+      price: trimZeros(snapshot.standard_member_new_account.price),
+      amount: trimZeros(snapshot.standard_member_new_account.seconds / SECONDS_PER_HOUR)
+    },
+    topupSmall: {
+      price: trimZeros(snapshot.standard_member_topup_small.price),
+      amount: trimZeros(snapshot.standard_member_topup_small.seconds / SECONDS_PER_HOUR)
+    },
+    topupLarge: {
+      price: trimZeros(snapshot.standard_member_topup_large.price),
+      amount: trimZeros(snapshot.standard_member_topup_large.seconds / SECONDS_PER_HOUR)
+    },
+    vipHourlyPrice: trimZeros(snapshot.vip_guest_hourly.price),
+    promo: {
+      price: trimZeros(snapshot.promo.price),
+      amount: trimZeros(snapshot.promo.seconds / SECONDS_PER_HOUR)
+    }
+  };
+}
+
+function positive(value: string): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function draftToUpdate(draft: PricingDraft): { update: AdminPricingUpdate } | { error: string } {
+  const price = (value: string) => {
+    const numeric = positive(value);
+    return numeric === null ? null : numeric.toFixed(2);
+  };
+  const seconds = (value: string, perUnit: number) => {
+    const numeric = positive(value);
+    return numeric === null ? null : Math.round(numeric * perUnit);
+  };
+
+  const parts = {
+    standard_guest: { price: price(draft.standardGuest.price), seconds: seconds(draft.standardGuest.amount, SECONDS_PER_MINUTE) },
+    standard_member_new_account: { price: price(draft.newAccount.price), seconds: seconds(draft.newAccount.amount, SECONDS_PER_HOUR) },
+    standard_member_topup_small: { price: price(draft.topupSmall.price), seconds: seconds(draft.topupSmall.amount, SECONDS_PER_HOUR) },
+    standard_member_topup_large: { price: price(draft.topupLarge.price), seconds: seconds(draft.topupLarge.amount, SECONDS_PER_HOUR) },
+    // VIP base duration is fixed at exactly 1 hour by design -- the 2h/3h/4h
+    // rows are regenerated server-side as x2/x3/x4 of this pair.
+    vip_guest_hourly: { price: price(draft.vipHourlyPrice), seconds: SECONDS_PER_HOUR },
+    promo: { price: price(draft.promo.price), seconds: seconds(draft.promo.amount, SECONDS_PER_HOUR) }
+  };
+
+  if (Object.values(parts).some((part) => part.price === null || part.seconds === null)) {
+    return { error: "Enter a price above ₱0 and a duration above 0 for every field." };
+  }
+
+  return {
+    update: {
+      standard_guest: { price: parts.standard_guest.price!, seconds: parts.standard_guest.seconds! },
+      standard_member_new_account: {
+        price: parts.standard_member_new_account.price!,
+        seconds: parts.standard_member_new_account.seconds!
+      },
+      standard_member_topup_small: {
+        price: parts.standard_member_topup_small.price!,
+        seconds: parts.standard_member_topup_small.seconds!
+      },
+      standard_member_topup_large: {
+        price: parts.standard_member_topup_large.price!,
+        seconds: parts.standard_member_topup_large.seconds!
+      },
+      vip_guest_hourly: { price: parts.vip_guest_hourly.price!, seconds: parts.vip_guest_hourly.seconds! },
+      promo: { price: parts.promo.price!, seconds: parts.promo.seconds! }
+    }
+  };
+}
+
+// Mirrors server/rate_calculator.calculate_metered_time: floor(amount / price * duration).
+function meteredExample(amount: number, price: number, durationSeconds: number): string {
+  if (!(price > 0) || !(durationSeconds > 0)) {
+    return "—";
+  }
+  const result = Math.floor((amount / price) * durationSeconds);
+  return result >= 1 ? formatRateDuration(result) : "under 1 sec";
+}
+
+function PricingField({
+  label,
+  unit,
+  price,
+  amount,
+  onPrice,
+  onAmount
+}: {
+  label?: string;
+  unit: "min" | "hr";
+  price: string;
+  amount: string;
+  onPrice: (value: string) => void;
+  onAmount?: (value: string) => void;
+}) {
+  const locked = onAmount === undefined;
+  return (
+    <div className={styles.pricingField}>
+      {label ? <span className={styles.pricingFieldLabel}>{label}</span> : null}
+      <div className={styles.pricingFieldInputs}>
+        <label className={styles.pricingInput}>
+          <span className={styles.pricingInputCaption}>Price</span>
+          <span className={styles.pricingInputBox}>
+            <span className={styles.pricingInputAffix}>₱</span>
+            <input
+              inputMode="decimal"
+              onChange={(event) => onPrice(event.target.value)}
+              placeholder="0.00"
+              value={price}
+            />
+          </span>
+        </label>
+        <label className={`${styles.pricingInput} ${locked ? styles.pricingInputLocked : ""}`}>
+          <span className={styles.pricingInputCaption}>Duration</span>
+          <span className={styles.pricingInputBox}>
+            <input
+              inputMode="decimal"
+              onChange={(event) => onAmount?.(event.target.value)}
+              placeholder="0"
+              readOnly={locked}
+              value={amount}
+            />
+            <span className={styles.pricingInputAffix}>{unit === "min" ? "min" : "hr"}</span>
+          </span>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function PricingPreview({
+  caption,
+  rows
+}: {
+  caption: string;
+  rows: { key: string; label: string; value: string }[];
+}) {
+  return (
+    <div className={styles.pricingPreview}>
+      <span className={styles.pricingPreviewCaption}>{caption}</span>
+      <div className={styles.pricingPreviewRows}>
+        {rows.map((row) => (
+          <div className={styles.pricingPreviewRow} key={row.key}>
+            <span>{row.label}</span>
+            <strong>{row.value}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Curated editor over fixed rate_profiles / membership_products rows via
+// GET/PUT /admin/pricing. It is not a generic rate CRUD: the six knobs below
+// are the only editable values, and linked rows (VIP 2h/3h/4h tiers, the
+// VIP promo guest package + member product) are kept consistent by the
+// server in one transaction. Nothing here changes session/purchase logic.
+function RatesPricingPanel() {
+  const [snapshot, setSnapshot] = useState<AdminPricingSnapshot | null>(null);
+  const [draft, setDraft] = useState<PricingDraft | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchAdminPricing()
+      .then((next) => {
+        if (isMounted) {
+          setSnapshot(next);
+          setDraft(snapshotToDraft(next));
+          setError(null);
+        }
+      })
+      .catch((loadError) => {
+        if (isMounted) {
+          setError(loadError instanceof Error ? loadError.message : "Could not load pricing.");
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const pristineDraft = useMemo(
+    () => (snapshot === null ? null : snapshotToDraft(snapshot)),
+    [snapshot]
+  );
+  const hasChanges = useMemo(
+    () => draft !== null && pristineDraft !== null && JSON.stringify(draft) !== JSON.stringify(pristineDraft),
+    [draft, pristineDraft]
+  );
+
+  function setKnob(key: KnobKey, part: keyof KnobDraft, value: string) {
+    setDraft((current) => (current === null ? current : { ...current, [key]: { ...current[key], [part]: value } }));
+    setMessage(null);
+  }
+
+  async function save() {
+    if (draft === null || isSaving) {
+      return;
+    }
+    const built = draftToUpdate(draft);
+    if ("error" in built) {
+      setError(built.error);
+      setMessage(null);
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const next = await updateAdminPricing(built.update);
+      setSnapshot(next);
+      setDraft(snapshotToDraft(next));
+      setMessage("Pricing saved. New sessions and purchases will use the updated values.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save pricing.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  const standardGuestPrice = draft ? Number(draft.standardGuest.price) : 0;
+  const standardGuestSeconds = draft ? Number(draft.standardGuest.amount) * SECONDS_PER_MINUTE : 0;
+  const vipHourly = draft ? Number(draft.vipHourlyPrice) : 0;
+
+  return (
+    <section className={`${styles.panel} ${styles.pricingPanel}`}>
+      <header className={styles.pricingHeader}>
+        <div className={styles.pricingHeaderMain}>
+          <h2>Rates &amp; Pricing</h2>
+          <p className={styles.pricingLead}>Session and membership pricing used across the shop.</p>
+        </div>
+        <div className={styles.pricingHeaderAside}>
+          {draft !== null && hasChanges ? <span className={styles.pricingDirty}>Unsaved changes</span> : null}
+          <div className={styles.pricingDisclaimer}>
+            <svg className={styles.pricingInfoIcon} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 11v5" />
+              <path d="M12 7.4h.01" />
+            </svg>
+            <span>{PRICING_DISCLAIMER}</span>
+          </div>
+        </div>
+      </header>
+
+      {error ? (
+        <div className={`${styles.message} ${styles.errorMessage}`} role="alert">
+          {error}
+        </div>
+      ) : null}
+      {message ? (
+        <div className={`${styles.message} ${styles.successMessage}`} role="status">
+          {message}
+        </div>
+      ) : null}
+
+      {draft === null ? (
+        <p className={styles.pricingLoading}>{error ? null : "Loading pricing…"}</p>
+      ) : (
+        <>
+          <div className={styles.pricingGroups}>
+            <article className={styles.ratesGroup}>
+              <div className={styles.pricingGroupHead}>
+                <h3 className={styles.ratesGroupTitle}>Standard</h3>
+              </div>
+
+              <div className={styles.ratesSubgroup}>
+                <div className={styles.pricingSubHead}>
+                  <h4 className={styles.ratesSubgroupTitle}>Guest</h4>
+                  <p className={styles.pricingSubNote}>
+                    Linear metered rate — a cash amount converts straight to time.
+                  </p>
+                </div>
+                <PricingField
+                  label="Metered rate"
+                  unit="min"
+                  price={draft.standardGuest.price}
+                  amount={draft.standardGuest.amount}
+                  onPrice={(value) => setKnob("standardGuest", "price", value)}
+                  onAmount={(value) => setKnob("standardGuest", "amount", value)}
+                />
+                <PricingPreview
+                  caption="Examples"
+                  rows={[5, 10, 15].map((amount) => ({
+                    key: String(amount),
+                    label: pesoText(amount),
+                    value: meteredExample(amount, standardGuestPrice, standardGuestSeconds)
+                  }))}
+                />
+              </div>
+
+              <div className={styles.ratesSubgroup}>
+                <div className={styles.pricingSubHead}>
+                  <h4 className={styles.ratesSubgroupTitle}>Member</h4>
+                </div>
+                <PricingField
+                  label="New member account"
+                  unit="hr"
+                  price={draft.newAccount.price}
+                  amount={draft.newAccount.amount}
+                  onPrice={(value) => setKnob("newAccount", "price", value)}
+                  onAmount={(value) => setKnob("newAccount", "amount", value)}
+                />
+                <div className={styles.pricingStack}>
+                  <span className={styles.pricingStackLabel}>Existing member</span>
+                  <PricingField
+                    unit="hr"
+                    price={draft.topupSmall.price}
+                    amount={draft.topupSmall.amount}
+                    onPrice={(value) => setKnob("topupSmall", "price", value)}
+                    onAmount={(value) => setKnob("topupSmall", "amount", value)}
+                  />
+                  <PricingField
+                    unit="hr"
+                    price={draft.topupLarge.price}
+                    amount={draft.topupLarge.amount}
+                    onPrice={(value) => setKnob("topupLarge", "price", value)}
+                    onAmount={(value) => setKnob("topupLarge", "amount", value)}
+                  />
+                </div>
+              </div>
+            </article>
+
+            <article className={`${styles.ratesGroup} ${styles.pricingGroupVip}`}>
+              <div className={styles.pricingGroupHead}>
+                <h3 className={styles.ratesGroupTitle}>VIP</h3>
+              </div>
+
+              <div className={styles.ratesSubgroup}>
+                <div className={styles.pricingSubHead}>
+                  <h4 className={styles.ratesSubgroupTitle}>Guest</h4>
+                  <p className={styles.pricingSubNote}>No separate VIP account is required.</p>
+                </div>
+                <PricingField
+                  label="Hourly rate (per 1 hour)"
+                  unit="hr"
+                  price={draft.vipHourlyPrice}
+                  amount="1"
+                  onPrice={(value) => {
+                    setDraft((current) => (current === null ? current : { ...current, vipHourlyPrice: value }));
+                    setMessage(null);
+                  }}
+                />
+                <PricingPreview
+                  caption="Regenerated tiers"
+                  rows={[2, 3, 4].map((multiple) => ({
+                    key: String(multiple),
+                    label: Number.isFinite(vipHourly) ? pesoText(vipHourly * multiple) : "—",
+                    value: formatRateDuration(multiple * SECONDS_PER_HOUR)
+                  }))}
+                />
+                <p className={styles.pricingSubNote}>
+                  The 2-hour, 3-hour, and 4-hour VIP rows are regenerated automatically from the hourly
+                  rate and stay available for the cashier session dialog.
+                </p>
+              </div>
+
+              <div className={styles.ratesSubgroup}>
+                <div className={styles.pricingSubHead}>
+                  <h4 className={styles.ratesSubgroupTitle}>Member</h4>
+                </div>
+                <ul className={styles.pricingFacts}>
+                  <li>Existing members can use their member account.</li>
+                  <li>
+                    VIP conversion: {snapshot?.vip_member_conversion_ratio ?? 2} member hours = 1 VIP hour.
+                  </li>
+                </ul>
+              </div>
+            </article>
+
+            <article className={`${styles.ratesGroup} ${styles.ratesGroupPromo}`}>
+              <div className={styles.pricingGroupHead}>
+                <h3 className={styles.ratesGroupTitle}>Promo</h3>
+              </div>
+              <PricingField
+                label="VIP promo"
+                unit="hr"
+                price={draft.promo.price}
+                amount={draft.promo.amount}
+                onPrice={(value) => setKnob("promo", "price", value)}
+                onAmount={(value) => setKnob("promo", "amount", value)}
+              />
+              <p className={styles.pricingSubNote}>
+                Saved to the VIP guest promo package and the VIP member promo product together. Still
+                part of pricing configuration, not the Promotions system.
+              </p>
+            </article>
+          </div>
+
+          <div className={styles.pricingActions}>
+            <span className={styles.pricingActionsHint}>
+              {hasChanges ? "You have unsaved pricing changes." : "All pricing changes are saved."}
+            </span>
+            <div className={styles.pricingActionsButtons}>
+              <button
+                className={styles.secondaryButton}
+                disabled={!hasChanges || isSaving}
+                onClick={() => {
+                  if (pristineDraft) {
+                    setDraft(pristineDraft);
+                    setError(null);
+                    setMessage(null);
+                  }
+                }}
+                type="button"
+              >
+                Discard changes
+              </button>
+              <button className={styles.primaryButton} disabled={!hasChanges || isSaving} onClick={() => void save()} type="button">
+                {isSaving ? "Saving…" : "Save pricing"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </section>
   );
 }

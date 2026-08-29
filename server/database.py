@@ -2364,6 +2364,9 @@ def initialize_database() -> None:
                 audience TEXT NOT NULL CHECK (
                     audience IN ('standard', 'vip', 'member_topup', 'new_member')
                 ),
+                promo_type TEXT NOT NULL DEFAULT 'purchase' CHECK (
+                    promo_type IN ('purchase', 'time_based_rate')
+                ),
                 owner_state TEXT NOT NULL DEFAULT 'draft' CHECK (
                     owner_state IN ('draft', 'enabled', 'disabled', 'ended')
                 ),
@@ -2385,6 +2388,12 @@ def initialize_database() -> None:
                 total_redemption_limit INTEGER CHECK (
                     total_redemption_limit IS NULL OR total_redemption_limit > 0
                 ),
+                -- Time-Based Rate only (NULL for every 'purchase' promo).
+                -- days_of_week is a CSV of 0=Monday..6=Sunday; window_*
+                -- is 'HH:MM' local shop time. See server/promo_time_based.py.
+                days_of_week TEXT,
+                window_start_local_time TEXT,
+                window_end_local_time TEXT,
                 created_by_user_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -2392,6 +2401,14 @@ def initialize_database() -> None:
             )
             """
         )
+        # Stage 7 additive columns for existing installs -- every pre-Stage-7
+        # row is a 'purchase' promo with NULL schedule fields (column
+        # defaults). No CHECK rebuild: promo_type / schedule validity is
+        # enforced in server/schemas.py's PromoFields as defense in depth.
+        add_column_if_missing(connection, "promos", "promo_type", "TEXT NOT NULL DEFAULT 'purchase'")
+        add_column_if_missing(connection, "promos", "days_of_week", "TEXT")
+        add_column_if_missing(connection, "promos", "window_start_local_time", "TEXT")
+        add_column_if_missing(connection, "promos", "window_end_local_time", "TEXT")
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_promos_audience_state
@@ -2494,6 +2511,48 @@ def initialize_database() -> None:
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_redemptions_one_per_payment
             ON promo_redemptions (payment_id)
+            """
+        )
+
+        # Stage 7: Time-Based Rate promo usage log. Deliberately NOT
+        # promo_redemptions -- a time-based promo temporarily REPLACES the
+        # Standard linear amount->time conversion for the length of its
+        # recurring daily window and is never limit-accounted, so there is
+        # no slot to reserve, no per-member/total limit, and no voided_at.
+        # This table exists purely so the owner can see which time-based
+        # rate was active for a given session/payment and what it produced.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS time_based_rate_applications (
+                application_id TEXT PRIMARY KEY,
+                promo_id TEXT NOT NULL,
+                promo_name_snapshot TEXT NOT NULL,
+                price_snapshot TEXT NOT NULL,
+                granted_seconds_snapshot INTEGER NOT NULL,
+                days_of_week_snapshot TEXT NOT NULL,
+                window_start_snapshot TEXT NOT NULL,
+                window_end_snapshot TEXT NOT NULL,
+                session_id TEXT,
+                payment_id TEXT NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('start_session', 'add_time')),
+                normal_seconds INTEGER NOT NULL,
+                promo_seconds INTEGER NOT NULL,
+                amount TEXT NOT NULL,
+                pc_name_snapshot TEXT,
+                income_group_id_snapshot TEXT,
+                income_group_name_snapshot TEXT,
+                operator_user_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (promo_id) REFERENCES promos(promo_id),
+                FOREIGN KEY (payment_id) REFERENCES payments(payment_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_time_based_rate_applications_promo
+            ON time_based_rate_applications (promo_id, created_at)
             """
         )
 

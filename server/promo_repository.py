@@ -42,6 +42,7 @@ from fastapi import HTTPException
 
 from server.database import get_connection
 from server.promo_status import derive_promo_status
+from server.promo_time_based import describe_time_based_schedule, find_time_based_rate_conflict
 from server.schemas import (
     Promo,
     PromoAuditAction,
@@ -51,6 +52,7 @@ from server.schemas import (
     PromoRedemption,
     PromoStateTransition,
     PromoUpdate,
+    TimeBasedRateApplication,
 )
 from server.time_utils import current_utc_time
 
@@ -59,14 +61,29 @@ def decimal_to_storage(value: Decimal) -> str:
     return str(value.quantize(Decimal("0.01")))
 
 
+def days_from_storage(raw: str | None) -> list[int] | None:
+    """CSV "0,4,6" -> [0, 4, 6]; NULL/"" -> None (a 'purchase' promo)."""
+    if raw is None or str(raw).strip() == "":
+        return None
+    return [int(piece) for piece in str(raw).split(",") if str(piece).strip() != ""]
+
+
+def days_to_storage(days: list[int] | None) -> str | None:
+    if not days:
+        return None
+    return ",".join(str(day) for day in sorted(set(days)))
+
+
 def row_to_promo(row: Any, now: datetime) -> Promo:
     starts_at = datetime.fromisoformat(row["starts_at"])
     ends_at = datetime.fromisoformat(row["ends_at"])
     owner_state: PromoOwnerState = row["owner_state"]
+    row_keys = row.keys()
     return Promo(
         promo_id=row["promo_id"],
         name=row["name"],
         audience=row["audience"],
+        promo_type=row["promo_type"] if "promo_type" in row_keys else "purchase",
         owner_state=owner_state,
         status=derive_promo_status(owner_state, starts_at, ends_at, now),
         amount_mode=row["amount_mode"],
@@ -79,6 +96,9 @@ def row_to_promo(row: Any, now: datetime) -> Promo:
         priority=row["priority"],
         per_member_redemption_limit=row["per_member_redemption_limit"],
         total_redemption_limit=row["total_redemption_limit"],
+        days_of_week=days_from_storage(row["days_of_week"]) if "days_of_week" in row_keys else None,
+        window_start_local_time=row["window_start_local_time"] if "window_start_local_time" in row_keys else None,
+        window_end_local_time=row["window_end_local_time"] if "window_end_local_time" in row_keys else None,
         created_by_user_id=row["created_by_user_id"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
@@ -135,6 +155,7 @@ def promo_to_audit_dict(promo: Promo) -> dict[str, object]:
     return {
         "name": promo.name,
         "audience": promo.audience,
+        "promo_type": promo.promo_type,
         "owner_state": promo.owner_state,
         "amount_mode": promo.amount_mode,
         "price": decimal_to_storage(promo.price),
@@ -146,7 +167,34 @@ def promo_to_audit_dict(promo: Promo) -> dict[str, object]:
         "priority": promo.priority,
         "per_member_redemption_limit": promo.per_member_redemption_limit,
         "total_redemption_limit": promo.total_redemption_limit,
+        "days_of_week": days_to_storage(promo.days_of_week),
+        "window_start_local_time": promo.window_start_local_time,
+        "window_end_local_time": promo.window_end_local_time,
     }
+
+
+def row_to_time_based_application(row: Any) -> TimeBasedRateApplication:
+    return TimeBasedRateApplication(
+        application_id=row["application_id"],
+        promo_id=row["promo_id"],
+        promo_name_snapshot=row["promo_name_snapshot"],
+        price_snapshot=Decimal(row["price_snapshot"]),
+        granted_seconds_snapshot=row["granted_seconds_snapshot"],
+        days_of_week_snapshot=days_from_storage(row["days_of_week_snapshot"]) or [],
+        window_start_snapshot=row["window_start_snapshot"],
+        window_end_snapshot=row["window_end_snapshot"],
+        session_id=row["session_id"],
+        payment_id=row["payment_id"],
+        action=row["action"],
+        normal_seconds=row["normal_seconds"],
+        promo_seconds=row["promo_seconds"],
+        amount=Decimal(row["amount"]),
+        pc_name_snapshot=row["pc_name_snapshot"],
+        income_group_id_snapshot=row["income_group_id_snapshot"],
+        income_group_name_snapshot=row["income_group_name_snapshot"],
+        operator_user_id=row["operator_user_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
 
 
 class PromoRepository:
@@ -155,25 +203,77 @@ class PromoRepository:
     never rewrite the frozen snapshot of any redemption already recorded
     against it (no such writes exist yet in Stage 1 regardless)."""
 
+    def _reject_time_based_schedule_conflict(
+        self,
+        connection: Any,
+        *,
+        days_of_week: object,
+        window_start_local_time: str | None,
+        window_end_local_time: str | None,
+        starts_at: datetime,
+        ends_at: datetime,
+        now: datetime,
+        exclude_promo_id: str | None = None,
+    ) -> None:
+        """Raises HTTPException(409) if the given Time-Based Rate schedule
+        would overlap any existing non-ended Time-Based Rate promo (see
+        server/promo_time_based.find_time_based_rate_conflict for the exact
+        rule). Purchase promos never call this -- their create/update/
+        transition paths are completely unaffected."""
+        rows = connection.execute(
+            "SELECT * FROM promos WHERE promo_type = 'time_based_rate' AND owner_state != 'ended'"
+        ).fetchall()
+        existing = [row_to_promo(row, now) for row in rows]
+        conflict = find_time_based_rate_conflict(
+            days_of_week=days_of_week,
+            window_start_local_time=window_start_local_time,
+            window_end_local_time=window_end_local_time,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            existing=existing,
+            exclude_promo_id=exclude_promo_id,
+        )
+        if conflict is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f'This schedule overlaps "{conflict.name}" '
+                    f"({describe_time_based_schedule(conflict)}). Time-Based Rate schedules "
+                    f"can't overlap while both could be active -- end or edit that promo first."
+                ),
+            )
+
     def create(self, request: PromoCreate, performed_by_user_id: str | None = None) -> Promo:
         now = current_utc_time()
         promo_id = str(uuid4())
 
         with get_connection() as connection:
+            if request.promo_type == "time_based_rate":
+                self._reject_time_based_schedule_conflict(
+                    connection,
+                    days_of_week=request.days_of_week,
+                    window_start_local_time=request.window_start_local_time,
+                    window_end_local_time=request.window_end_local_time,
+                    starts_at=request.starts_at,
+                    ends_at=request.ends_at,
+                    now=now,
+                )
             connection.execute(
                 """
                 INSERT INTO promos (
-                    promo_id, name, audience, owner_state, amount_mode, price,
+                    promo_id, name, audience, promo_type, owner_state, amount_mode, price,
                     granted_seconds, station_scope, applies_to, starts_at, ends_at,
                     priority, per_member_redemption_limit, total_redemption_limit,
+                    days_of_week, window_start_local_time, window_end_local_time,
                     created_by_user_id, created_at, updated_at
                 )
-                VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     promo_id,
                     request.name.strip(),
                     request.audience,
+                    request.promo_type,
                     request.amount_mode,
                     decimal_to_storage(request.price),
                     request.granted_seconds,
@@ -184,6 +284,9 @@ class PromoRepository:
                     request.priority,
                     request.per_member_redemption_limit,
                     request.total_redemption_limit,
+                    days_to_storage(request.days_of_week),
+                    request.window_start_local_time,
+                    request.window_end_local_time,
                     performed_by_user_id,
                     now.isoformat(),
                     now.isoformat(),
@@ -243,6 +346,29 @@ class PromoRepository:
                 raise HTTPException(status_code=404, detail="Promo not found")
             existing = row_to_promo(existing_row, now)
 
+            # A promo's kind is fixed at creation -- converting between a
+            # limit-accounted purchase promo and a Time-Based Rate promo
+            # would orphan redemptions / rate-application rows and change
+            # the meaning of price/granted_seconds. Callers must delete and
+            # recreate instead.
+            if request.promo_type != existing.promo_type:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A promo's type cannot be changed after creation.",
+                )
+
+            if request.promo_type == "time_based_rate":
+                self._reject_time_based_schedule_conflict(
+                    connection,
+                    days_of_week=request.days_of_week,
+                    window_start_local_time=request.window_start_local_time,
+                    window_end_local_time=request.window_end_local_time,
+                    starts_at=request.starts_at,
+                    ends_at=request.ends_at,
+                    now=now,
+                    exclude_promo_id=promo_id,
+                )
+
             connection.execute(
                 """
                 UPDATE promos
@@ -250,6 +376,7 @@ class PromoRepository:
                     granted_seconds = ?, station_scope = ?, applies_to = ?,
                     starts_at = ?, ends_at = ?, priority = ?,
                     per_member_redemption_limit = ?, total_redemption_limit = ?,
+                    days_of_week = ?, window_start_local_time = ?, window_end_local_time = ?,
                     updated_at = ?
                 WHERE promo_id = ?
                 """,
@@ -266,6 +393,9 @@ class PromoRepository:
                     request.priority,
                     request.per_member_redemption_limit,
                     request.total_redemption_limit,
+                    days_to_storage(request.days_of_week),
+                    request.window_start_local_time,
+                    request.window_end_local_time,
                     now.isoformat(),
                     promo_id,
                 ),
@@ -324,6 +454,22 @@ class PromoRepository:
                 # Idempotent no-op: same state requested again writes no
                 # duplicate audit event and leaves updated_at untouched.
                 return existing
+
+            if is_reactivation and existing.promo_type == "time_based_rate":
+                # Reactivation is the one path that can revive a schedule
+                # the create/update checks never saw (an ended promo is
+                # exempt from those). Re-check against every other
+                # non-ended Time-Based Rate promo before bringing it back.
+                self._reject_time_based_schedule_conflict(
+                    connection,
+                    days_of_week=existing.days_of_week,
+                    window_start_local_time=existing.window_start_local_time,
+                    window_end_local_time=existing.window_end_local_time,
+                    starts_at=existing.starts_at,
+                    ends_at=new_ends_at,
+                    now=now,
+                    exclude_promo_id=promo_id,
+                )
 
             action: PromoAuditAction = "reactivated" if is_reactivation else request.owner_state
 
@@ -680,6 +826,87 @@ class PromoRepository:
                 (promo_id,),
             ).fetchall()
         return [row_to_redemption(row) for row in rows]
+
+    # --- Time-Based Rate promo usage log (Stage 7) -----------------------
+    #
+    # Not a redemption: no BEGIN IMMEDIATE, no COUNT, no limit check, no
+    # voided_at. A Time-Based Rate promo has no slot to reserve -- it just
+    # replaces the linear conversion for the length of its window. This is
+    # written best-effort by SessionService AFTER the payment succeeds,
+    # exactly like session_events, so a crash between the payment and this
+    # write leaves the same (already tolerated) inconsistency a missing
+    # session_event would.
+
+    def record_time_based_rate_application(
+        self,
+        *,
+        promo: Promo,
+        session_id: str | None,
+        payment_id: str,
+        action: str,
+        normal_seconds: int,
+        promo_seconds: int,
+        amount: Decimal,
+        pc_name_snapshot: str | None,
+        income_group_id_snapshot: str | None,
+        income_group_name_snapshot: str | None,
+        operator_user_id: str | None,
+        now: datetime,
+        connection: sqlite3.Connection | None = None,
+    ) -> str:
+        application_id = str(uuid4())
+        parameters = (
+            application_id,
+            promo.promo_id,
+            promo.name,
+            decimal_to_storage(promo.price),
+            promo.granted_seconds,
+            days_to_storage(promo.days_of_week) or "",
+            promo.window_start_local_time or "",
+            promo.window_end_local_time or "",
+            session_id,
+            payment_id,
+            action,
+            normal_seconds,
+            promo_seconds,
+            decimal_to_storage(amount),
+            pc_name_snapshot,
+            income_group_id_snapshot,
+            income_group_name_snapshot,
+            operator_user_id,
+            now.isoformat(),
+        )
+        statement = """
+            INSERT INTO time_based_rate_applications (
+                application_id, promo_id, promo_name_snapshot, price_snapshot,
+                granted_seconds_snapshot, days_of_week_snapshot,
+                window_start_snapshot, window_end_snapshot, session_id,
+                payment_id, action, normal_seconds, promo_seconds, amount,
+                pc_name_snapshot, income_group_id_snapshot,
+                income_group_name_snapshot, operator_user_id, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        if connection is not None:
+            connection.execute(statement, parameters)
+        else:
+            with get_connection() as owned_connection:
+                owned_connection.execute(statement, parameters)
+        return application_id
+
+    def list_time_based_applications(self, promo_id: str) -> list[TimeBasedRateApplication]:
+        """History only -- read-only. Deterministic ordering matches
+        list_redemptions()'s convention (created_at then a stable id)."""
+        with get_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM time_based_rate_applications
+                WHERE promo_id = ?
+                ORDER BY created_at ASC, application_id ASC
+                """,
+                (promo_id,),
+            ).fetchall()
+        return [row_to_time_based_application(row) for row in rows]
 
     def _add_audit_event(
         self,

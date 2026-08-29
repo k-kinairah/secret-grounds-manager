@@ -269,10 +269,6 @@ export function AuthShell({ children }: { children: ReactNode }) {
               Sales
             </Link>
           ) : null}
-          <Link className={pathname === "/rates" ? "appShell__linkActive" : ""} href="/rates">
-            <RatesNavIcon />
-            Rates
-          </Link>
           {isAdminOperator ? (
             <div
               className="appShell__adminMenu"
@@ -435,16 +431,6 @@ function SalesNavIcon() {
       <path d="M9 7h6" />
       <path d="M9 11h6" />
       <path d="M9 15h3" />
-    </svg>
-  );
-}
-
-function RatesNavIcon() {
-  return (
-    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
-      <path d="M4 7.5V4h3.5L19 15.5 15.5 19 4 7.5z" />
-      <path d="M8 8h.01" />
-      <path d="M14 10.5c-1-.7-2.5-.2-2.5 1s1.3 1.5 2.5 2 2.5.8 2.5 2-1.5 1.7-2.5 1" />
     </svg>
   );
 }

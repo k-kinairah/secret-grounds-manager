@@ -291,6 +291,11 @@ export interface RateProfileInput {
 }
 
 export type PromoAudience = "standard" | "vip" | "member_topup" | "new_member";
+// "purchase" = the original fixed-price/fixed-grant promos.
+// "time_based_rate" = temporarily REPLACES the Standard linear
+// amount->time conversion for a recurring daily local-time window; never
+// limit-accounted (no redemption rows), Standard-only for now.
+export type PromoType = "purchase" | "time_based_rate";
 export type PromoOwnerState = "draft" | "enabled" | "disabled" | "ended";
 export type PromoDisplayStatus = "Draft" | "Scheduled" | "Active" | "Ended" | "Disabled";
 export type PromoAmountMode = "exact" | "minimum";
@@ -304,6 +309,7 @@ export interface Promo {
   promo_id: string;
   name: string;
   audience: PromoAudience;
+  promo_type: PromoType;
   owner_state: PromoOwnerState;
   status: PromoDisplayStatus;
   amount_mode: PromoAmountMode;
@@ -316,6 +322,11 @@ export interface Promo {
   priority: number;
   per_member_redemption_limit: number | null;
   total_redemption_limit: number | null;
+  // Time-Based Rate only (null for every "purchase" promo). days_of_week
+  // uses 0=Monday..6=Sunday and is the day the window OPENS.
+  days_of_week: number[] | null;
+  window_start_local_time: string | null;
+  window_end_local_time: string | null;
   created_by_user_id: string | null;
   created_at: string;
   updated_at: string;
@@ -327,6 +338,7 @@ export interface Promo {
 export interface PromoInput {
   name: string;
   audience: PromoAudience;
+  promo_type: PromoType;
   amount_mode: PromoAmountMode;
   price: string;
   granted_seconds: number;
@@ -337,6 +349,9 @@ export interface PromoInput {
   priority: number;
   per_member_redemption_limit: number | null;
   total_redemption_limit: number | null;
+  days_of_week: number[] | null;
+  window_start_local_time: string | null;
+  window_end_local_time: string | null;
 }
 
 // Mirrors server/schemas.py's PromoStateTransition. ends_at is required
@@ -384,6 +399,31 @@ export interface PromoRedemption {
   operator_user_id: string | null;
   voided_at: string | null;
   void_reason: string | null;
+  created_at: string;
+}
+
+// Mirrors server/schemas.py's TimeBasedRateApplication 1:1 -- the
+// per-session/payment usage log for a Time-Based Rate promo. NOT a
+// redemption: no limits, no voided_at.
+export interface TimeBasedRateApplication {
+  application_id: string;
+  promo_id: string;
+  promo_name_snapshot: string;
+  price_snapshot: string;
+  granted_seconds_snapshot: number;
+  days_of_week_snapshot: number[];
+  window_start_snapshot: string;
+  window_end_snapshot: string;
+  session_id: string | null;
+  payment_id: string;
+  action: "start_session" | "add_time";
+  normal_seconds: number;
+  promo_seconds: number;
+  amount: string;
+  pc_name_snapshot: string | null;
+  income_group_id_snapshot: string | null;
+  income_group_name_snapshot: string | null;
+  operator_user_id: string | null;
   created_at: string;
 }
 
@@ -701,6 +741,41 @@ export interface AdminSettingsResponse {
   read_only: Record<string, string>;
   restart_required_fields: string[];
   updated_at: string | null;
+}
+
+// Curated Rates & Pricing editor (Admin -> Settings). Backed by fixed
+// rate_profiles / membership_products rows via GET/PUT /admin/pricing --
+// not a generic rate CRUD.
+export interface PricingMoneyTime {
+  price: string;
+  seconds: number;
+}
+
+export interface PricingVipTierView {
+  rate_id: string;
+  multiple: number;
+  price: string;
+  seconds: number;
+}
+
+export interface AdminPricingSnapshot {
+  standard_guest: PricingMoneyTime;
+  standard_member_new_account: PricingMoneyTime;
+  standard_member_topup_small: PricingMoneyTime;
+  standard_member_topup_large: PricingMoneyTime;
+  vip_guest_hourly: PricingMoneyTime;
+  promo: PricingMoneyTime;
+  vip_guest_tiers: PricingVipTierView[];
+  vip_member_conversion_ratio: number;
+}
+
+export interface AdminPricingUpdate {
+  standard_guest: PricingMoneyTime;
+  standard_member_new_account: PricingMoneyTime;
+  standard_member_topup_small: PricingMoneyTime;
+  standard_member_topup_large: PricingMoneyTime;
+  vip_guest_hourly: PricingMoneyTime;
+  promo: PricingMoneyTime;
 }
 
 export type SystemStatus = "Healthy" | "Warning" | "Offline" | "Error";

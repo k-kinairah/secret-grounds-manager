@@ -10,6 +10,7 @@ import {
   fetchAssignedStations,
   fetchPromo,
   fetchPromoAudit,
+  fetchPromoRateApplications,
   fetchPromoRedemptions,
   fetchPromos,
   fetchCurrentUser,
@@ -82,8 +83,10 @@ import {
 } from "../lib/pcMonitor";
 import {
   applyAudienceRules,
+  applyPromoTypeRules,
   availableTransitionActions,
   emptyPromoForm,
+  formatDaysOfWeek,
   promoAudienceRules,
   promoFormToInput,
   promoToForm,
@@ -592,7 +595,7 @@ assert.deepEqual(newMemberRules, {
 // Switching audience clears fields the new audience forbids, matching
 // server/schemas.py's PromoFields.validate_cross_fields rules (UX
 // guidance only -- the server remains authoritative).
-const standardForm = emptyPromoForm("standard");
+const standardForm = emptyPromoForm();
 assert.equal(standardForm.stationScope, "standard");
 assert.equal(standardForm.appliesTo, "start_session");
 assert.equal(standardForm.amountMode, "exact");
@@ -678,6 +681,7 @@ const validStandardInput = promoFormToInput({
 assert.deepEqual(validStandardInput, {
   name: "Weeknight Special",
   audience: "standard",
+  promo_type: "purchase",
   amount_mode: "exact",
   price: "20.00",
   granted_seconds: 6000,
@@ -687,7 +691,10 @@ assert.deepEqual(validStandardInput, {
   ends_at: new Date("2026-01-01T23:00").toISOString(),
   priority: 5,
   per_member_redemption_limit: null,
-  total_redemption_limit: 50
+  total_redemption_limit: 50,
+  days_of_week: null,
+  window_start_local_time: null,
+  window_end_local_time: null
 });
 
 const validMemberTopupInput = promoFormToInput({
@@ -708,6 +715,7 @@ const sampleStandardPromo: Promo = {
   promo_id: "promo-1",
   name: "Weeknight Special",
   audience: "standard",
+  promo_type: "purchase",
   owner_state: "enabled",
   status: "Active",
   amount_mode: "exact",
@@ -720,6 +728,9 @@ const sampleStandardPromo: Promo = {
   priority: 5,
   per_member_redemption_limit: null,
   total_redemption_limit: 50,
+  days_of_week: null,
+  window_start_local_time: null,
+  window_end_local_time: null,
   created_by_user_id: "owner-1",
   created_at: "2025-12-01T00:00:00.000Z",
   updated_at: "2025-12-01T00:00:00.000Z"
@@ -755,6 +766,98 @@ assert.equal(transitionActionToOwnerState("enable"), "enabled");
 assert.equal(transitionActionToOwnerState("reactivate"), "enabled");
 assert.equal(transitionActionToOwnerState("disable"), "disabled");
 assert.equal(transitionActionToOwnerState("end"), "ended");
+
+// --- Stage 7: Time-Based Rate promo form coverage ----------------------
+// A blank purchase draft is unchanged from before Stage 7.
+const blankPurchase = emptyPromoForm();
+assert.equal(blankPurchase.promoType, "purchase");
+assert.equal(blankPurchase.daysOfWeek.length, 0);
+
+// Switching the Promo Type selector to Time-Based Rate forces Standard,
+// exact amount, no scope/applies-to/limits, and seeds a sensible default
+// schedule -- mirroring server/schemas.py's PromoFields rules.
+const blankTimeBased = emptyPromoForm("time_based_rate");
+assert.equal(blankTimeBased.promoType, "time_based_rate");
+assert.equal(blankTimeBased.audience, "standard");
+assert.equal(blankTimeBased.amountMode, "exact");
+assert.equal(blankTimeBased.stationScope, "");
+assert.equal(blankTimeBased.appliesTo, "");
+assert.deepEqual(blankTimeBased.daysOfWeek, [0, 1, 2, 3, 4, 5, 6]);
+assert.equal(blankTimeBased.windowStart, "00:00");
+assert.equal(blankTimeBased.windowEnd, "06:00");
+assert.equal(applyPromoTypeRules({ ...blankPurchase, promoType: "time_based_rate" }).audience, "standard");
+
+// promoFormToInput on a valid Time-Based Rate draft -> the exact wire
+// shape. priority is always 0 for Time-Based Rate -- the form does not
+// expose it, and even a stale priority value on the form state is ignored.
+const validTimeBasedInput = promoFormToInput({
+  ...blankTimeBased,
+  name: "Midnight Rate",
+  price: "20.00",
+  grantedMinutes: "120",
+  daysOfWeek: [4],
+  windowStart: "23:00",
+  windowEnd: "02:00",
+  startsAt: "2026-01-01T00:00",
+  endsAt: "2026-06-01T00:00",
+  priority: "3"
+});
+assert.deepEqual(validTimeBasedInput, {
+  name: "Midnight Rate",
+  audience: "standard",
+  promo_type: "time_based_rate",
+  amount_mode: "exact",
+  price: "20.00",
+  granted_seconds: 7200,
+  station_scope: null,
+  applies_to: null,
+  starts_at: new Date("2026-01-01T00:00").toISOString(),
+  ends_at: new Date("2026-06-01T00:00").toISOString(),
+  priority: 0,
+  per_member_redemption_limit: null,
+  total_redemption_limit: null,
+  days_of_week: [4],
+  window_start_local_time: "23:00",
+  window_end_local_time: "02:00"
+});
+
+// Client-side UX pre-checks (the server stays authoritative).
+assert.throws(
+  () => promoFormToInput({ ...blankTimeBased, name: "X", daysOfWeek: [] }),
+  /day of the week/i,
+  "at least one day is required"
+);
+assert.throws(
+  () => promoFormToInput({ ...blankTimeBased, name: "X", windowStart: "09:00", windowEnd: "09:00" }),
+  /different/i,
+  "window start and end must differ"
+);
+
+// promoToForm round-trips a Time-Based Rate promo's fields.
+const sampleTimeBasedPromo: Promo = {
+  ...sampleStandardPromo,
+  promo_id: "promo-tb",
+  name: "Midnight Rate",
+  promo_type: "time_based_rate",
+  station_scope: null,
+  applies_to: null,
+  total_redemption_limit: null,
+  days_of_week: [0, 4, 5],
+  window_start_local_time: "23:00",
+  window_end_local_time: "02:00"
+};
+const tbRoundTrip = promoFormToInput(promoToForm(sampleTimeBasedPromo));
+assert.equal(tbRoundTrip.promo_type, "time_based_rate");
+assert.deepEqual(tbRoundTrip.days_of_week, [0, 4, 5]);
+assert.equal(tbRoundTrip.window_start_local_time, "23:00");
+assert.equal(tbRoundTrip.window_end_local_time, "02:00");
+// sampleTimeBasedPromo inherits priority 5 from sampleStandardPromo; a
+// Time-Based Rate round-trip must still emit priority 0.
+assert.equal(tbRoundTrip.priority, 0);
+
+assert.equal(formatDaysOfWeek([0, 1, 2, 3, 4, 5, 6]), "Every day");
+assert.equal(formatDaysOfWeek([4]), "Fri");
+assert.equal(formatDaysOfWeek(null), "—");
 
 const standardGuestRate: RateProfile = {
   ...sampleRate,
@@ -1072,6 +1175,7 @@ async function runAsyncAssertions() {
     await createPromo({
       name: "Test Promo",
       audience: "standard",
+      promo_type: "purchase",
       amount_mode: "exact",
       price: "20.00",
       granted_seconds: 6000,
@@ -1081,11 +1185,15 @@ async function runAsyncAssertions() {
       ends_at: "2026-02-01T00:00:00.000Z",
       priority: 0,
       per_member_redemption_limit: null,
-      total_redemption_limit: null
+      total_redemption_limit: null,
+      days_of_week: null,
+      window_start_local_time: null,
+      window_end_local_time: null
     });
     await updatePromo("promo-1", {
       name: "Updated Promo",
       audience: "member_topup",
+      promo_type: "purchase",
       amount_mode: "minimum",
       price: "100.00",
       granted_seconds: 3600,
@@ -1095,7 +1203,10 @@ async function runAsyncAssertions() {
       ends_at: "2026-02-01T00:00:00.000Z",
       priority: 1,
       per_member_redemption_limit: 2,
-      total_redemption_limit: 10
+      total_redemption_limit: 10,
+      days_of_week: null,
+      window_start_local_time: null,
+      window_end_local_time: null
     });
     await transitionPromoState("promo-1", { owner_state: "enabled" });
     // fetchCalls[49]: reactivation carries the new ends_at through untouched.
@@ -1105,6 +1216,26 @@ async function runAsyncAssertions() {
     });
     await fetchPromoAudit("promo-1");
     await fetchPromoRedemptions("promo-1");
+    // Stage 7: Time-Based Rate promo create + its usage-log history endpoint.
+    await fetchPromoRateApplications("promo-1");
+    await createPromo({
+      name: "Midnight Rate",
+      audience: "standard",
+      promo_type: "time_based_rate",
+      amount_mode: "exact",
+      price: "20.00",
+      granted_seconds: 7200,
+      station_scope: null,
+      applies_to: null,
+      starts_at: "2026-01-01T00:00:00.000Z",
+      ends_at: "2026-06-01T00:00:00.000Z",
+      priority: 0,
+      per_member_redemption_limit: null,
+      total_redemption_limit: null,
+      days_of_week: [0, 1, 2, 3, 4, 5, 6],
+      window_start_local_time: "00:00",
+      window_end_local_time: "06:00"
+    });
 
     assert.deepEqual(
       fetchCalls.map((call) => ({ method: call.method, url: call.url })),
@@ -1160,7 +1291,9 @@ async function runAsyncAssertions() {
         { method: "PATCH", url: "http://localhost:8000/promos/promo-1/state" },
         { method: "PATCH", url: "http://localhost:8000/promos/promo-1/state" },
         { method: "GET", url: "http://localhost:8000/promos/promo-1/audit" },
-        { method: "GET", url: "http://localhost:8000/promos/promo-1/redemptions" }
+        { method: "GET", url: "http://localhost:8000/promos/promo-1/redemptions" },
+        { method: "GET", url: "http://localhost:8000/promos/promo-1/rate-applications" },
+        { method: "POST", url: "http://localhost:8000/promos" }
       ]
     );
     assert.equal(fetchCalls.every((call) => call.credentials === "include"), true);
@@ -1178,6 +1311,7 @@ async function runAsyncAssertions() {
     assert.deepEqual(fetchCalls[46].body, {
       name: "Test Promo",
       audience: "standard",
+      promo_type: "purchase",
       amount_mode: "exact",
       price: "20.00",
       granted_seconds: 6000,
@@ -1187,7 +1321,10 @@ async function runAsyncAssertions() {
       ends_at: "2026-02-01T00:00:00.000Z",
       priority: 0,
       per_member_redemption_limit: null,
-      total_redemption_limit: null
+      total_redemption_limit: null,
+      days_of_week: null,
+      window_start_local_time: null,
+      window_end_local_time: null
     });
     // Confirms PromoInput never carries created_by_user_id/owner_state/
     // status -- the request body sent over the wire has no such keys at
@@ -1199,6 +1336,7 @@ async function runAsyncAssertions() {
     assert.deepEqual(fetchCalls[47].body, {
       name: "Updated Promo",
       audience: "member_topup",
+      promo_type: "purchase",
       amount_mode: "minimum",
       price: "100.00",
       granted_seconds: 3600,
@@ -1208,7 +1346,10 @@ async function runAsyncAssertions() {
       ends_at: "2026-02-01T00:00:00.000Z",
       priority: 1,
       per_member_redemption_limit: 2,
-      total_redemption_limit: 10
+      total_redemption_limit: 10,
+      days_of_week: null,
+      window_start_local_time: null,
+      window_end_local_time: null
     });
     assert.deepEqual(fetchCalls[48].body, { owner_state: "enabled" });
     assert.deepEqual(fetchCalls[49].body, {
@@ -1217,6 +1358,25 @@ async function runAsyncAssertions() {
     });
     assert.deepEqual(fetchCalls[50].body, null);
     assert.deepEqual(fetchCalls[51].body, null);
+    assert.deepEqual(fetchCalls[52].body, null); // GET /promos/promo-1/rate-applications
+    assert.deepEqual(fetchCalls[53].body, {
+      name: "Midnight Rate",
+      audience: "standard",
+      promo_type: "time_based_rate",
+      amount_mode: "exact",
+      price: "20.00",
+      granted_seconds: 7200,
+      station_scope: null,
+      applies_to: null,
+      starts_at: "2026-01-01T00:00:00.000Z",
+      ends_at: "2026-06-01T00:00:00.000Z",
+      priority: 0,
+      per_member_redemption_limit: null,
+      total_redemption_limit: null,
+      days_of_week: [0, 1, 2, 3, 4, 5, 6],
+      window_start_local_time: "00:00",
+      window_end_local_time: "06:00"
+    });
 
     assert.deepEqual(fetchCalls[0].body, {
       username: "owner",
@@ -2161,10 +2321,6 @@ async function runAsyncAssertions() {
       "Members should precede Sales in the main nav"
     );
     assert.ok(
-      authShellSource.indexOf('href="/sales"') < authShellSource.indexOf('href="/rates"'),
-      "Sales should precede Rates in the main nav"
-    );
-    assert.ok(
       authShellSource.indexOf('{ href: "/history"') < authShellSource.indexOf('{ href: "/operators"'),
       "History should be the first Admin dropdown item"
     );
@@ -2244,7 +2400,9 @@ async function runAsyncAssertions() {
     assert.match(authShellSource, /href: "\/settings"/);
     assert.match(authShellSource, /href: "\/system"/);
     assert.match(authShellSource, /href: "\/history"/);
-    assert.match(authShellSource, /href="\/rates"/);
+    // The standalone Rates page has been retired -- no main-nav link, no icon.
+    assert.doesNotMatch(authShellSource, /href="\/rates"/);
+    assert.doesNotMatch(authShellSource, /RatesNavIcon/);
     assert.match(authShellSource, /href="\/sales"/);
     assert.doesNotMatch(authShellSource, /href="\/history"/);
     assert.match(authShellSource, /aria-expanded/);
@@ -2447,10 +2605,46 @@ async function runAsyncAssertions() {
     assert.match(settingsSource, /Reset All Defaults/);
     assert.doesNotMatch(settingsSource, /SECRET_GROUNDS_TEST_MODE/);
     assert.doesNotMatch(settingsSource, /password_hash/);
+    // Rates & Pricing: Phase 1 curated editor over fixed rate_profiles /
+    // membership_products rows via /admin/pricing. It must NOT reach for the
+    // generic rate CRUD.
+    assert.match(settingsSource, /rates_pricing/);
+    assert.match(settingsSource, /Rates &amp; Pricing/);
+    assert.match(settingsSource, /fetchAdminPricing/);
+    assert.match(settingsSource, /updateAdminPricing/);
+    assert.match(settingsSource, /New member account/);
+    assert.match(settingsSource, /Existing member/);
+    assert.doesNotMatch(settingsSource, /Member top-up/);
+    assert.match(settingsSource, /Hourly rate \(per 1 hour\)/);
+    assert.match(settingsSource, /No separate VIP account is required/);
+    assert.match(settingsSource, /member hours = 1 VIP hour/);
+    assert.match(settingsSource, /regenerated automatically from the hourly/);
+    assert.match(settingsSource, /VIP guest promo package and the VIP member promo product together/);
+    assert.match(
+      settingsSource,
+      /Changes apply to new sessions and new purchases only\. Running sessions, existing balances, and past transactions are unaffected\./
+    );
+    assert.doesNotMatch(settingsSource, /fetchRates/);
+    assert.doesNotMatch(settingsSource, /createRate|updateRate\b|updateRateStatus/);
+
+    const pricingApiSource = readFileSync("src/lib/api.ts", "utf8");
+    assert.match(pricingApiSource, /export async function fetchAdminPricing/);
+    assert.match(pricingApiSource, /export async function updateAdminPricing/);
+    assert.match(pricingApiSource, /\/admin\/pricing/);
+    assert.match(pricingApiSource, /method: "PUT"/);
+
+    const ratesRedirectSource = readFileSync("src/app/rates/page.tsx", "utf8");
+    assert.match(ratesRedirectSource, /redirect\("\/settings"\)/);
+    assert.doesNotMatch(ratesRedirectSource, /RatesManager/);
 
     const settingsCss = readFileSync("src/app/settings/settings.module.css", "utf8");
     assert.match(settingsCss, /\.categoryNav/);
     assert.match(settingsCss, /\.switchField/);
+    assert.match(settingsCss, /\.ratesGroup/);
+    assert.match(settingsCss, /\.ratesGroupPromo/);
+    assert.match(settingsCss, /\.ratesSubgroup/);
+    assert.match(settingsCss, /\.pricingField/);
+    assert.match(settingsCss, /\.pricingDisclaimer/);
     assert.match(settingsCss, /color: #f8fafc/);
 
     const systemPageSource = readFileSync("src/app/system/page.tsx", "utf8");
@@ -2886,7 +3080,6 @@ async function runAsyncAssertions() {
     const pageTitleSources: Array<[string, RegExp]> = [
       ["src/app/history/page.tsx", /PageTitleIcon name="history"/],
       ["src/app/operator-activity/page.tsx", /PageTitleIcon name="activity"/],
-      ["src/app/rates/page.tsx", /PageTitleIcon name="rates"/],
       ["src/app/remote-commands/page.tsx", /PageTitleIcon name="terminal"/],
       ["src/app/settings/page.tsx", /PageTitleIcon name="settings"/],
       ["src/app/system/page.tsx", /PageTitleIcon name="monitor-cog"/],

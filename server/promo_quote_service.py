@@ -10,7 +10,9 @@ from decimal import Decimal
 
 from server.promo_eligibility import SelectionAction, select_best_promo
 from server.promo_repository import PromoRepository
+from server.promo_time_based import select_active_time_based_rate
 from server.rate_calculator import calculate_metered_time
+from server.rate_eligibility import DEFAULT_SHOP_TIMEZONE
 from server.rate_repository import RateRepository
 from server.schemas import PromoQuoteResponse
 
@@ -47,6 +49,7 @@ def build_promo_quote(
     action: SelectionAction,
     amount: Decimal,
     now: datetime,
+    timezone_name: str = DEFAULT_SHOP_TIMEZONE,
 ) -> PromoQuoteResponse:
     audience = "vip" if is_vip_station else "standard"
     station_scope = "vip" if is_vip_station else "standard"
@@ -57,10 +60,40 @@ def build_promo_quote(
         else resolve_normal_standard_seconds(rate_repository, amount)
     )
 
+    enabled_promos = promo_repository.list(owner_states=["enabled"])
+
+    # Stage 7: a Time-Based Rate promo temporarily REPLACES the Standard
+    # linear amount->time conversion for the length of its recurring
+    # window. Standard-only; it never applies on a VIP station, never
+    # touches packages, and is resolved entirely independently of the
+    # purchase-promo selection below. `time_based_result` is non-None only
+    # when its promotional rate strictly beats `base_seconds`.
+    time_based_result = None
+    if not is_vip_station:
+        time_based_candidates = [
+            promo for promo in enabled_promos if promo.promo_type == "time_based_rate"
+        ]
+        time_based_result = select_active_time_based_rate(
+            time_based_candidates,
+            amount=amount,
+            now_utc=now,
+            timezone_name=timezone_name,
+            normal_seconds=base_seconds,
+        )
+    time_based_seconds = time_based_result.promo_seconds if time_based_result is not None else None
+
+    # The baseline a purchase promo must strictly beat. When no Time-Based
+    # Rate promo is active this is exactly `base_seconds` (max(x, 0) -> x;
+    # max(None-as-0, 0) -> 0 -> None), so purchase-promo behaviour is
+    # unchanged. When one IS active, the promotional rate becomes the
+    # baseline, so a purchase promo wins only if it beats the promo rate.
+    _effective = max(base_seconds or 0, time_based_seconds or 0)
+    effective_base = _effective if _effective > 0 else None
+
     candidates = [
         promo
-        for promo in promo_repository.list(owner_states=["enabled"])
-        if promo.audience == audience
+        for promo in enabled_promos
+        if promo.promo_type == "purchase" and promo.audience == audience
     ]
     total_counts = {
         promo.promo_id: promo_repository.count_total_redemptions(promo.promo_id) for promo in candidates
@@ -74,7 +107,7 @@ def build_promo_quote(
         action=action,
         station_scope=station_scope,
         total_redemption_counts=total_counts,
-        base_granted_seconds=base_seconds,
+        base_granted_seconds=effective_base,
     )
 
     if result.selected_promo is not None:
@@ -89,6 +122,23 @@ def build_promo_quote(
             source_type="promo",
             promo_id=result.selected_promo.promo_id,
             promo_name=result.selected_promo.name,
+            quoted_at=now,
+        )
+
+    if time_based_result is not None:
+        return PromoQuoteResponse(
+            pc_name=pc_name,
+            action=action,
+            amount=amount,
+            station_scope=station_scope,
+            base_seconds=base_seconds,
+            final_seconds=time_based_result.promo_seconds,
+            benefit_seconds=time_based_result.benefit_seconds,
+            source_type="time_based_rate",
+            promo_id=None,
+            promo_name=None,
+            time_based_promo_id=time_based_result.promo.promo_id,
+            time_based_promo_name=time_based_result.promo.name,
             quoted_at=now,
         )
 

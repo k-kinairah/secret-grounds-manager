@@ -1062,6 +1062,55 @@ class CalculatedTimeResponse(BaseModel):
     rate_snapshot: str
 
 
+class PricingMoneyTime(BaseModel):
+    """A single (price, seconds) pricing knob in the curated Rates & Pricing
+    editor. seconds is always the row's full duration -- the frontend shows
+    it as minutes or hours, but the wire value is seconds."""
+
+    price: Decimal
+    seconds: int = Field(..., gt=0)
+
+    @field_validator("price")
+    @classmethod
+    def _validate_price(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+
+class PricingVipTierView(BaseModel):
+    """Read-only view of a regenerated VIP tier row (2h/3h/4h). These are
+    always rewritten as exact multiples of the VIP base on save -- they are
+    not independently editable, only shown so the admin can see the effect."""
+
+    rate_id: str
+    multiple: int
+    price: Decimal
+    seconds: int
+
+
+class PricingSnapshot(BaseModel):
+    """Everything the curated editor needs. The six *editable* knobs map to
+    fixed rate_profiles / membership_products rows; the rest is derived or
+    display-only."""
+
+    standard_guest: PricingMoneyTime
+    standard_member_new_account: PricingMoneyTime
+    standard_member_topup_small: PricingMoneyTime
+    standard_member_topup_large: PricingMoneyTime
+    vip_guest_hourly: PricingMoneyTime
+    promo: PricingMoneyTime
+    vip_guest_tiers: list[PricingVipTierView]
+    vip_member_conversion_ratio: int
+
+
+class PricingUpdateRequest(BaseModel):
+    standard_guest: PricingMoneyTime
+    standard_member_new_account: PricingMoneyTime
+    standard_member_topup_small: PricingMoneyTime
+    standard_member_topup_large: PricingMoneyTime
+    vip_guest_hourly: PricingMoneyTime
+    promo: PricingMoneyTime
+
+
 class PaymentRecord(BaseModel):
     payment_id: str
     session_id: str | None = None
@@ -1766,6 +1815,29 @@ PromoAmountMode = Literal["exact", "minimum"]
 PromoStationScope = Literal["standard", "vip"]
 PromoAppliesTo = Literal["start_session", "add_time", "both"]
 PromoAuditAction = Literal["created", "updated", "enabled", "disabled", "ended", "reactivated"]
+# Stage 7: discriminates the original fixed-price/fixed-grant purchase
+# promos ("purchase") from Time-Based Rate promos ("time_based_rate"),
+# which instead temporarily REPLACE the Standard linear amount->time
+# conversion for a recurring daily local-time window and are never
+# limit-accounted (no promo_redemptions row). Every pre-Stage-7 row is
+# "purchase" by column default.
+PromoType = Literal["purchase", "time_based_rate"]
+
+
+def _validate_window_local_time(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        hour_text, minute_text = text.split(":", 1)
+        hour, minute = int(hour_text), int(minute_text)
+    except ValueError as error:
+        raise ValueError("Window times must use 24-hour HH:MM format") from error
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("Window times must be a valid 24-hour HH:MM value")
+    return f"{hour:02d}:{minute:02d}"
 
 
 def _validate_utc_datetime(value: datetime) -> datetime:
@@ -1783,6 +1855,7 @@ class PromoFields(BaseModel):
 
     name: str = Field(..., min_length=1)
     audience: PromoAudience
+    promo_type: PromoType = "purchase"
     amount_mode: PromoAmountMode = "exact"
     price: Decimal
     granted_seconds: int = Field(..., gt=0)
@@ -1793,6 +1866,14 @@ class PromoFields(BaseModel):
     priority: int = 0
     per_member_redemption_limit: int | None = Field(default=None, gt=0)
     total_redemption_limit: int | None = Field(default=None, gt=0)
+    # Time-Based Rate only. days_of_week uses 0=Monday .. 6=Sunday and is
+    # the day the recurring window *opens* (a window that wraps past
+    # midnight stays active until its end time even though the calendar
+    # day has changed). window_*_local_time is "HH:MM" in the shop's
+    # configured local timezone.
+    days_of_week: list[int] | None = None
+    window_start_local_time: str | None = None
+    window_end_local_time: str | None = None
 
     @field_validator("price")
     @classmethod
@@ -1804,10 +1885,59 @@ class PromoFields(BaseModel):
     def validate_utc(cls, value: datetime) -> datetime:
         return _validate_utc_datetime(value)
 
+    @field_validator("window_start_local_time", "window_end_local_time")
+    @classmethod
+    def validate_window_time(cls, value: str | None) -> str | None:
+        return _validate_window_local_time(value)
+
+    @field_validator("days_of_week")
+    @classmethod
+    def validate_days_of_week(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        unique_days = sorted(set(value))
+        if any(day < 0 or day > 6 for day in unique_days):
+            raise ValueError("days_of_week entries must be 0 (Monday) through 6 (Sunday)")
+        return unique_days
+
     @model_validator(mode="after")
     def validate_cross_fields(self) -> "PromoFields":
         if self.ends_at <= self.starts_at:
             raise ValueError("ends_at must be later than starts_at")
+
+        if self.promo_type == "time_based_rate":
+            # Standard-only in this version -- VIP has no linear
+            # amount->time conversion to replace.
+            if self.audience != "standard":
+                raise ValueError("time_based_rate promos are Standard-only in this version")
+            if not self.days_of_week:
+                raise ValueError("time_based_rate promos require at least one day of week")
+            if self.window_start_local_time is None or self.window_end_local_time is None:
+                raise ValueError(
+                    "time_based_rate promos require window_start_local_time and window_end_local_time"
+                )
+            if self.window_start_local_time == self.window_end_local_time:
+                raise ValueError("time_based_rate window start and end must differ")
+            if self.station_scope is not None:
+                raise ValueError("time_based_rate promos must not set station_scope")
+            if self.applies_to is not None:
+                raise ValueError("time_based_rate promos must not set applies_to")
+            if self.amount_mode != "exact":
+                raise ValueError("time_based_rate promos must use amount_mode='exact'")
+            if self.per_member_redemption_limit is not None or self.total_redemption_limit is not None:
+                raise ValueError("time_based_rate promos do not support redemption limits")
+            # Priority is a Purchase-Promo concept only. The owner never
+            # sets it for a rate schedule; overlapping schedules are
+            # rejected outright (server/promo_time_based.find_time_based_rate_conflict)
+            # rather than resolved by priority. Coerced to 0 here so the
+            # shared promos.priority column carries a consistent value no
+            # matter what any client sends.
+            self.priority = 0
+            return self
+
+        # promo_type == "purchase" -- unchanged pre-Stage-7 rules.
+        if self.days_of_week is not None or self.window_start_local_time is not None or self.window_end_local_time is not None:
+            raise ValueError("days_of_week and window times are only valid for time_based_rate promos")
 
         if self.audience in ("standard", "vip"):
             expected_scope = self.audience
@@ -1868,6 +1998,7 @@ class Promo(BaseModel):
     promo_id: str
     name: str
     audience: PromoAudience
+    promo_type: PromoType = "purchase"
     owner_state: PromoOwnerState
     status: PromoDisplayStatus
     amount_mode: PromoAmountMode
@@ -1880,13 +2011,17 @@ class Promo(BaseModel):
     priority: int
     per_member_redemption_limit: int | None
     total_redemption_limit: int | None
+    # Time-Based Rate only (None for every "purchase" promo).
+    days_of_week: list[int] | None = None
+    window_start_local_time: str | None = None
+    window_end_local_time: str | None = None
     created_by_user_id: str | None
     created_at: datetime
     updated_at: datetime
 
 
 PromoQuoteAction = Literal["start_session", "add_time"]
-PromoQuoteSourceType = Literal["normal_rate", "normal_package", "promo", "none"]
+PromoQuoteSourceType = Literal["normal_rate", "normal_package", "promo", "time_based_rate", "none"]
 
 
 class PromoQuoteRequest(BaseModel):
@@ -1915,6 +2050,11 @@ class PromoQuoteResponse(BaseModel):
     source_type: PromoQuoteSourceType
     promo_id: str | None
     promo_name: str | None
+    # Populated only when source_type == "time_based_rate": the winning
+    # Time-Based Rate promo. Kept separate from promo_id/promo_name (which
+    # stay purchase-promo only) so the two mechanisms never get confused.
+    time_based_promo_id: str | None = None
+    time_based_promo_name: str | None = None
     quoted_at: datetime
 
 
@@ -1973,6 +2113,37 @@ class PromoRedemption(BaseModel):
     operator_user_id: str | None
     voided_at: datetime | None
     void_reason: str | None
+    created_at: datetime
+
+
+class TimeBasedRateApplication(BaseModel):
+    """Stage 7: one usage-log row for a Time-Based Rate promo. This is
+    deliberately NOT a PromoRedemption -- a Time-Based Rate promo
+    temporarily replaces the Standard linear amount->time conversion for
+    the length of its recurring window and is never limit-accounted, so
+    there is no slot to reserve and no void semantics. This table exists
+    purely so the owner can see, per session/payment, which time-based
+    rate was active and what it produced. Every field is a frozen
+    snapshot taken at Start Session / Add Time."""
+
+    application_id: str
+    promo_id: str
+    promo_name_snapshot: str
+    price_snapshot: Decimal
+    granted_seconds_snapshot: int
+    days_of_week_snapshot: list[int]
+    window_start_snapshot: str
+    window_end_snapshot: str
+    session_id: str | None
+    payment_id: str
+    action: PromoQuoteAction
+    normal_seconds: int
+    promo_seconds: int
+    amount: Decimal
+    pc_name_snapshot: str | None
+    income_group_id_snapshot: str | None
+    income_group_name_snapshot: str | None
+    operator_user_id: str | None
     created_at: datetime
 
 

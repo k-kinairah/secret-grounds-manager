@@ -78,7 +78,8 @@ from server.schemas import (
     MemberVipPlayablePreview,
     NewMemberPromoQuoteRequest,
     NewMemberPromoQuoteResponse,
-    PasswordResetRequest,
+    PricingSnapshot,
+    PricingUpdateRequest,
     PreparedSessionResponse,
     PreparedSessionStartRequest,
     PreparedSessionActivationResponse,
@@ -142,8 +143,9 @@ from server.schemas import (
     PromoRedemption,
     PromoStateTransition,
     PromoUpdate,
+    TimeBasedRateApplication,
 )
-from server.admin_settings_service import AdminSettingsService
+from server.admin_settings_service import AdminSettingsService, get_runtime_shop_timezone_display
 from server.balance_conversion import split_vip_session
 from server.promo_quote_service import build_promo_quote
 from server.auth import (
@@ -175,6 +177,7 @@ from server.prepared_session_repository import PreparedSessionRepository
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
+from server import pricing_service
 from server.rate_calculator import calculate_metered_time
 from server.rate_repository import RateRepository
 from server.screen_monitor_service import ScreenMonitorService, sniff_image_content_type
@@ -3453,6 +3456,7 @@ def quote_standard_or_vip_promo(
         action=request.action,
         amount=request.amount,
         now=current_utc_time(),
+        timezone_name=get_runtime_shop_timezone_display(),
     )
 
 
@@ -3536,6 +3540,18 @@ def list_promo_redemptions(
     if session_service.promo_repository.get(promo_id) is None:
         raise HTTPException(status_code=404, detail="Promo not found")
     return session_service.promo_repository.list_redemptions(promo_id)
+
+
+@app.get("/promos/{promo_id}/rate-applications", response_model=list[TimeBasedRateApplication])
+def list_promo_rate_applications(
+    promo_id: str,
+    _: object = Depends(require_owner),
+) -> list[TimeBasedRateApplication]:
+    """Time-Based Rate promo usage log -- history only, read-only. Empty
+    for every 'purchase' promo (they never write this table)."""
+    if session_service.promo_repository.get(promo_id) is None:
+        raise HTTPException(status_code=404, detail="Promo not found")
+    return session_service.promo_repository.list_time_based_applications(promo_id)
 
 
 @app.post("/sessions/{session_id}/add-time-member", response_model=SessionCommandResponse)
@@ -3710,3 +3726,23 @@ def update_rate_status(
     if rate is None:
         raise HTTPException(status_code=404, detail="Rate not found")
     return rate
+
+
+@app.get("/admin/pricing", response_model=PricingSnapshot)
+def get_admin_pricing(
+    _: object = Depends(require_role("admin")),
+) -> PricingSnapshot:
+    """Curated read of the Rates & Pricing editor's allowlisted rows."""
+    return pricing_service.get_editable_pricing()
+
+
+@app.put("/admin/pricing", response_model=PricingSnapshot)
+def update_admin_pricing(
+    request: PricingUpdateRequest,
+    current_user: object = Depends(require_role("admin")),
+) -> PricingSnapshot:
+    """Rewrite the allowlisted pricing rows in one server-side transaction
+    (VIP tiers regenerated as x2/x3/x4 of the base; the VIP promo guest
+    package and member product kept mirrored). Does not change any
+    session/purchase logic -- only the values those code paths read."""
+    return pricing_service.apply_pricing_update(request, get_actor_user_id(current_user))

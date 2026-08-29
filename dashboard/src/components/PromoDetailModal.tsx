@@ -1,16 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { fetchPromoAudit, fetchPromoRedemptions } from "@/lib/api";
-import { availableTransitionActions, type PromoTransitionAction } from "@/lib/promoForm";
+import { fetchPromoAudit, fetchPromoRateApplications, fetchPromoRedemptions } from "@/lib/api";
+import { availableTransitionActions, formatDaysOfWeek, type PromoTransitionAction } from "@/lib/promoForm";
 import { formatDateTime, formatMoney, formatRateDuration } from "@/lib/time";
-import type { Promo, PromoAuditEvent, PromoRedemption } from "@/lib/types";
+import type { Promo, PromoAuditEvent, PromoRedemption, TimeBasedRateApplication } from "@/lib/types";
 import { CloseButton } from "./CloseButton";
 import { useModalFocus } from "./MembersManager";
 import dialogStyles from "@/app/page.module.css";
 import styles from "@/app/promotions/promotions.module.css";
 
-type PromoDetailTab = "overview" | "audit" | "redemptions";
+type PromoDetailTab = "overview" | "audit" | "redemptions" | "rateApplications";
 
 interface PromoDetailModalProps {
   promo: Promo;
@@ -26,6 +26,16 @@ const TRANSITION_LABEL: Record<PromoTransitionAction, string> = {
   end: "End",
   reactivate: "Reactivate"
 };
+
+function actionButtonClass(action: PromoTransitionAction): string {
+  if (action === "disable") {
+    return styles.pinkButton;
+  }
+  if (action === "end") {
+    return styles.dangerButton;
+  }
+  return styles.button; // enable / reactivate
+}
 
 function audienceLabel(audience: Promo["audience"]): string {
   switch (audience) {
@@ -65,11 +75,14 @@ export function PromoDetailModal({
   onRequestTransition,
   isTransitionPending
 }: PromoDetailModalProps) {
+  const isTimeBased = promo.promo_type === "time_based_rate";
   const [activeTab, setActiveTab] = useState<PromoDetailTab>("overview");
   const [auditEvents, setAuditEvents] = useState<PromoAuditEvent[]>([]);
   const [redemptions, setRedemptions] = useState<PromoRedemption[]>([]);
+  const [rateApplications, setRateApplications] = useState<TimeBasedRateApplication[]>([]);
   const [isLoadingAudit, setIsLoadingAudit] = useState(false);
   const [isLoadingRedemptions, setIsLoadingRedemptions] = useState(false);
+  const [isLoadingRateApplications, setIsLoadingRateApplications] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const modalRef = useRef<HTMLElement | null>(null);
 
@@ -97,6 +110,15 @@ export function PromoDetailModal({
           .catch((error) => setHistoryError(error instanceof Error ? error.message : "Could not load redemption history."))
           .finally(() => setIsLoadingRedemptions(false));
       }
+      if (activeTab === "rateApplications" && rateApplications.length === 0) {
+        setIsLoadingRateApplications(true);
+        fetchPromoRateApplications(promo.promo_id)
+          .then(setRateApplications)
+          .catch((error) =>
+            setHistoryError(error instanceof Error ? error.message : "Could not load rate application history.")
+          )
+          .finally(() => setIsLoadingRateApplications(false));
+      }
     }, 0);
     return () => window.clearTimeout(fetchId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -105,7 +127,9 @@ export function PromoDetailModal({
   const tabs: Array<{ id: PromoDetailTab; label: string }> = [
     { id: "overview", label: "Overview" },
     { id: "audit", label: "Audit" },
-    { id: "redemptions", label: "Redemptions" }
+    isTimeBased
+      ? { id: "rateApplications", label: "Rate applications" }
+      : { id: "redemptions", label: "Redemptions" }
   ];
   const activeCount = redemptions.filter((redemption) => redemption.voided_at === null).length;
   const transitionActions = availableTransitionActions(promo);
@@ -171,7 +195,7 @@ export function PromoDetailModal({
           {activeTab === "overview" ? (
             <div role="tabpanel">
               <section className={dialogStyles.memberDetailCard}>
-                <div className={dialogStyles.memberCardHeader}>
+                <div className={`${dialogStyles.memberCardHeader} ${styles.centeredCardHeader}`}>
                   <h3>Configuration</h3>
                 </div>
                 <div className={styles.detailRows}>
@@ -184,38 +208,65 @@ export function PromoDetailModal({
                     </span>
                   </div>
                   <div className={styles.detailRow}>
+                    <span>Type</span>
+                    <span>{isTimeBased ? "Time-Based Rate" : "Purchase"}</span>
+                  </div>
+                  <div className={styles.detailRow}>
                     <span>Audience</span>
                     <span>{audienceLabel(promo.audience)}</span>
                   </div>
-                  <div className={styles.detailRow}>
-                    <span>Amount</span>
-                    <span>
-                      {promo.amount_mode === "minimum" ? "At least " : ""}
-                      {formatMoney(promo.price)}
-                    </span>
-                  </div>
-                  <div className={styles.detailRow}>
-                    <span>Granted time</span>
-                    <span>{formatRateDuration(promo.granted_seconds)}</span>
-                  </div>
-                  {promo.station_scope ? (
-                    <div className={styles.detailRow}>
-                      <span>Station scope</span>
-                      <span>{promo.station_scope === "vip" ? "VIP" : "Standard"}</span>
-                    </div>
-                  ) : null}
-                  {promo.applies_to ? (
-                    <div className={styles.detailRow}>
-                      <span>Applies to</span>
-                      <span>
-                        {promo.applies_to === "start_session"
-                          ? "Start Session"
-                          : promo.applies_to === "add_time"
-                            ? "Add Time"
-                            : "Start Session & Add Time"}
-                      </span>
-                    </div>
-                  ) : null}
+                  {isTimeBased ? (
+                    <>
+                      <div className={styles.detailRow}>
+                        <span>Promotional rate</span>
+                        <span>
+                          {formatMoney(promo.price)} = {formatRateDuration(promo.granted_seconds)}
+                        </span>
+                      </div>
+                      <div className={styles.detailRow}>
+                        <span>Days</span>
+                        <span>{formatDaysOfWeek(promo.days_of_week)}</span>
+                      </div>
+                      <div className={styles.detailRow}>
+                        <span>Window (local)</span>
+                        <span>
+                          {promo.window_start_local_time} → {promo.window_end_local_time}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className={styles.detailRow}>
+                        <span>Amount</span>
+                        <span>
+                          {promo.amount_mode === "minimum" ? "At least " : ""}
+                          {formatMoney(promo.price)}
+                        </span>
+                      </div>
+                      <div className={styles.detailRow}>
+                        <span>Granted time</span>
+                        <span>{formatRateDuration(promo.granted_seconds)}</span>
+                      </div>
+                      {promo.station_scope ? (
+                        <div className={styles.detailRow}>
+                          <span>Station scope</span>
+                          <span>{promo.station_scope === "vip" ? "VIP" : "Standard"}</span>
+                        </div>
+                      ) : null}
+                      {promo.applies_to ? (
+                        <div className={styles.detailRow}>
+                          <span>Applies to</span>
+                          <span>
+                            {promo.applies_to === "start_session"
+                              ? "Start Session"
+                              : promo.applies_to === "add_time"
+                                ? "Add Time"
+                                : "Start Session & Add Time"}
+                          </span>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
                   <div className={styles.detailRow}>
                     <span>Starts</span>
                     <span>{formatDateTime(promo.starts_at)}</span>
@@ -224,18 +275,22 @@ export function PromoDetailModal({
                     <span>Ends</span>
                     <span>{formatDateTime(promo.ends_at)}</span>
                   </div>
-                  <div className={styles.detailRow}>
-                    <span>Priority</span>
-                    <span>{promo.priority}</span>
-                  </div>
-                  <div className={styles.detailRow}>
-                    <span>Per-member limit</span>
-                    <span>{promo.per_member_redemption_limit ?? "None"}</span>
-                  </div>
-                  <div className={styles.detailRow}>
-                    <span>Total redemption limit</span>
-                    <span>{promo.total_redemption_limit ?? "None"}</span>
-                  </div>
+                  {isTimeBased ? null : (
+                    <>
+                      <div className={styles.detailRow}>
+                        <span>Priority</span>
+                        <span>{promo.priority}</span>
+                      </div>
+                      <div className={styles.detailRow}>
+                        <span>Per-member limit</span>
+                        <span>{promo.per_member_redemption_limit ?? "None"}</span>
+                      </div>
+                      <div className={styles.detailRow}>
+                        <span>Total redemption limit</span>
+                        <span>{promo.total_redemption_limit ?? "None"}</span>
+                      </div>
+                    </>
+                  )}
                   <div className={styles.detailRow}>
                     <span>Created</span>
                     <span>{formatDateTime(promo.created_at)}</span>
@@ -248,20 +303,16 @@ export function PromoDetailModal({
               </section>
 
               <section className={dialogStyles.memberDetailCard} style={{ marginTop: 16 }}>
-                <div className={dialogStyles.memberCardHeader}>
+                <div className={`${dialogStyles.memberCardHeader} ${styles.centeredCardHeader}`}>
                   <h3>Actions</h3>
                 </div>
                 <div className={styles.cardActions}>
-                  <button className={dialogStyles.secondaryButton} onClick={() => onEdit(promo)} type="button">
+                  <button className={styles.secondaryButton} onClick={() => onEdit(promo)} type="button">
                     Edit
                   </button>
                   {transitionActions.map((action) => (
                     <button
-                      className={
-                        action === "disable" || action === "end"
-                          ? dialogStyles.dangerButton
-                          : dialogStyles.primaryButton
-                      }
+                      className={actionButtonClass(action)}
                       disabled={isTransitionPending}
                       key={action}
                       onClick={() => onRequestTransition(promo, action)}
@@ -342,6 +393,53 @@ export function PromoDetailModal({
                               Voided {formatDateTime(redemption.voided_at)}
                               {redemption.void_reason ? ` — ${redemption.void_reason}` : ""}
                             </span>
+                          ) : null}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {activeTab === "rateApplications" ? (
+            <div role="tabpanel">
+              {historyError ? <div className={styles.errorMessage}>{historyError}</div> : null}
+              {isLoadingRateApplications ? (
+                <div className={styles.loadingCard}>Loading rate application history...</div>
+              ) : rateApplications.length === 0 ? (
+                <div className={styles.emptyState}>
+                  This rate has not been applied to a session yet.
+                </div>
+              ) : (
+                <>
+                  <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 12 }}>
+                    {rateApplications.length} time{rateApplications.length === 1 ? "" : "s"} this promotional
+                    rate replaced the normal rate. This is a usage log, not a redemption — there is no limit.
+                  </p>
+                  <div className={styles.historyList}>
+                    {rateApplications.map((application) => (
+                      <article className={styles.historyItem} key={application.application_id}>
+                        <div className={styles.historyItemHeader}>
+                          <span>
+                            {formatMoney(application.amount)} ·{" "}
+                            {formatRateDuration(application.normal_seconds)} →{" "}
+                            {formatRateDuration(application.promo_seconds)}
+                          </span>
+                          <span>{formatDateTime(application.created_at)}</span>
+                        </div>
+                        <div className={styles.historyItemMeta}>
+                          <span>
+                            {application.action === "start_session" ? "Start Session" : "Add Time"}
+                          </span>
+                          <span>Payment: <code>{application.payment_id}</code></span>
+                          {application.session_id ? (
+                            <span>Session: <code>{application.session_id}</code></span>
+                          ) : null}
+                          {application.pc_name_snapshot ? <span>PC: {application.pc_name_snapshot}</span> : null}
+                          {application.income_group_name_snapshot ? (
+                            <span>Income group: {application.income_group_name_snapshot}</span>
                           ) : null}
                         </div>
                       </article>

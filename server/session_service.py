@@ -10,7 +10,7 @@ from server.balance_conversion import STANDARD_SECONDS_PER_VIP_SECOND, finalize_
 from server.connection_manager import ClientConnectionManager
 from server.billing_service import BillingService
 from server.billing_service import calculate_open_time_estimate
-from server.income_attribution import sweep_pending_purchases_for_member
+from server.income_attribution import attribution_for_known_pc, sweep_pending_purchases_for_member
 from server.payment_repository import PaymentRepository
 from server.pc_layout_repository import IncomeGroupRepository, PCLayoutRepository
 from server.promo_quote_service import build_promo_quote
@@ -1088,6 +1088,7 @@ class SessionService:
             action=action,
             amount=base_amount,
             now=now,
+            timezone_name=get_runtime_shop_timezone_display(),
         )
         if expected_promo_id is not None:
             resolved_promo_id = quote.promo_id if quote.source_type == "promo" else None
@@ -1097,6 +1098,56 @@ class SessionService:
                     detail="The expected promo is no longer available. Please refresh and try again.",
                 )
         return quote
+
+    def _record_time_based_rate_application(
+        self,
+        *,
+        promo_quote,
+        session,
+        payment,
+        action: str,
+        actor_user_id: str | None,
+        now: datetime,
+    ) -> None:
+        """Best-effort usage-log write for a Time-Based Rate promo, written
+        AFTER the payment succeeds -- exactly like create_event, not inside
+        the payment transaction. A Time-Based Rate promo is not
+        limit-accounted, so a missed row here has no accounting effect; it
+        must never turn an otherwise-successful Start Session / Add Time
+        into a failure, hence the broad catch."""
+        if promo_quote.time_based_promo_id is None:
+            return
+        try:
+            promo = self.promo_repository.get(promo_quote.time_based_promo_id)
+            if promo is None:
+                return
+            attribution = attribution_for_known_pc(
+                self.pc_layout_repository,
+                self.income_group_repository,
+                session.pc_name,
+                session.session_id,
+                now,
+            )
+            self.promo_repository.record_time_based_rate_application(
+                promo=promo,
+                session_id=session.session_id,
+                payment_id=payment.payment_id,
+                action=action,
+                normal_seconds=promo_quote.base_seconds or 0,
+                promo_seconds=promo_quote.final_seconds or 0,
+                amount=payment.amount,
+                pc_name_snapshot=attribution.pc_name_snapshot,
+                income_group_id_snapshot=attribution.income_group_id_snapshot,
+                income_group_name_snapshot=attribution.income_group_name_snapshot,
+                operator_user_id=actor_user_id,
+                now=now,
+            )
+        except Exception as error:  # noqa: BLE001 -- logged, never surfaced
+            logger.warning(
+                "Failed to record time-based rate application for session %s: %s",
+                getattr(session, "session_id", "?"),
+                error,
+            )
 
     def _build_draft_payment(
         self,
@@ -1205,6 +1256,24 @@ class SessionService:
             now=now,
         )
 
+        # Stage 7: a Time-Based Rate promo only overrides the computed
+        # duration for a Standard *linear amount->time* purchase -- never a
+        # fixed `rate_id` package and never a comp/custom-seconds session
+        # (`amount is not None` is true only for the linear path;
+        # resolve_session_package already guaranteed exactly one of
+        # rate_id / amount / duration_seconds was supplied). It then takes
+        # the ordinary (non-claim) payment path below, records NO
+        # promo_redemptions row, and is logged separately after the paid
+        # event. When no time-based promo is active this is False and the
+        # branch below is byte-for-byte the pre-Stage-7 flow.
+        is_time_based_rate = (
+            amount is not None
+            and promo_quote.source_type == "time_based_rate"
+            and promo_quote.final_seconds is not None
+        )
+        if is_time_based_rate:
+            duration_seconds = promo_quote.final_seconds
+
         if promo_quote.source_type == "promo" and promo_quote.final_seconds is not None:
             duration_seconds = promo_quote.final_seconds
             session = SessionRecord(
@@ -1296,6 +1365,15 @@ class SessionService:
             payment_method=recorded_payment.payment_method,
             performed_by_user_id=actor_user_id,
         )
+        if is_time_based_rate:
+            self._record_time_based_rate_application(
+                promo_quote=promo_quote,
+                session=session,
+                payment=recorded_payment,
+                action="start_session",
+                actor_user_id=actor_user_id,
+                now=now,
+            )
 
         command = self.create_command(
             "start_session",
@@ -1404,6 +1482,18 @@ class SessionService:
             expected_promo_id=expected_promo_id,
             now=now,
         )
+
+        # Stage 7: see start_prepaid_session -- a Time-Based Rate promo only
+        # overrides a *linear amount* increment's computed seconds (never a
+        # fixed `rate_id` package or a comp increment), then takes the
+        # ordinary payment path (no promo_redemptions row).
+        is_time_based_rate = (
+            amount is not None
+            and promo_quote.source_type == "time_based_rate"
+            and promo_quote.final_seconds is not None
+        )
+        if is_time_based_rate:
+            seconds = promo_quote.final_seconds
 
         if promo_quote.source_type == "promo" and promo_quote.final_seconds is not None:
             seconds = promo_quote.final_seconds
@@ -1515,6 +1605,15 @@ class SessionService:
             payment_method=recorded_payment.payment_method,
             performed_by_user_id=actor_user_id,
         )
+        if is_time_based_rate:
+            self._record_time_based_rate_application(
+                promo_quote=promo_quote,
+                session=session,
+                payment=recorded_payment,
+                action="add_time",
+                actor_user_id=actor_user_id,
+                now=now,
+            )
         if is_grace_rescue:
             self.create_event(
                 session.session_id,

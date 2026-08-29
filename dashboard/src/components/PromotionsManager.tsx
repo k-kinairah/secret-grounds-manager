@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 import { createPromo, fetchPromos, transitionPromoState, updatePromo } from "@/lib/api";
 import {
   applyAudienceRules,
+  DAY_LABELS,
   emptyPromoForm,
+  formatDaysOfWeek,
+  isTimeBasedRate,
   promoAudienceRules,
   promoFormToInput,
   promoToForm,
@@ -13,9 +16,16 @@ import {
   type PromoTransitionAction
 } from "@/lib/promoForm";
 import { formatDateTime, formatMoney, formatRateDuration } from "@/lib/time";
-import type { Promo, PromoAudience, PromoDisplayStatus } from "@/lib/types";
+import type {
+  Promo,
+  PromoAmountMode,
+  PromoAudience,
+  PromoDisplayStatus,
+  PromoType
+} from "@/lib/types";
 import { PromoDetailModal } from "./PromoDetailModal";
 import { PromoStateConfirmDialog } from "./PromoStateConfirmDialog";
+import { SecretSelect, type SecretSelectOption } from "./SecretSelect";
 import { useToast } from "./ToastProvider";
 import styles from "@/app/promotions/promotions.module.css";
 
@@ -32,6 +42,36 @@ const AUDIENCE_OPTIONS: Array<{ value: PromoAudience; label: string; hint: strin
   { value: "member_topup", label: "Member Top-up", hint: "Exact or minimum amount, per-member limit allowed" },
   { value: "new_member", label: "New Member", hint: "Exact amount only, account creation only" }
 ];
+
+const PROMO_TYPE_OPTIONS: Array<{ value: PromoType; label: string; hint: string }> = [
+  {
+    value: "purchase",
+    label: "Purchase Promo",
+    hint: "Fixed price buys a fixed amount of time (Standard / VIP / Member / New Member)"
+  },
+  {
+    value: "time_based_rate",
+    label: "Time-Based Rate",
+    hint: "Temporarily replaces the Standard ₱ → minutes rate on a recurring schedule (e.g. a Midnight Rate)"
+  }
+];
+
+const AMOUNT_MODE_OPTIONS: SecretSelectOption[] = [
+  { value: "exact", label: "Exact" },
+  { value: "minimum", label: "Minimum" }
+];
+
+const STATION_SCOPE_OPTIONS: SecretSelectOption[] = [
+  { value: "standard", label: "Standard" },
+  { value: "vip", label: "VIP" }
+];
+
+const APPLIES_TO_OPTIONS: SecretSelectOption[] = [
+  { value: "start_session", label: "Start Session" },
+  { value: "add_time", label: "Add Time" },
+  { value: "both", label: "Start Session & Add Time" }
+];
+
 
 const FILTER_OPTIONS: Array<{ value: "all" | PromoDisplayStatus; label: string }> = [
   { value: "all", label: "All" },
@@ -79,6 +119,7 @@ export function PromotionsManager() {
   const [isTransitionPending, setIsTransitionPending] = useState(false);
 
   const rules = promoAudienceRules(form.audience);
+  const timeBased = isTimeBasedRate(form);
   const visiblePromos = filter === "all" ? promos : promos.filter((promo) => promo.status === filter);
 
   async function refresh(options: { clearMessage?: boolean } = {}) {
@@ -122,6 +163,26 @@ export function PromotionsManager() {
 
   function setAudience(audience: PromoAudience) {
     setForm((current) => applyAudienceRules({ ...current, audience }));
+  }
+
+  function setPromoType(promoType: PromoType) {
+    // A promo's type is immutable once created (server rejects a change),
+    // so this only fires while creating a fresh draft.
+    setForm(emptyPromoForm(promoType));
+  }
+
+  function toggleDay(day: number) {
+    setForm((current) => {
+      const has = current.daysOfWeek.includes(day);
+      const nextDays = has
+        ? current.daysOfWeek.filter((value) => value !== day)
+        : [...current.daysOfWeek, day].sort((a, b) => a - b);
+      return { ...current, daysOfWeek: nextDays };
+    });
+  }
+
+  function setEveryDay() {
+    setForm((current) => ({ ...current, daysOfWeek: [0, 1, 2, 3, 4, 5, 6] }));
   }
 
   async function savePromo() {
@@ -203,15 +264,16 @@ export function PromotionsManager() {
           </p>
           <div className={styles.form}>
             <label className={styles.field}>
-              Audience
+              Promo type
               <div className={styles.audienceGroup}>
-                {AUDIENCE_OPTIONS.map((option) => (
+                {PROMO_TYPE_OPTIONS.map((option) => (
                   <button
                     className={`${styles.audienceOption} ${
-                      form.audience === option.value ? styles.audienceOptionActive : ""
+                      form.promoType === option.value ? styles.audienceOptionActive : ""
                     }`}
+                    disabled={editingPromoId !== null}
                     key={option.value}
-                    onClick={() => setAudience(option.value)}
+                    onClick={() => setPromoType(option.value)}
                     type="button"
                   >
                     <span>{option.label}</span>
@@ -219,7 +281,44 @@ export function PromotionsManager() {
                   </button>
                 ))}
               </div>
+              {editingPromoId ? (
+                <span className={styles.fieldHint}>A promo&apos;s type cannot be changed after it is created.</span>
+              ) : null}
             </label>
+            {timeBased ? (
+              <label className={styles.field}>
+                Audience
+                <div className={styles.audienceGroup}>
+                  <button className={`${styles.audienceOption} ${styles.audienceOptionActive}`} type="button">
+                    <span>Standard</span>
+                    <span>Time-Based Rate promos apply to the Standard ₱ → minutes rate</span>
+                  </button>
+                  <button className={styles.audienceOption} disabled type="button">
+                    <span>VIP</span>
+                    <span>Not available yet — VIP uses fixed packages, not a linear rate</span>
+                  </button>
+                </div>
+              </label>
+            ) : (
+              <label className={styles.field}>
+                Audience
+                <div className={styles.audienceGroup}>
+                  {AUDIENCE_OPTIONS.map((option) => (
+                    <button
+                      className={`${styles.audienceOption} ${
+                        form.audience === option.value ? styles.audienceOptionActive : ""
+                      }`}
+                      key={option.value}
+                      onClick={() => setAudience(option.value)}
+                      type="button"
+                    >
+                      <span>{option.label}</span>
+                      <span>{option.hint}</span>
+                    </button>
+                  ))}
+                </div>
+              </label>
+            )}
             <label className={styles.field}>
               Name
               <input
@@ -227,78 +326,143 @@ export function PromotionsManager() {
                 value={form.name}
               />
             </label>
-            <div className={styles.formRow}>
-              <label className={styles.field}>
-                Amount mode
-                <select
+            {timeBased ? (
+              <>
+                <label className={styles.field}>
+                  Promotional rate
+                  <div className={styles.formRow}>
+                    <label className={styles.field}>
+                      Price (₱)
+                      <input
+                        inputMode="decimal"
+                        onChange={(event) => setForm({ ...form, price: event.target.value })}
+                        placeholder="20.00"
+                        value={form.price}
+                      />
+                    </label>
+                    <label className={styles.field}>
+                      buys minutes
+                      <input
+                        min="1"
+                        onChange={(event) => setForm({ ...form, grantedMinutes: event.target.value })}
+                        type="number"
+                        value={form.grantedMinutes}
+                      />
+                    </label>
+                  </div>
+                  <span className={styles.fieldHint}>
+                    While the schedule below is active, entering ₱{form.price || "0"} on a Standard PC buys{" "}
+                    {form.grantedMinutes || "0"} minutes instead of the normal rate. Any other amount scales
+                    from this in proportion.
+                  </span>
+                </label>
+                <label className={styles.field}>
+                  Days
+                  <div className={styles.dayPicker}>
+                    <button
+                      className={`${styles.dayChip} ${form.daysOfWeek.length === 7 ? styles.dayChipActive : ""}`}
+                      onClick={setEveryDay}
+                      type="button"
+                    >
+                      Every day
+                    </button>
+                    <div className={styles.dayGrid}>
+                      {DAY_LABELS.map((day) => (
+                        <button
+                          className={`${styles.dayChip} ${
+                            form.daysOfWeek.includes(day.value) ? styles.dayChipActive : ""
+                          }`}
+                          key={day.value}
+                          onClick={() => toggleDay(day.value)}
+                          type="button"
+                        >
+                          {day.short}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <span className={styles.fieldHint}>
+                    The day the window <em>opens</em>. Selecting Friday with an 11:00 PM → 2:00 AM window means
+                    &ldquo;Friday night&rdquo;: it stays active past midnight until 2:00 AM Saturday.
+                  </span>
+                </label>
+                <div className={styles.formRow}>
+                  <label className={styles.field}>
+                    Start time
+                    <input
+                      onChange={(event) => setForm({ ...form, windowStart: event.target.value })}
+                      type="time"
+                      value={form.windowStart}
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    End time
+                    <input
+                      onChange={(event) => setForm({ ...form, windowEnd: event.target.value })}
+                      type="time"
+                      value={form.windowEnd}
+                    />
+                  </label>
+                </div>
+              </>
+            ) : (
+              <>
+                <SecretSelect
                   disabled={rules.allowedAmountModes.length <= 1}
-                  onChange={(event) =>
-                    setForm({ ...form, amountMode: event.target.value as PromoFormState["amountMode"] })
-                  }
+                  label="Amount mode"
+                  onChange={(next) => setForm({ ...form, amountMode: next as PromoAmountMode })}
+                  options={AMOUNT_MODE_OPTIONS.filter((option) =>
+                    rules.allowedAmountModes.includes(option.value as PromoAmountMode)
+                  )}
                   value={form.amountMode}
-                >
-                  {rules.allowedAmountModes.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {mode === "exact" ? "Exact" : "Minimum"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className={styles.field}>
-                Price
-                <input
-                  inputMode="decimal"
-                  onChange={(event) => setForm({ ...form, price: event.target.value })}
-                  placeholder="0.00"
-                  value={form.price}
                 />
-              </label>
-            </div>
-            <label className={styles.field}>
-              Granted time (minutes)
-              <input
-                min="1"
-                onChange={(event) => setForm({ ...form, grantedMinutes: event.target.value })}
-                type="number"
-                value={form.grantedMinutes}
-              />
-              <span className={styles.fieldHint}>
-                {form.audience === "member_topup"
-                  ? "Bonus time credited on top of the ordinary top-up."
-                  : form.audience === "new_member"
-                    ? "Total starting balance for the new account (not an add-on)."
-                    : "Total playtime granted for this purchase."}
-              </span>
-            </label>
-            {rules.stationScopeRequired ? (
-              <label className={styles.field}>
-                Station scope
-                <select
-                  onChange={(event) =>
-                    setForm({ ...form, stationScope: event.target.value as PromoFormState["stationScope"] })
-                  }
-                  value={form.stationScope}
-                >
-                  <option value="standard">Standard</option>
-                  <option value="vip">VIP</option>
-                </select>
-              </label>
-            ) : null}
-            {rules.appliesToRequired ? (
-              <label className={styles.field}>
-                Applies to
-                <select
-                  onChange={(event) =>
-                    setForm({ ...form, appliesTo: event.target.value as PromoFormState["appliesTo"] })
-                  }
-                  value={form.appliesTo}
-                >
-                  <option value="start_session">Start Session</option>
-                  <option value="add_time">Add Time</option>
-                  <option value="both">Start Session &amp; Add Time</option>
-                </select>
-              </label>
-            ) : null}
+                <label className={styles.field}>
+                  Price
+                  <input
+                    inputMode="decimal"
+                    onChange={(event) => setForm({ ...form, price: event.target.value })}
+                    placeholder="0.00"
+                    value={form.price}
+                  />
+                </label>
+                <label className={styles.field}>
+                  Granted time (minutes)
+                  <input
+                    min="1"
+                    onChange={(event) => setForm({ ...form, grantedMinutes: event.target.value })}
+                    type="number"
+                    value={form.grantedMinutes}
+                  />
+                  <span className={styles.fieldHint}>
+                    {form.audience === "member_topup"
+                      ? "Bonus time credited on top of the ordinary top-up."
+                      : form.audience === "new_member"
+                        ? "Total starting balance for the new account (not an add-on)."
+                        : "Total playtime granted for this purchase."}
+                  </span>
+                </label>
+                {rules.stationScopeRequired ? (
+                  <SecretSelect
+                    label="Station scope"
+                    onChange={(next) => setForm({ ...form, stationScope: next as "standard" | "vip" })}
+                    options={STATION_SCOPE_OPTIONS}
+                    placeholder="Select a station scope"
+                    value={form.stationScope}
+                  />
+                ) : null}
+                {rules.appliesToRequired ? (
+                  <SecretSelect
+                    label="Applies to"
+                    onChange={(next) =>
+                      setForm({ ...form, appliesTo: next as "start_session" | "add_time" | "both" })
+                    }
+                    options={APPLIES_TO_OPTIONS}
+                    placeholder="Select where it applies"
+                    value={form.appliesTo}
+                  />
+                ) : null}
+              </>
+            )}
             <div className={styles.formRow}>
               <label className={styles.field}>
                 Starts
@@ -317,28 +481,35 @@ export function PromotionsManager() {
                 />
               </label>
             </div>
-            <div className={styles.formRow}>
-              <label className={styles.field}>
-                Priority
-                <input
-                  onChange={(event) => setForm({ ...form, priority: event.target.value })}
-                  type="number"
-                  value={form.priority}
-                />
-                <span className={styles.fieldHint}>Higher wins ties against another eligible promo.</span>
-              </label>
-              <label className={styles.field}>
-                Total redemption limit
-                <input
-                  min="1"
-                  onChange={(event) => setForm({ ...form, totalLimit: event.target.value })}
-                  placeholder="Unlimited"
-                  type="number"
-                  value={form.totalLimit}
-                />
-              </label>
-            </div>
-            {rules.perMemberLimitAllowed ? (
+            {timeBased ? (
+              <span className={styles.fieldHint}>
+                Two Time-Based Rate schedules for Standard can&apos;t overlap. If their days and
+                time windows collide within overlapping campaign dates, saving is rejected.
+              </span>
+            ) : (
+              <div className={`${styles.formRow} ${styles.limitRow}`}>
+                <label className={styles.field}>
+                  Priority
+                  <input
+                    onChange={(event) => setForm({ ...form, priority: event.target.value })}
+                    type="number"
+                    value={form.priority}
+                  />
+                  <span className={styles.fieldHint}>Higher wins ties against another eligible promo.</span>
+                </label>
+                <label className={styles.field}>
+                  Total redemption limit
+                  <input
+                    min="1"
+                    onChange={(event) => setForm({ ...form, totalLimit: event.target.value })}
+                    placeholder="Unlimited"
+                    type="number"
+                    value={form.totalLimit}
+                  />
+                </label>
+              </div>
+            )}
+            {!timeBased && rules.perMemberLimitAllowed ? (
               <label className={styles.field}>
                 Per-member redemption limit
                 <input
@@ -415,10 +586,16 @@ export function PromotionsManager() {
                       {promo.status}
                     </span>
                     <div className={styles.promoBadgeRow}>
-                      <span className={styles.audienceBadge}>{audienceLabel(promo.audience)}</span>
-                      <span className={styles.amountModeBadge}>
-                        {promo.amount_mode === "exact" ? "Exact" : "Minimum"}
-                      </span>
+                      {promo.promo_type === "time_based_rate" ? (
+                        <span className={styles.typeBadge}>Time-Based Rate</span>
+                      ) : (
+                        <>
+                          <span className={styles.audienceBadge}>{audienceLabel(promo.audience)}</span>
+                          <span className={styles.amountModeBadge}>
+                            {promo.amount_mode === "exact" ? "Exact" : "Minimum"}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                   <h3>{promo.name}</h3>
@@ -427,16 +604,31 @@ export function PromotionsManager() {
                       {promo.amount_mode === "minimum" ? "At least " : ""}
                       {formatMoney(promo.price)}
                     </span>
-                    <strong>{formatRateDuration(promo.granted_seconds)}</strong>
+                    <strong>
+                      {promo.promo_type === "time_based_rate"
+                        ? `= ${formatRateDuration(promo.granted_seconds)}`
+                        : formatRateDuration(promo.granted_seconds)}
+                    </strong>
                   </div>
                   <div className={styles.promoBadgeRow}>
-                    <span className={styles.orderPill}>Priority {promo.priority}</span>
-                    {promo.total_redemption_limit !== null ? (
-                      <span className={styles.limitPill}>Limit {promo.total_redemption_limit}</span>
-                    ) : null}
-                    {promo.per_member_redemption_limit !== null ? (
-                      <span className={styles.limitPill}>Per-member {promo.per_member_redemption_limit}</span>
-                    ) : null}
+                    {promo.promo_type === "time_based_rate" ? (
+                      <>
+                        <span className={styles.schedulePill}>{formatDaysOfWeek(promo.days_of_week)}</span>
+                        <span className={styles.schedulePill}>
+                          {promo.window_start_local_time} → {promo.window_end_local_time}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className={styles.orderPill}>Priority {promo.priority}</span>
+                        {promo.total_redemption_limit !== null ? (
+                          <span className={styles.limitPill}>Limit {promo.total_redemption_limit}</span>
+                        ) : null}
+                        {promo.per_member_redemption_limit !== null ? (
+                          <span className={styles.limitPill}>Per-member {promo.per_member_redemption_limit}</span>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                   <p className={styles.promoDates}>
                     {formatDateTime(promo.starts_at)} → {formatDateTime(promo.ends_at)}
@@ -457,7 +649,14 @@ export function PromotionsManager() {
             editPromo(promo);
             setSelectedPromo(null);
           }}
-          onRequestTransition={requestTransition}
+          onRequestTransition={(promo, action) => {
+            // Close the detail modal first -- PromoStateConfirmDialog uses
+            // the shared .overlay layer (z-index below .memberModalLayer),
+            // so leaving the detail modal open would render the confirm
+            // prompt behind it. Mirrors the onEdit handler above.
+            requestTransition(promo, action);
+            setSelectedPromo(null);
+          }}
           promo={selectedPromo}
         />
       ) : null}

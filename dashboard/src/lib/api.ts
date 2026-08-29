@@ -3,6 +3,8 @@ import type {
   CalculatedTimeResponse,
   CashierShiftDetail,
   CashierShiftRecord,
+  AdminPricingSnapshot,
+  AdminPricingUpdate,
   AdminSettings,
   AdminSettingsResponse,
   CurrentUser,
@@ -32,6 +34,7 @@ import type {
   PromoOwnerState,
   PromoRedemption,
   PromoStateTransitionInput,
+  TimeBasedRateApplication,
   RemoteCommandRecord,
   RemoteCommandResponse,
   MessageSeverity,
@@ -202,6 +205,20 @@ export async function resetAdminSettings(category: keyof AdminSettings | "all"):
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ category })
+  });
+}
+
+export async function fetchAdminPricing(): Promise<AdminPricingSnapshot> {
+  return requestJson<AdminPricingSnapshot>(`${getApiBaseUrl()}/admin/pricing`, {
+    cache: "no-store"
+  });
+}
+
+export async function updateAdminPricing(input: AdminPricingUpdate): Promise<AdminPricingSnapshot> {
+  return requestJson<AdminPricingSnapshot>(`${getApiBaseUrl()}/admin/pricing`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
   });
 }
 
@@ -1141,6 +1158,12 @@ export async function fetchPromoAudit(promoId: string): Promise<PromoAuditEvent[
 
 export async function fetchPromoRedemptions(promoId: string): Promise<PromoRedemption[]> {
   return requestJson<PromoRedemption[]>(`${getApiBaseUrl()}/promos/${promoId}/redemptions`, {
+    cache: "no-store"
+  });
+}
+
+export async function fetchPromoRateApplications(promoId: string): Promise<TimeBasedRateApplication[]> {
+  return requestJson<TimeBasedRateApplication[]>(`${getApiBaseUrl()}/promos/${promoId}/rate-applications`, {
     cache: "no-store"
   });
 }
