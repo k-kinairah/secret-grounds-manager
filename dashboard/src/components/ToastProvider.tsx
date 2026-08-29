@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, type CSSProperties, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
 import { CloseButton } from "./CloseButton";
 
 export type ToastVariant = "success" | "warning" | "info" | "error";
@@ -10,6 +10,7 @@ interface ToastRecord {
   title: string;
   message?: string;
   variant: ToastVariant;
+  durationMs: number;
 }
 
 interface ToastContextValue {
@@ -29,7 +30,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     const id = Date.now() + Math.floor(Math.random() * 1000);
     const durationMs = variant === "success" || variant === "info" ? 4800 : 8500;
     setToasts((current) => [
-      { id, title, message, variant },
+      { id, title, message, variant, durationMs },
       ...current.filter(
         (toast) => toast.title !== title || toast.message !== message || toast.variant !== variant
       )
@@ -44,8 +45,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="toastStack" aria-live="polite" aria-label="Notifications">
         {toasts.map((toast) => (
-          <div className={`toast toast--${toast.variant}`} key={toast.id} role="status">
-            <span className="toast__icon" aria-hidden="true">{toast.variant.slice(0, 1).toUpperCase()}</span>
+          <div
+            className={`toast toast--${toast.variant}`}
+            key={toast.id}
+            role="status"
+            style={{ "--toast-duration": `${toast.durationMs}ms` } as CSSProperties}
+          >
+            <span className="toast__icon" aria-hidden="true">
+              {/* Tiny badge icon -- next/image is overkill; matches AuthShell's brand mark. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img alt="" src="/secret-grounds-logo.png" />
+            </span>
             <span className="toast__body">
               <strong>{toast.title}</strong>
               {toast.message ? <small>{toast.message}</small> : null}

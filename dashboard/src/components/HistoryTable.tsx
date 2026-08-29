@@ -348,8 +348,8 @@ export function HistoryTable() {
       </div>
 
       {selectedSession ? (
-        <div className={styles.overlay} role="presentation" onClick={() => setSelectedSession(null)}>
-          <section className={styles.dialog} role="dialog" aria-modal="true" aria-label="Session details" onClick={(event) => event.stopPropagation()}>
+        <div className={`${styles.overlay} ${styles.overlayCentered}`} role="presentation" onClick={() => setSelectedSession(null)}>
+          <section className={`${styles.dialog} ${styles.sessionDialog}`} role="dialog" aria-modal="true" aria-label="Session details" onClick={(event) => event.stopPropagation()}>
             <div className={styles.dialogHeader}>
               <div>
                 <h2>{selectedSession.pc_name} Session Details</h2>

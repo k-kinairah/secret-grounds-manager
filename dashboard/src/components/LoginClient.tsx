@@ -1,11 +1,32 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { Eye, EyeOff } from "lucide-react";
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { adminOperatorLogin, fetchLoginOperators, passwordOperatorLogin, quickOperatorLogin } from "@/lib/api";
 import type { OperatorAccess } from "@/lib/types";
 import styles from "@/app/login/login.module.css";
+
+// Display-only tweaks for the operator picker. The backend/database are
+// unchanged -- these just adjust how the fetched operators are shown.
+const DISPLAY_NAME_OVERRIDES: Record<string, string> = {
+  operator_bel: "Belle"
+};
+// Operators pinned to the top of the grid, in this order.
+const PINNED_OPERATOR_IDS = ["operator_mama"];
+
+function displayNameFor(operator: OperatorAccess): string {
+  return DISPLAY_NAME_OVERRIDES[operator.operator_id] ?? operator.display_name;
+}
+
+function orderOperators(operators: OperatorAccess[]): OperatorAccess[] {
+  const rank = (operator: OperatorAccess) => {
+    const index = PINNED_OPERATOR_IDS.indexOf(operator.operator_id);
+    return index === -1 ? PINNED_OPERATOR_IDS.length : index;
+  };
+  return [...operators].sort((a, b) => rank(a) - rank(b));
+}
 
 export function LoginClient() {
   const router = useRouter();
@@ -16,12 +37,14 @@ export function LoginClient() {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const visibleOperators = useMemo(() => orderOperators(operators), [operators]);
+
   const initials = useMemo(
     () =>
       new Map(
-        operators.map((operator) => [
+        visibleOperators.map((operator) => [
           operator.operator_id,
-          operator.display_name
+          displayNameFor(operator)
             .split(/\s+/)
             .map((part) => part[0])
             .join("")
@@ -29,7 +52,7 @@ export function LoginClient() {
             .toUpperCase()
         ])
       ),
-    [operators]
+    [visibleOperators]
   );
 
   useEffect(() => {
@@ -112,34 +135,42 @@ export function LoginClient() {
           src="/secret-grounds-logo.png"
           width={61}
         />
-        <span className={styles.logoText}>Secret Grounds</span>
       </div>
-      <div>
+      <div className={styles.intro}>
         <p className={styles.eyebrow}>Family Operator Access</p>
         <h1 id="operator-title">Who&apos;s in charge right now?</h1>
         <p className={styles.subtitle}>Choose your name to open the shop dashboard.</p>
       </div>
-      {error ? (
+      {error && !selectedAdmin ? (
         <div className={styles.error} role="alert">
           {error}
         </div>
       ) : null}
       <div className={styles.operatorGrid}>
-        {operators.map((operator) => (
-          <button
-            className={`${styles.operatorCard} ${
-              operator.password_required ? styles.adminCard : ""
-            }`}
-            disabled={isSubmitting}
-            key={operator.operator_id}
-            onClick={() => void chooseOperator(operator)}
-            type="button"
-          >
-            <span className={styles.avatar}>{initials.get(operator.operator_id)}</span>
-            <span>{operator.display_name}</span>
-            {operator.password_required ? <small>Admin password required</small> : <small>Quick access</small>}
-          </button>
-        ))}
+        {visibleOperators.map((operator) => {
+          // Only the singular protected Admin account gets the Admin-specific
+          // wording/styling. A normal password operator (e.g. an Owner set to
+          // Password Required) just says "Password required".
+          const isProtectedAdmin = operator.user?.is_protected === true;
+          const caption = isProtectedAdmin
+            ? "Admin password required"
+            : operator.password_required
+              ? "Password required"
+              : "Quick access";
+          return (
+            <button
+              className={`${styles.operatorCard} ${isProtectedAdmin ? styles.adminCard : ""}`}
+              disabled={isSubmitting}
+              key={operator.operator_id}
+              onClick={() => void chooseOperator(operator)}
+              type="button"
+            >
+              <span className={styles.avatar}>{initials.get(operator.operator_id)}</span>
+              <span>{displayNameFor(operator)}</span>
+              <small>{caption}</small>
+            </button>
+          );
+        })}
       </div>
       {selectedAdmin ? (
         <div className={styles.adminOverlay} role="presentation">
@@ -154,21 +185,29 @@ export function LoginClient() {
             <p>Enter the operator password to continue.</p>
             <label className={styles.field}>
               Password
-              <input
-                autoComplete="current-password"
-                autoFocus
-                onChange={(event) => setAdminPassword(event.target.value)}
-                type={showPassword ? "text" : "password"}
-                value={adminPassword}
-              />
-            </label>
-            <label className={styles.checkboxRow}>
-              <input
-                checked={showPassword}
-                onChange={(event) => setShowPassword(event.target.checked)}
-                type="checkbox"
-              />
-              Show password
+              <div className={styles.passwordField}>
+                <input
+                  autoComplete="current-password"
+                  autoFocus
+                  onChange={(event) => setAdminPassword(event.target.value)}
+                  type={showPassword ? "text" : "password"}
+                  value={adminPassword}
+                />
+                <button
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                  className={styles.passwordToggle}
+                  onClick={() => setShowPassword((visible) => !visible)}
+                  type="button"
+                >
+                  {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                </button>
+              </div>
+              {error ? (
+                <span className={styles.dialogError} role="alert">
+                  {error}
+                </span>
+              ) : null}
             </label>
             <div className={styles.dialogActions}>
               <button

@@ -2065,6 +2065,12 @@ async function runAsyncAssertions() {
     assert.match(loginSource, /Show password/);
     assert.doesNotMatch(loginSource, /Username/);
     assert.doesNotMatch(loginSource, /placeholder="cashier"/);
+    // Topic 1: only the protected Admin gets "Admin password required" +
+    // adminCard styling. A normal password operator says "Password required".
+    assert.match(loginSource, /const isProtectedAdmin = operator\.user\?\.is_protected === true/);
+    assert.match(loginSource, /isProtectedAdmin\s*\n?\s*\? "Admin password required"/);
+    assert.match(loginSource, /operator\.password_required\s*\n?\s*\? "Password required"\s*\n?\s*: "Quick access"/);
+    assert.match(loginSource, /\$\{isProtectedAdmin \? styles\.adminCard : ""\}/);
 
     const dashboardSource = readFileSync("src/components/DashboardClient.tsx", "utf8");
     // The Announcement button uses lucide-react's real Megaphone icon --

@@ -838,33 +838,72 @@ input:-webkit-autofill:focus {
 }
 
 .toast {
+  --toast-accent: #38bdf8;
   align-items: center;
-  animation: toastIn 220ms ease-out;
+  animation: toastIn 280ms cubic-bezier(0.16, 1, 0.3, 1);
   background:
-    radial-gradient(circle at top left, rgba(34, 211, 238, 0.12), transparent 15rem),
+    radial-gradient(circle at top left, rgba(34, 211, 238, 0.14), transparent 15rem),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 24%),
     linear-gradient(180deg, rgba(17, 27, 45, 0.98), rgba(8, 17, 31, 0.98));
-  border: 1px solid rgba(56, 189, 248, 0.34);
+  border: 1px solid rgba(56, 189, 248, 0.38);
   border-radius: var(--radius-card);
   box-shadow:
-    0 26px 76px rgb(0 0 0 / 0.5),
-    0 0 34px rgb(34 211 238 / 0.12);
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 30px 84px rgb(0 0 0 / 0.58),
+    0 0 46px rgb(34 211 238 / 0.16);
   color: var(--text);
   display: grid;
   gap: 12px;
-  grid-template-columns: 36px minmax(0, 1fr) 34px;
-  min-height: 78px;
-  padding: 14px;
+  grid-template-columns: 38px minmax(0, 1fr) 34px;
+  min-height: 80px;
+  overflow: hidden;
+  padding: 15px 15px 15px 20px;
+  position: relative;
 }
 
+/* Bold left accent bar -- the main "noticeable" cue, coloured per variant. */
+.toast::before {
+  background: var(--toast-accent);
+  border-radius: 4px;
+  bottom: 12px;
+  box-shadow: 0 0 14px var(--toast-accent);
+  content: "";
+  left: 8px;
+  position: absolute;
+  top: 12px;
+  width: 4px;
+}
+
+/* Auto-dismiss progress bar along the bottom edge. */
+.toast::after {
+  animation: toastProgress var(--toast-duration, 5000ms) linear forwards;
+  background: var(--toast-accent);
+  bottom: 0;
+  content: "";
+  height: 3px;
+  left: 0;
+  opacity: 0.85;
+  position: absolute;
+  transform-origin: left center;
+  width: 100%;
+}
+
+/* Plain Secret Grounds brand mark -- no chip/background. */
 .toast__icon {
   align-items: center;
-  border-radius: 7px;
+  background: none;
+  border: 0;
+  box-shadow: none;
   display: inline-flex;
-  font-size: 11px;
-  font-weight: 1000;
-  height: 36px;
+  height: 38px;
   justify-content: center;
-  width: 36px;
+  width: 38px;
+}
+
+.toast__icon img {
+  height: 30px;
+  object-fit: contain;
+  width: 34px;
 }
 
 .toast__body {
@@ -874,9 +913,10 @@ input:-webkit-autofill:focus {
 }
 
 .toast__body strong {
-  color: var(--text);
-  font-size: 15px;
+  color: #ffffff;
+  font-size: 15.5px;
   font-weight: 950;
+  letter-spacing: 0.01em;
   overflow-wrap: anywhere;
 }
 
@@ -933,59 +973,72 @@ input:-webkit-autofill:focus {
   }
 }
 
-.toast--success .toast__icon {
-  background: rgba(34, 197, 94, 0.2);
-  color: #86efac;
-}
-
+/* Per-variant cue = the left accent bar + progress bar colour, plus a
+   restrained glow. Kept subtle so no single hue floods the toast.
+   "success" uses the brand pink rather than green. */
 .toast--success {
-  border-color: rgba(45, 212, 191, 0.42);
+  --toast-accent: #f472b6;
+  border-color: rgba(244, 114, 182, 0.4);
   box-shadow:
-    0 26px 76px rgb(0 0 0 / 0.5),
-    0 0 42px rgb(45 212 191 / 0.18);
-}
-
-.toast--warning .toast__icon {
-  background: rgba(251, 146, 60, 0.22);
-  color: #fed7aa;
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 30px 84px rgb(0 0 0 / 0.58),
+    0 0 40px rgb(244 114 182 / 0.18);
 }
 
 .toast--warning {
+  --toast-accent: #fb923c;
   border-color: rgba(251, 146, 60, 0.42);
   box-shadow:
-    0 26px 76px rgb(0 0 0 / 0.5),
-    0 0 42px rgb(251 146 60 / 0.18);
-}
-
-.toast--info .toast__icon {
-  background: rgba(14, 165, 233, 0.22);
-  color: #7dd3fc;
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 30px 84px rgb(0 0 0 / 0.58),
+    0 0 38px rgb(251 146 60 / 0.16);
 }
 
 .toast--info {
-  border-color: rgba(56, 189, 248, 0.4);
-}
-
-.toast--error .toast__icon {
-  background: rgba(244, 63, 94, 0.22);
-  color: #fecdd3;
+  --toast-accent: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.46);
 }
 
 .toast--error {
-  border-color: rgba(244, 63, 94, 0.48);
+  --toast-accent: #fb7185;
+  border-color: rgba(244, 63, 94, 0.5);
   box-shadow:
-    0 26px 76px rgb(0 0 0 / 0.5),
-    0 0 42px rgb(244 63 94 / 0.2);
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 30px 84px rgb(0 0 0 / 0.58),
+    0 0 44px rgb(244 63 94 / 0.22);
 }
 
 @keyframes toastIn {
-  from {
+  0% {
     opacity: 0;
-    transform: translateY(-10px) scale(0.97);
+    transform: translateY(-18px) scale(0.92);
   }
-  to {
+  60% {
+    transform: translateY(2px) scale(1.01);
+  }
+  100% {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toastProgress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation-duration: 1ms;
+  }
+
+  .toast::after {
+    animation: none;
+    display: none;
   }
 }
 

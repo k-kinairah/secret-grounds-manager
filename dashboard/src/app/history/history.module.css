@@ -108,9 +108,14 @@
 }
 
 .tableWrap {
-  background: linear-gradient(180deg, rgba(20, 28, 42, 0.98), rgba(9, 15, 26, 0.98));
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 12%),
+    linear-gradient(180deg, rgba(20, 28, 42, 0.98), rgba(9, 15, 26, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 18px 44px rgba(0, 0, 0, 0.22);
   max-height: min(66vh, 720px);
   overflow: auto;
 }
@@ -124,15 +129,19 @@
 
 .table th,
 .table td {
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  padding: 12px 14px;
   text-align: left;
   vertical-align: middle;
   white-space: nowrap;
 }
 
 .table th {
-  background: rgba(8, 17, 31, 0.98);
+  background:
+    linear-gradient(180deg, rgba(56, 189, 248, 0.06), transparent),
+    rgba(6, 12, 24, 0.99);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.28);
   color: var(--muted);
   font-size: 11px;
   font-weight: 900;
@@ -153,7 +162,9 @@
   display: block;
 }
 
-.table td span {
+/* Only the secondary caption line under a cell's <strong> -- not the
+   status / VIP pill spans, which have their own layout. */
+.table td span:not(.statusBadge):not(.vipHistoryBadge) {
   color: var(--muted);
   display: block;
   font-size: 12px;
@@ -164,19 +175,32 @@
   transition: background-color 140ms ease;
 }
 
-.table tbody tr:hover {
-  background: rgba(45, 212, 191, 0.06);
+/* Zebra striping keeps a long log scannable. */
+.table tbody tr:nth-child(even) td {
+  background: rgba(148, 163, 184, 0.035);
+}
+
+.table tbody tr:hover td {
+  background: rgba(56, 189, 248, 0.1);
+}
+
+/* Cyan left accent on the hovered row. */
+.table tbody tr:hover td:first-child {
+  box-shadow: inset 3px 0 0 rgba(56, 189, 248, 0.55);
 }
 
 .statusBadge {
+  align-items: center;
   border: 1px solid transparent;
   border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   display: inline-flex;
   font-size: 11px;
   font-weight: 900;
   justify-content: center;
+  line-height: 1;
   min-width: 96px;
-  padding: 5px 9px;
+  padding: 6px 10px;
   text-transform: none;
 }
 
@@ -193,9 +217,9 @@
 }
 
 .statusCompleted {
-  background: rgba(34, 197, 94, 0.13);
-  border-color: rgba(34, 197, 94, 0.34);
-  color: #bbf7d0;
+  background: linear-gradient(180deg, rgba(244, 114, 182, 0.24), rgba(236, 72, 153, 0.12));
+  border-color: rgba(244, 114, 182, 0.5);
+  color: #f9a8d4;
 }
 
 .statusCancelled,
@@ -229,24 +253,28 @@
 
 .tableButton {
   align-items: center;
-  background: rgba(59, 130, 246, 0.14);
-  border: 1px solid rgba(59, 130, 246, 0.32);
-  border-radius: 7px;
-  color: #bfdbfe;
+  background: linear-gradient(180deg, rgba(96, 165, 250, 0.22), rgba(59, 130, 246, 0.12));
+  border: 1px solid rgba(96, 165, 250, 0.4);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  color: #dbeafe;
   cursor: pointer;
   display: inline-flex;
   font-weight: 900;
   justify-content: center;
   min-height: 34px;
-  padding: 7px 11px;
-  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+  padding: 7px 12px;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
 .tableButton:hover:not(:disabled),
 .tableButton:focus-visible {
-  background: rgba(59, 130, 246, 0.24);
-  border-color: rgba(96, 165, 250, 0.5);
+  border-color: rgba(147, 197, 253, 0.65);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 8px 20px rgba(37, 99, 235, 0.22);
   outline: none;
+  transform: translateY(-1px);
 }
 
 .tableButton:active:not(:disabled) {
@@ -290,7 +318,8 @@
 
 .overlay {
   align-items: stretch;
-  background: rgb(2 6 23 / 0.66);
+  backdrop-filter: blur(3px);
+  background: rgb(2 6 23 / 0.62);
   display: flex;
   inset: 0;
   justify-content: flex-end;
@@ -299,16 +328,27 @@
   z-index: 40;
 }
 
+.overlayCentered {
+  align-items: center;
+  justify-content: center;
+}
+
 .dialog {
-  background: #111827;
-  border: 1px solid rgba(148, 163, 184, 0.26);
-  border-radius: 8px;
-  box-shadow: 0 24px 70px rgb(0 0 0 / 0.34);
+  align-content: start;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 20%),
+    linear-gradient(180deg, rgba(17, 27, 45, 0.98), rgba(8, 15, 27, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 30px 80px rgb(0 0 0 / 0.5);
   display: grid;
   gap: 16px;
+  max-height: min(88vh, 880px);
   max-width: 680px;
   overflow: auto;
-  padding: 18px;
+  padding: 20px;
   width: min(680px, 100%);
 }
 
@@ -319,15 +359,48 @@
   justify-content: space-between;
 }
 
-.dialog h2,
-.dialog h3 {
+.dialog h2 {
   color: #f8fafc;
   margin: 0;
+}
+
+/* Section headings in the details modal read as compact labels. */
+.dialog h3 {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.dialogHeader {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  padding-bottom: 14px;
 }
 
 .dialogHeader p {
   color: var(--muted);
   margin: 4px 0 0;
+}
+
+/* Card wrappers for Session / Billing / Payments in the details modal. */
+.sessionDialog > section,
+.sessionDialog .detailsGrid > section {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 34%),
+    linear-gradient(180deg, rgba(20, 28, 44, 0.9), rgba(11, 17, 29, 0.9));
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 11px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 22px rgba(0, 0, 0, 0.18);
+  padding: 15px 16px;
+}
+
+.sessionDialog .emptyState {
+  min-height: 0;
+  padding: 16px;
 }
 
 .detailsGrid {
@@ -338,48 +411,50 @@
 
 .billingList {
   display: grid;
-  gap: 8px;
-  margin: 10px 0 0;
+  gap: 7px;
+  margin: 12px 0 0;
 }
 
 .billingList div {
   align-items: center;
-  background: rgba(15, 23, 42, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 7px;
+  background: rgba(56, 189, 248, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
   display: flex;
   justify-content: space-between;
-  padding: 9px 10px;
+  padding: 9px 11px;
 }
 
 .billingList span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .billingList strong {
-  color: #f8fafc;
+  color: #f1f5f9;
+  font-size: 13px;
   text-align: right;
 }
 
 .paymentList {
   display: grid;
-  gap: 8px;
-  margin-top: 10px;
+  gap: 7px;
+  margin-top: 12px;
 }
 
 .paymentRow {
   align-items: center;
-  background: rgba(15, 23, 42, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 7px;
+  background: rgba(56, 189, 248, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
   color: #dbeafe;
   display: grid;
   gap: 8px;
   grid-template-columns: 1fr 1fr 1fr 1.35fr;
-  padding: 9px 10px;
+  padding: 9px 11px;
 }
 
 @media (max-width: 1040px) {
@@ -465,15 +540,19 @@
    intentionally left untouched. */
 
 .activityDrawer {
-  background: #0b1220;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 10px;
-  box-shadow: 0 24px 70px rgb(0 0 0 / 0.4);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 22%),
+    linear-gradient(180deg, rgba(17, 27, 45, 0.98), rgba(8, 15, 27, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 30px 80px rgb(0 0 0 / 0.5);
   display: grid;
   gap: 16px;
   max-width: 560px;
   overflow: auto;
-  padding: 20px;
+  padding: 22px;
   width: min(560px, 100%);
 }
 
@@ -491,10 +570,13 @@
 }
 
 .activityBadge {
-  background: rgba(59, 130, 246, 0.16);
-  border: 1px solid rgba(96, 165, 250, 0.36);
+  align-items: center;
+  background: linear-gradient(180deg, rgba(96, 165, 250, 0.24), rgba(59, 130, 246, 0.14));
+  border: 1px solid rgba(96, 165, 250, 0.45);
   border-radius: 999px;
-  color: #93c5fd;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #bfdbfe;
+  display: inline-flex;
   font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.08em;
@@ -525,10 +607,13 @@
 
 .activityAvatar {
   align-items: center;
-  background: linear-gradient(135deg, #22d3ee, #2563eb);
-  border: 1px solid rgba(125, 211, 252, 0.6);
+  background: linear-gradient(135deg, #f472b6, #db2777);
+  border: 1px solid rgba(249, 168, 212, 0.6);
   border-radius: 999px;
-  color: #020617;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 4px 14px rgba(244, 114, 182, 0.24);
+  color: #000000;
   display: inline-flex;
   flex: 0 0 auto;
   font-size: 15px;
@@ -544,7 +629,8 @@
   font-size: 14px;
 }
 
-.activityOperatorIdentity span {
+/* Role caption only -- not the avatar span, which keeps its own colour. */
+.activityOperatorIdentity span:not(.activityAvatar) {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
@@ -572,12 +658,25 @@
 .activitySummaryCard,
 .activityDetailsCard,
 .activityTimelineCard {
-  background: linear-gradient(180deg, rgba(24, 31, 48, 0.9), rgba(14, 20, 33, 0.9));
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 9px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 34%),
+    linear-gradient(180deg, rgba(20, 28, 44, 0.92), rgba(11, 17, 29, 0.92));
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 11px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 22px rgba(0, 0, 0, 0.18);
   display: grid;
   gap: 10px;
-  padding: 14px 16px;
+  padding: 15px 16px;
+}
+
+/* The change history gets a cyan left accent to set it apart. */
+.activityTimelineCard {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    inset 3px 0 0 rgba(56, 189, 248, 0.4),
+    0 8px 22px rgba(0, 0, 0, 0.18);
 }
 
 .activitySummaryLabel,
@@ -665,8 +764,10 @@
 }
 
 .activityTimelineDot[data-current="true"] {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.2);
+  background: #38bdf8;
+  box-shadow:
+    0 0 0 3px rgba(56, 189, 248, 0.22),
+    0 0 14px rgba(56, 189, 248, 0.4);
 }
 
 .activityTimelineItemHead {

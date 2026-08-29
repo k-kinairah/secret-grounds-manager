@@ -23,14 +23,19 @@
 }
 
 .operatorPanel {
-  background: linear-gradient(180deg, rgba(17, 27, 45, 0.98), rgba(7, 16, 30, 0.98));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 18%),
+    linear-gradient(180deg, rgba(17, 27, 45, 0.98), rgba(7, 16, 30, 0.98));
   border: 1px solid rgba(56, 189, 248, 0.22);
-  border-radius: 10px;
-  box-shadow: 0 28px 80px rgb(0 0 0 / 0.48), 0 0 38px rgb(14 165 233 / 0.12);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 32px 88px rgb(0 0 0 / 0.5),
+    0 0 44px rgb(14 165 233 / 0.14);
   display: grid;
-  gap: 24px;
+  gap: 22px;
   max-width: 760px;
-  padding: 34px;
+  padding: 36px;
   width: min(760px, 94vw);
 }
 
@@ -39,6 +44,11 @@
   color: #22d3ee;
   display: flex;
   gap: 14px;
+  justify-content: center;
+}
+
+.intro {
+  text-align: center;
 }
 
 .logoMark {
@@ -47,14 +57,6 @@
   height: 54px;
   object-fit: contain;
   width: 61px;
-}
-
-.logoText {
-  font-size: 24px;
-  font-style: italic;
-  font-weight: 950;
-  letter-spacing: 0;
-  text-transform: uppercase;
 }
 
 .operatorGrid {
@@ -67,13 +69,18 @@
   align-items: center;
   background:
     radial-gradient(circle at 18% 20%, rgb(34 211 238 / 0.12), transparent 55%),
-    #08111f;
-  border: 1px solid rgba(56, 189, 248, 0.24);
-  border-radius: 8px;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 38%),
+    linear-gradient(180deg, rgba(13, 20, 34, 0.94), rgba(7, 13, 24, 0.94));
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 8px 22px rgba(0, 0, 0, 0.2);
   color: #f8fafc;
   cursor: pointer;
   display: grid;
   gap: 5px 12px;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
   grid-template-columns: 48px 1fr;
   min-height: 84px;
   padding: 15px;
@@ -86,10 +93,13 @@
 
 .operatorCard:hover:not(:disabled),
 .operatorCard:focus-visible {
-  border-color: #22d3ee;
-  box-shadow: 0 0 24px rgb(34 211 238 / 0.16);
+  border-color: rgba(103, 232, 249, 0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 16px 34px rgba(0, 0, 0, 0.28),
+    0 0 30px rgb(34 211 238 / 0.18);
   outline: none;
-  transform: translateY(-1px);
+  transform: translateY(-2px);
 }
 
 .operatorCard span:not(.avatar) {
@@ -104,26 +114,93 @@
 }
 
 .adminCard {
-  border-color: rgba(250, 204, 21, 0.34);
+  border-color: rgba(244, 114, 182, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 8px 22px rgba(0, 0, 0, 0.2),
+    0 0 26px rgba(244, 114, 182, 0.16);
+}
+
+.adminCard:hover:not(:disabled),
+.adminCard:focus-visible {
+  border-color: rgba(249, 168, 212, 0.85);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 16px 34px rgba(0, 0, 0, 0.28),
+    0 0 34px rgba(244, 114, 182, 0.28);
+}
+
+.adminCard small {
+  color: #f9a8d4;
 }
 
 .avatar {
   align-items: center;
-  background: linear-gradient(135deg, #06b6d4, #2563eb);
+  background:
+    radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.55), transparent 46%),
+    linear-gradient(145deg, #22d3ee 0%, #3b82f6 52%, #6366f1 100%);
+  border: 1px solid rgba(186, 230, 253, 0.7);
   border-radius: 999px;
-  color: #fff;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.5),
+    inset 0 -6px 12px rgba(2, 6, 23, 0.28),
+    0 0 0 1px rgba(56, 189, 248, 0.3),
+    0 8px 20px rgba(37, 99, 235, 0.3),
+    0 0 22px rgba(34, 211, 238, 0.22);
+  color: #ffffff;
   display: inline-flex;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 950;
   grid-row: span 2;
   height: 48px;
   justify-content: center;
+  text-shadow: 0 1px 2px rgba(2, 6, 23, 0.45);
+  transition: box-shadow 160ms ease, transform 160ms ease;
   width: 48px;
+}
+
+.operatorCard:hover:not(:disabled) .avatar,
+.operatorCard:focus-visible .avatar {
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.55),
+    inset 0 -6px 12px rgba(2, 6, 23, 0.28),
+    0 0 0 1px rgba(103, 232, 249, 0.5),
+    0 10px 26px rgba(37, 99, 235, 0.38),
+    0 0 30px rgba(34, 211, 238, 0.35);
+  transform: scale(1.04);
+}
+
+/* Admin card -- pink avatar to match its pink card. */
+.adminCard .avatar {
+  background:
+    radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.55), transparent 46%),
+    linear-gradient(145deg, #f9a8d4 0%, #ec4899 52%, #db2777 100%);
+  border-color: rgba(251, 207, 232, 0.8);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.5),
+    inset 0 -6px 12px rgba(2, 6, 23, 0.24),
+    0 0 0 1px rgba(244, 114, 182, 0.4),
+    0 8px 20px rgba(219, 39, 119, 0.32),
+    0 0 22px rgba(244, 114, 182, 0.26);
+  color: #1a0512;
+  text-shadow: none;
+}
+
+.adminCard:hover:not(:disabled) .avatar,
+.adminCard:focus-visible .avatar {
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.55),
+    inset 0 -6px 12px rgba(2, 6, 23, 0.24),
+    0 0 0 1px rgba(249, 168, 212, 0.6),
+    0 10px 26px rgba(219, 39, 119, 0.4),
+    0 0 30px rgba(244, 114, 182, 0.4);
+  transform: scale(1.04);
 }
 
 .adminOverlay {
   align-items: center;
-  background: rgb(2 6 23 / 0.72);
+  backdrop-filter: blur(3px);
+  background: rgb(2 6 23 / 0.66);
   display: flex;
   inset: 0;
   justify-content: center;
@@ -133,13 +210,19 @@
 }
 
 .adminDialog {
-  background: #08111f;
-  border: 1px solid rgba(56, 189, 248, 0.28);
-  border-radius: 10px;
-  box-shadow: 0 24px 80px rgb(0 0 0 / 0.5);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 22%),
+    linear-gradient(180deg, rgba(17, 27, 45, 0.98), rgba(7, 15, 27, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 30px 84px rgb(0 0 0 / 0.55);
   color: #e2e8f0;
+  display: grid;
+  gap: 4px;
   max-width: 420px;
-  padding: 24px;
+  padding: 26px;
   width: 100%;
 }
 
@@ -150,33 +233,39 @@
 
 .adminDialog p {
   color: #95a8c6;
-  margin: 0 0 18px;
+  margin: 0 0 16px;
 }
 
-.checkboxRow {
-  align-items: center;
-  color: #cbd5e1;
-  display: flex;
+.dialogError {
+  color: #fdba74;
   font-size: 13px;
   font-weight: 800;
-  gap: 8px;
-  margin-bottom: 18px;
+  letter-spacing: 0;
 }
 
 .dialogActions {
   display: flex;
   gap: 10px;
   justify-content: flex-end;
+  margin-top: 20px;
 }
 
 .secondaryButton {
   background: rgba(14, 165, 233, 0.12);
   border: 1px solid rgba(56, 189, 248, 0.28);
-  border-radius: 6px;
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   color: #bfdbfe;
   font-weight: 900;
   min-height: 46px;
   padding: 0 16px;
+  transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
+}
+
+.secondaryButton:hover:not(:disabled) {
+  background: rgba(14, 165, 233, 0.2);
+  border-color: rgba(56, 189, 248, 0.46);
+  transform: translateY(-1px);
 }
 
 .eyebrow {
@@ -188,7 +277,8 @@
   text-transform: uppercase;
 }
 
-.panel h1 {
+.panel h1,
+.operatorPanel h1 {
   color: #f8fafc;
   font-size: 34px;
   line-height: 1.1;
@@ -215,40 +305,100 @@
 }
 
 .field input {
-  background: #08111f;
+  accent-color: #38bdf8;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 42%),
+    rgba(8, 17, 31, 0.84);
   border: 1px solid rgba(56, 189, 248, 0.24);
-  border-radius: 6px;
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   color: #f8fafc;
+  color-scheme: dark;
   min-height: 46px;
   padding: 0 12px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  width: 100%;
 }
 
 .field input::placeholder {
   color: #7f92b0;
 }
 
+.field input:focus {
+  border-color: rgba(103, 232, 249, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 0 3px rgba(56, 189, 248, 0.22);
+  outline: none;
+}
+
+/* Password field with an inline eye toggle. */
+.passwordField {
+  position: relative;
+}
+
+.passwordField input {
+  padding-right: 46px;
+}
+
+.passwordToggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: #7f92b0;
+  cursor: pointer;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  transition: color 140ms ease, background-color 140ms ease;
+  width: 32px;
+}
+
+.passwordToggle:hover,
+.passwordToggle:focus-visible {
+  background: rgba(56, 189, 248, 0.14);
+  color: #67e8f9;
+  outline: none;
+}
+
+.passwordToggle svg {
+  height: 18px;
+  width: 18px;
+}
+
 .button {
   background: linear-gradient(135deg, #06b6d4, #2563eb);
   border: 1px solid rgba(125, 211, 252, 0.5);
-  border-radius: 6px;
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
   color: #ffffff;
   font-weight: 900;
   min-height: 46px;
+  transition: background 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 
 .button:hover:not(:disabled) {
   background: linear-gradient(135deg, #22d3ee, #1d4ed8);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 10px 24px rgba(37, 99, 235, 0.28);
   transform: translateY(-1px);
 }
 
 .error {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  border-radius: 6px;
-  color: #991b1b;
+  background: rgba(244, 63, 94, 0.12);
+  border: 1px solid rgba(244, 63, 94, 0.4);
+  border-radius: 8px;
+  color: #fda4af;
   font-size: 14px;
+  font-weight: 700;
   line-height: 1.45;
-  padding: 12px;
+  padding: 12px 14px;
 }
 
 @media (max-width: 640px) {

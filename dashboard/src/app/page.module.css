@@ -396,7 +396,8 @@
 }
 
 .activityDrawerBackdrop {
-  background: rgb(2 6 23 / 0.28);
+  backdrop-filter: blur(3px);
+  background: rgb(2 6 23 / 0.44);
   border: 0;
   inset: 0;
   pointer-events: auto;
@@ -406,9 +407,13 @@
 .activityDrawer {
   animation: drawerSlideIn 180ms ease-out;
   background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 18%),
     linear-gradient(180deg, rgba(17, 27, 45, 0.99), rgba(8, 17, 31, 0.99));
-  border-left: 1px solid rgba(56, 189, 248, 0.28);
-  box-shadow: -24px 0 70px rgb(0 0 0 / 0.38), 0 0 34px rgb(14 165 233 / 0.12);
+  border-left: 1px solid rgba(56, 189, 248, 0.32);
+  box-shadow:
+    inset 1px 0 0 rgba(255, 255, 255, 0.05),
+    -24px 0 76px rgb(0 0 0 / 0.42),
+    0 0 40px rgb(14 165 233 / 0.14);
   color: var(--text);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -453,15 +458,17 @@
 }
 
 .activityFilterRow button {
-  background: rgba(148, 163, 184, 0.1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 60%), rgba(148, 163, 184, 0.08);
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   color: var(--muted);
   flex: 0 0 auto;
   font-size: 12px;
   font-weight: 900;
   min-height: 30px;
-  padding: 6px 10px;
+  padding: 6px 12px;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
 .activityFilterRow .activityFilterActive,
@@ -505,10 +512,11 @@
 
 .liveBadge {
   align-items: center;
-  background: rgba(34, 197, 94, 0.13);
-  border: 1px solid rgba(34, 197, 94, 0.34);
+  background: linear-gradient(180deg, rgba(244, 114, 182, 0.28), rgba(236, 72, 153, 0.14));
+  border: 1px solid rgba(244, 114, 182, 0.55);
   border-radius: 999px;
-  color: #86efac;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 14px rgba(244, 114, 182, 0.22);
+  color: #f9a8d4;
   display: inline-flex;
   font-size: 11px;
   font-weight: 1000;
@@ -530,22 +538,40 @@
 .activityRow {
   align-items: center;
   animation: activityIn 180ms ease-out;
-  background: rgba(8, 17, 31, 0.62);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 42%),
+    linear-gradient(180deg, rgba(13, 20, 34, 0.9), rgba(8, 13, 24, 0.9));
   border: 1px solid rgba(148, 163, 184, 0.14);
-  border-radius: var(--radius-control);
+  border-radius: 10px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 6px 16px rgba(0, 0, 0, 0.16);
   display: grid;
   gap: 10px;
   grid-template-columns: 36px minmax(0, 1fr) auto;
   min-height: 54px;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
   padding: 9px 10px;
+}
+
+.activityRow:hover {
+  border-color: rgba(103, 232, 249, 0.36);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset 3px 0 0 rgba(56, 189, 248, 0.5),
+    0 12px 28px rgba(0, 0, 0, 0.24);
+  transform: translateY(-1px);
 }
 
 .activityIcon {
   align-items: center;
-  background: rgba(14, 165, 233, 0.12);
-  border: 1px solid rgba(56, 189, 248, 0.26);
-  border-radius: 7px;
-  color: #7dd3fc;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 46%),
+    linear-gradient(180deg, rgba(244, 114, 182, 0.26), rgba(236, 72, 153, 0.14));
+  border: 1px solid rgba(244, 114, 182, 0.5);
+  border-radius: 9px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  color: #f9a8d4;
   display: inline-flex;
   font-size: 10px;
   font-weight: 1000;
@@ -579,13 +605,18 @@
 }
 
 .activityChip {
-  background: rgba(148, 163, 184, 0.12);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  align-items: center;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.16), rgba(14, 165, 233, 0.08));
+  border: 1px solid rgba(56, 189, 248, 0.3);
   border-radius: 999px;
-  color: #cbd5e1;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  color: #bae6fd;
+  display: inline-flex;
   font-size: 11px;
   font-weight: 900;
-  padding: 5px 8px;
+  line-height: 1;
+  padding: 5px 9px;
+  white-space: nowrap;
 }
 
 .summaryCard {
