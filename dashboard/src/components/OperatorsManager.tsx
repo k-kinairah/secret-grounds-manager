@@ -13,11 +13,46 @@ import {
   updateAdminOperator
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/time";
-import type { OperatorActivityRecord, OperatorCreateInput, OperatorManagementRecord, OperatorUpdateInput } from "@/lib/types";
+import type { OperatorActivityRecord, OperatorCreateInput, OperatorManagementRecord, OperatorUpdateInput, UserRole } from "@/lib/types";
 import styles from "@/app/users/users.module.css";
 import { PageTitleIcon } from "./PageTitleIcon";
+import { SecretSelect, type SecretSelectOption } from "./SecretSelect";
 import { useToast } from "./ToastProvider";
 import { CloseButton } from "./CloseButton";
+
+const ACCESS_METHOD_OPTIONS: SecretSelectOption[] = [
+  { value: "quick", label: "Quick Access" },
+  { value: "password", label: "Password Required" }
+];
+
+// Backend UserRole. Cashier = shop operations only; Admin/Owner = full
+// admin access (Settings, System, Staff, Sales, Promotions, Pricing).
+const ROLE_OPTIONS: SecretSelectOption[] = [
+  { value: "cashier", label: "Cashier" },
+  { value: "admin", label: "Admin" },
+  { value: "owner", label: "Owner" }
+];
+
+function roleLabel(role: UserRole): string {
+  return role === "owner" ? "Owner" : role === "admin" ? "Admin" : "Cashier";
+}
+
+// Staff role badge text. Display only -- authorization stays role-based and
+// the protected Admin is still stored as `owner` in the DB. Keyed on
+// is_protected, never on the username: the protected account reads as
+// ADMINISTRATOR, everyone else shows their uppercased role.
+function staffRoleBadgeLabel(operator: OperatorManagementRecord): string {
+  if (operator.is_protected) {
+    return "ADMINISTRATOR";
+  }
+  return roleLabel(operator.role).toUpperCase();
+}
+
+function roleAccessSummary(role: UserRole): string {
+  return role === "cashier"
+    ? "Shop operations only — no admin pages."
+    : "Full admin access (Settings, System, Staff, Sales, Promotions, Pricing).";
+}
 
 type ModalState =
   | { kind: "add" }
@@ -170,7 +205,8 @@ export function OperatorsManager() {
       username: normalizeUsername(String(form.get("username") ?? "")),
       access_method: accessMethod,
       password: accessMethod === "password" ? password : undefined,
-      is_active: form.get("isActive") === "on"
+      is_active: form.get("isActive") === "on",
+      role: (String(form.get("role") ?? "cashier") as UserRole)
     };
     setFormError(null);
     setIsSaving(true);
@@ -196,10 +232,11 @@ export function OperatorsManager() {
       display_name: String(form.get("displayName") ?? "").trim(),
       username: operator.is_protected ? "admin" : normalizeUsername(String(form.get("username") ?? "")),
       access_method: operator.is_protected ? "password" : String(form.get("accessMethod")) as "quick" | "password",
-      is_active: operator.is_protected ? true : form.get("isActive") === "on"
+      is_active: operator.is_protected ? true : form.get("isActive") === "on",
+      role: (String(form.get("role") ?? operator.role) as UserRole)
     };
     if (operator.access_method === "quick" && payload.access_method === "password") {
-      setFormError("Use Change Password before converting this operator to password access.");
+      setFormError("Use Set Password to give this operator password access.");
       return;
     }
     if (operator.access_method === "password" && payload.access_method === "quick" && !window.confirm("Quick Access allows sign-in without a password from the shop dashboard. Continue?")) {
@@ -339,7 +376,13 @@ export function OperatorsManager() {
                 </span>
                 <div className={styles.staffIdentity}>
                   <strong>{operator.display_name}</strong>
-                  {operator.is_protected ? <span className={styles.adminMiniBadge}>Administrator</span> : null}
+                  <span
+                    className={styles.staffRoleBadge}
+                    data-role={operator.role}
+                    data-protected={operator.is_protected ? "true" : undefined}
+                  >
+                    {staffRoleBadgeLabel(operator)}
+                  </span>
                 </div>
               </div>
               <span>{accessLabel(operator)}</span>
@@ -362,9 +405,9 @@ export function OperatorsManager() {
                     >
                       View Activity
                     </button>
-                    {operator.password_required ? (
+                    {!operator.archived_at ? (
                       <button onClick={() => openPasswordModal(operator)} role="menuitem" type="button">
-                        Change Password
+                        {operator.password_required ? "Change Password" : "Set Password"}
                       </button>
                     ) : null}
                     {!operator.is_protected && operator.active_session_count > 0 ? (
@@ -482,6 +525,9 @@ function OperatorFormDialog({
 }) {
   const isProtected = operator?.is_protected ?? false;
   const [accessMethod, setAccessMethod] = useState<"quick" | "password">(operator?.access_method ?? "quick");
+  const [role, setRole] = useState<UserRole>(operator?.role ?? "cashier");
+  // The protected Admin account cannot be demoted below Admin.
+  const roleOptions = isProtected ? ROLE_OPTIONS.filter((option) => option.value !== "cashier") : ROLE_OPTIONS;
   return (
     <div className={styles.overlay} role="presentation">
       <form aria-label={title} aria-modal="true" className={styles.staffDialog} onSubmit={onSubmit} role="dialog">
@@ -498,16 +544,29 @@ function OperatorFormDialog({
           Username
           <input defaultValue={operator?.username ?? ""} disabled={isProtected} name="username" pattern="[A-Za-z0-9_@]{3,40}" required />
         </label>
-        <label className={styles.field}>
-          Access Method
-          <select disabled={isProtected} name="accessMethod" onChange={(event) => setAccessMethod(event.target.value as "quick" | "password")} value={isProtected ? "password" : accessMethod}>
-            <option value="quick">Quick Access</option>
-            <option value="password">Password Required</option>
-          </select>
-        </label>
+        {/* SecretSelect is not a native <select>; the hidden input keeps
+            accessMethod in the form's FormData for onSubmit. */}
+        <SecretSelect
+          disabled={isProtected}
+          label="Access Method"
+          onChange={(next) => setAccessMethod(next as "quick" | "password")}
+          options={ACCESS_METHOD_OPTIONS}
+          value={isProtected ? "password" : accessMethod}
+        />
+        <input name="accessMethod" type="hidden" value={isProtected ? "password" : accessMethod} />
         {accessMethod === "quick" && !isProtected ? (
           <p className={styles.staffWarning}>Signs in without a password from the shop dashboard.</p>
         ) : null}
+        <SecretSelect
+          label="Role"
+          onChange={(next) => setRole(next as UserRole)}
+          options={roleOptions}
+          value={role}
+        />
+        <input name="role" type="hidden" value={role} />
+        <p className={styles.staffHint}>
+          Assigning <strong>{roleLabel(role)}</strong>. {roleAccessSummary(role)}
+        </p>
         {!operator && accessMethod === "password" ? (
           <>
             <label className={styles.field}>
@@ -616,12 +675,17 @@ function PasswordDialog({
       >
         <div className={styles.passwordDialogHeader}>
           <div>
-            <h2 id="change-password-title">Change Password</h2>
+            <h2 id="change-password-title">{operator.password_required ? "Change Password" : "Set Password"}</h2>
             <p id="change-password-description">Set a new password for {operator.display_name}.</p>
           </div>
           <CloseButton disabled={isSaving} label="Close change password dialog" onClick={onClose} />
         </div>
         {formError ? <div className={styles.passwordError} role="alert">{formError}</div> : null}
+        {!operator.password_required ? (
+          <p className={styles.passwordHelper}>
+            Saving switches {operator.display_name} from Quick Access to Password Required.
+          </p>
+        ) : null}
         <p className={styles.passwordHelper}>The current password cannot be viewed. Saving will replace it with the new password.</p>
         <p className={styles.passwordSessionNote}>
           {operator.is_protected

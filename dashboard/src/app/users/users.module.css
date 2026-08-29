@@ -79,15 +79,20 @@
 
 .field input,
 .field select {
-  background: #0b1220;
-  border: 1px solid #3b4a64;
-  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 42%),
+    rgba(8, 17, 31, 0.84);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   color: #f8fafc;
+  accent-color: #38bdf8;
+  color-scheme: dark;
   font: inherit;
   letter-spacing: 0;
   min-height: 44px;
   min-width: 0;
-  padding: 0 12px;
+  padding: 10px 12px;
   text-transform: none;
   transition: border-color 160ms ease, box-shadow 160ms ease;
   width: 100%;
@@ -98,27 +103,32 @@
   opacity: 1;
 }
 
+.field input:hover:not(:disabled),
+.field select:hover:not(:disabled) {
+  border-color: rgba(103, 232, 249, 0.4);
+}
+
 .field input:disabled,
 .field select:disabled {
-  background: #111827;
-  border-color: #334155;
-  color: #94a3b8;
   cursor: not-allowed;
-  opacity: 1;
+  opacity: 0.55;
 }
 
 .field input:-webkit-autofill,
 .field input:-webkit-autofill:hover,
 .field input:-webkit-autofill:focus {
   -webkit-text-fill-color: #f8fafc;
-  box-shadow: 0 0 0 1000px #0b1220 inset;
+  box-shadow: 0 0 0 1000px #0a111f inset;
   caret-color: #f8fafc;
 }
 
 .field input:focus,
 .field select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.18);
+  border-color: rgba(103, 232, 249, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 0 3px rgba(56, 189, 248, 0.22),
+    0 14px 32px rgba(14, 165, 233, 0.12);
   outline: none;
 }
 
@@ -199,13 +209,16 @@
 
 .staffPanel {
   background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 26%),
     linear-gradient(180deg, rgba(17, 27, 45, 0.96), rgba(8, 17, 31, 0.96));
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  box-shadow: var(--shadow);
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    var(--shadow);
   display: grid;
   gap: 12px;
-  padding: 14px;
+  padding: 16px;
 }
 
 .staffPanelHeader {
@@ -294,37 +307,53 @@
   grid-template-columns: minmax(260px, 1.6fr) minmax(132px, 0.62fr) minmax(78px, 0.28fr) minmax(190px, 0.72fr) 156px;
 }
 
-.staffDirectoryRow:has(.adminMiniBadge) {
-  background: rgba(14, 165, 233, 0.08);
-}
-
 .staffDirectoryHeader {
   color: var(--muted);
   font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.06em;
-  padding: 0 12px;
+  padding: 0 14px 8px;
   text-transform: uppercase;
 }
 
 .staffDirectory {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
   display: grid;
-  gap: 6px;
+  gap: 8px;
+  padding-top: 8px;
 }
 
 .staffDirectoryRow {
   align-items: center;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 40%),
+    linear-gradient(180deg, rgba(13, 20, 34, 0.92), rgba(8, 13, 24, 0.92));
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 10px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 6px 18px rgba(0, 0, 0, 0.16);
   min-height: 52px;
-  padding: 7px 10px;
-  transition: background-color 160ms ease, border-color 160ms ease;
+  padding: 8px 12px;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
 .staffDirectoryRow:hover {
-  background: rgba(14, 165, 233, 0.07);
-  border-color: rgba(56, 189, 248, 0.28);
+  border-color: rgba(103, 232, 249, 0.34);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 14px 32px rgba(0, 0, 0, 0.26),
+    0 0 34px rgba(34, 211, 238, 0.07);
+  transform: translateY(-1px);
+}
+
+/* Protected Admin row -- a pink left accent instead of a flat wash so the
+   premium gradient still shows through, matching the ADMINISTRATOR badge. */
+.staffDirectoryRow:has(.staffRoleBadge[data-protected="true"]) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    inset 3px 0 0 rgba(244, 114, 182, 0.55),
+    0 6px 18px rgba(0, 0, 0, 0.16);
 }
 
 .staffIdentity {
@@ -346,15 +375,51 @@
   font-size: 14px;
 }
 
-.adminMiniBadge {
-  background: rgba(59, 130, 246, 0.16);
-  border: 1px solid rgba(96, 165, 250, 0.34);
+.staffRoleBadge {
+  background: rgba(148, 163, 184, 0.16);
+  border: 1px solid rgba(148, 163, 184, 0.32);
   border-radius: 999px;
-  color: #bfdbfe;
+  color: #cbd5e1;
   font-size: 11px;
   font-weight: 900;
-  padding: 4px 7px;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  text-transform: uppercase;
   white-space: nowrap;
+}
+
+.staffRoleBadge[data-role="owner"] {
+  background: rgba(236, 72, 153, 0.16);
+  border-color: rgba(244, 114, 182, 0.4);
+  color: #f9a8d4;
+}
+
+.staffRoleBadge[data-role="admin"] {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #7dd3fc;
+}
+
+/* Protected Admin: stored as `owner`, but the badge must read ADMINISTRATOR
+   in the pink protected-account treatment regardless of the underlying
+   role. Display only -- authorization is unchanged. Matches
+   .staffRoleBadge[data-role="owner"]. */
+.staffRoleBadge[data-protected="true"] {
+  background: rgba(236, 72, 153, 0.16);
+  border-color: rgba(244, 114, 182, 0.4);
+  color: #f9a8d4;
+}
+
+.staffHint {
+  color: #94a3b8;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.staffHint strong {
+  color: #e2e8f0;
 }
 
 .staffDirectoryRow > span:not(.staffAvatar):not(.activeBadge):not(.disabledBadge),
@@ -428,8 +493,18 @@
 }
 
 .staffRowActions .secondaryButton {
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 7px;
+  color: #dbeafe;
   min-height: 30px;
-  padding: 6px 9px;
+  padding: 6px 11px;
+}
+
+.staffRowActions .secondaryButton:hover:not(:disabled) {
+  background: rgba(14, 165, 233, 0.14);
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: none;
 }
 
 .staffMoreMenu {
@@ -501,21 +576,26 @@
 }
 
 .staffDialog {
-  background: #111827;
-  border: 1px solid rgba(148, 163, 184, 0.26);
-  border-radius: 8px;
-  box-shadow: 0 24px 70px rgb(0 0 0 / 0.34);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 24%),
+    linear-gradient(180deg, rgba(17, 27, 45, 0.98), rgba(8, 15, 27, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 30px 80px rgb(0 0 0 / 0.5);
   color: var(--text);
   display: grid;
-  gap: 12px;
+  gap: 14px;
   max-width: 520px;
-  padding: 18px;
+  padding: 20px;
   width: min(520px, calc(100vw - 28px));
 }
 
 .overlay {
   align-items: center;
-  background: rgb(2 6 23 / 0.72);
+  backdrop-filter: blur(3px);
+  background: rgb(2 6 23 / 0.66);
   display: flex;
   inset: 0;
   justify-content: center;
@@ -668,8 +748,10 @@
 
 .staffDialogHeader {
   align-items: center;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
   display: flex;
   justify-content: space-between;
+  padding-bottom: 12px;
 }
 
 .staffDialogHeader h2 {
@@ -692,7 +774,7 @@
   display: flex;
   font-size: 14px;
   font-weight: 700;
-  gap: 8px;
+  gap: 10px;
 }
 
 .checkboxRow input[type="checkbox"] {
@@ -832,9 +914,11 @@
 .staffAvatar {
   align-items: center;
   background: linear-gradient(135deg, #22d3ee, #2563eb);
-  border: 1px solid rgba(125, 211, 252, 0.78);
+  border: 1px solid rgba(125, 211, 252, 0.7);
   border-radius: 10px;
-  box-shadow: 0 0 24px rgb(34 211 238 / 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 4px 14px rgb(34 211 238 / 0.2);
   color: #020617;
   display: inline-flex;
   font-size: 16px;
@@ -872,22 +956,27 @@
 
 .activeBadge,
 .disabledBadge {
+  align-items: center;
   border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  display: inline-flex;
   font-size: 12px;
   font-weight: 900;
   line-height: 1;
-  padding: 5px 8px;
+  padding: 5px 9px;
   white-space: nowrap;
 }
 
 .activeBadge {
-  background: #dcfce7;
-  color: #166534;
+  background: rgba(34, 197, 94, 0.14);
+  border: 1px solid rgba(34, 197, 94, 0.36);
+  color: #86efac;
 }
 
 .disabledBadge {
-  background: #e5e7eb;
-  color: #374151;
+  background: rgba(148, 163, 184, 0.13);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #cbd5e1;
 }
 
 @media (max-width: 960px) {

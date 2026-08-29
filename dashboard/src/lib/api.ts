@@ -45,9 +45,6 @@ import type {
   SystemInfo,
   SystemLogEntry,
   SystemStorage,
-  UserAdminRecord,
-  UserCreateInput,
-  UserUpdateInput,
   RateProfile,
   RateProfileInput,
   SessionBalanceSourceProjection,
@@ -304,12 +301,6 @@ export async function fetchShift(shiftId: string): Promise<CashierShiftDetail> {
   });
 }
 
-export async function fetchUsers(): Promise<UserAdminRecord[]> {
-  return requestJson<UserAdminRecord[]>(`${getApiBaseUrl()}/users`, {
-    cache: "no-store"
-  });
-}
-
 export async function fetchAdminOperators(): Promise<OperatorManagementRecord[]> {
   return requestJson<OperatorManagementRecord[]>(`${getApiBaseUrl()}/admin/operators`, {
     cache: "no-store"
@@ -508,47 +499,6 @@ export async function revokeStation(macAddress: string): Promise<StationAssignme
 export async function fetchIncomeGroups(): Promise<IncomeGroup[]> {
   return requestJson<IncomeGroup[]>(`${getApiBaseUrl()}/income-groups`, {
     cache: "no-store"
-  });
-}
-
-export async function createUser(input: UserCreateInput): Promise<UserAdminRecord> {
-  return requestJson<UserAdminRecord>(`${getApiBaseUrl()}/users`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input)
-  });
-}
-
-export async function updateUser(
-  userId: string,
-  input: UserUpdateInput
-): Promise<UserAdminRecord> {
-  return requestJson<UserAdminRecord>(`${getApiBaseUrl()}/users/${userId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input)
-  });
-}
-
-export async function updateUserStatus(
-  userId: string,
-  isActive: boolean
-): Promise<UserAdminRecord> {
-  return requestJson<UserAdminRecord>(`${getApiBaseUrl()}/users/${userId}/status`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ is_active: isActive })
-  });
-}
-
-export async function resetUserPassword(
-  userId: string,
-  newPassword: string
-): Promise<UserAdminRecord> {
-  return requestJson<UserAdminRecord>(`${getApiBaseUrl()}/users/${userId}/reset-password`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password: newPassword })
   });
 }
 

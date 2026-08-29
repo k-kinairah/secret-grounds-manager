@@ -20,10 +20,13 @@ const ADMIN_ONLY_PATHS = [
   "/sales",
   "/settings",
   "/system",
-  "/users",
   "/shifts",
   "/remote-commands"
 ];
+// System-admin tier: role >= admin is NOT enough -- these additionally
+// require the protected Admin account (user.is_protected). Backend mirror:
+// server/auth.require_system_admin.
+const SYSTEM_ADMIN_PATHS = ["/system", "/remote-commands"];
 const ADMIN_NAV_ITEMS = [
   { href: "/history", icon: HistoryNavIcon, label: "History" },
   { href: "/operators", icon: UsersNavIcon, label: "Staff" },
@@ -36,6 +39,10 @@ const ADMIN_NAV_ITEMS = [
 
 function canAccess(user: CurrentUser | null, minimumRole: UserRole): boolean {
   return user !== null && ROLE_RANK[user.role] >= ROLE_RANK[minimumRole];
+}
+
+function canManageSystem(user: CurrentUser | null): boolean {
+  return user?.is_protected === true;
 }
 
 export function AuthShell({ children }: { children: ReactNode }) {
@@ -51,7 +58,10 @@ export function AuthShell({ children }: { children: ReactNode }) {
   const adminMenuRef = useRef<HTMLDivElement | null>(null);
   const adminButtonRef = useRef<HTMLButtonElement | null>(null);
   const isLoginPage = pathname === "/login";
-  const isAdminOperator = user?.username === "admin";
+  // Admin-level UI = role rank >= admin (owner or admin). Matches the
+  // backend's require_role("admin") gate (Phase 1); the literal "admin"
+  // username is no longer an authorization condition.
+  const isAdminOperator = canAccess(user, "admin");
   const isAdminNavPath = ADMIN_NAV_ITEMS.some((item) => item.href === pathname);
 
   useEffect(() => {
@@ -77,7 +87,9 @@ export function AuthShell({ children }: { children: ReactNode }) {
           });
         if (isLoginPage) {
           router.replace("/");
-        } else if (ADMIN_ONLY_PATHS.includes(pathname) && currentUser.username !== "admin") {
+        } else if (ADMIN_ONLY_PATHS.includes(pathname) && !canAccess(currentUser, "admin")) {
+          router.replace("/");
+        } else if (SYSTEM_ADMIN_PATHS.includes(pathname) && !canManageSystem(currentUser)) {
           router.replace("/");
         }
       } catch {
@@ -285,7 +297,9 @@ export function AuthShell({ children }: { children: ReactNode }) {
               </button>
               {isAdminMenuOpen ? (
                 <div className="appShell__adminDropdown" role="menu">
-                  {ADMIN_NAV_ITEMS.map((item) => {
+                  {ADMIN_NAV_ITEMS.filter(
+                    (item) => !SYSTEM_ADMIN_PATHS.includes(item.href) || canManageSystem(user)
+                  ).map((item) => {
                     const Icon = item.icon;
                     return (
                       <Link
@@ -311,7 +325,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
             <>
               <span>
                 On Duty: {user.display_name}
-                {user.username === "admin" ? " · Admin" : ""}
+                {canAccess(user, "admin") ? " · Admin" : ""}
               </span>
               {shift ? (
                 <span className="appShell__shift">

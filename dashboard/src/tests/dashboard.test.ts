@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   addTime,
   adminOperatorLogin,
   assignStation,
-  createUser,
   createPromo,
   createRate,
   fetchAdminSettings,
@@ -30,7 +29,6 @@ import {
   fetchSystemLogs,
   fetchSystemStorage,
   fetchUnclaimedStations,
-  fetchUsers,
   forceEndSession,
   getApiBaseUrl,
   getSalesExportUrl,
@@ -42,7 +40,6 @@ import {
   recordPayment,
   resetMemberPin,
   resetAdminSettings,
-  resetUserPassword,
   revokeStation,
   createSystemBackup,
   deleteSystemBackup,
@@ -57,9 +54,7 @@ import {
   updatePromo,
   updateRate,
   updatePcLayout,
-  updateRateStatus,
-  updateUser,
-  updateUserStatus
+  updateRateStatus
 } from "../lib/api";
 import {
   activityKey,
@@ -959,7 +954,6 @@ async function runAsyncAssertions() {
     await quickOperatorLogin("operator_mama");
     await adminOperatorLogin("password123");
     await fetchCurrentUser();
-    await fetchUsers();
     await fetchSalesReport({ period: "today" });
     await fetchDashboardTodaySales();
     await fetchAdminSettings();
@@ -999,19 +993,6 @@ async function runAsyncAssertions() {
     });
     await resetAdminSettings("general");
     await fetchPcLayouts(true);
-    await createUser({
-      username: "cashier",
-      display_name: "Cashier",
-      password: "password123",
-      role: "cashier"
-    });
-    await updateUser("user-1", {
-      username: "cashier",
-      display_name: "Cashier One",
-      role: "admin"
-    });
-    await updateUserStatus("user-1", false);
-    await resetUserPassword("user-1", "new-password");
     await logout();
     await resetMemberPin("member-1", "1234", "1234");
     await fetchRates(true);
@@ -1075,15 +1056,15 @@ async function runAsyncAssertions() {
     await assignStation("AA:BB:CC:DD:EE:FF", "PC-11");
     await reassignStation("AA:BB:CC:DD:EE:01", "PC-11");
     await revokeStation("AA:BB:CC:DD:EE:FF");
-    // fetchCalls[46]: monitor status poll.
+    // fetchCalls[41]: monitor status poll.
     await fetchMonitorStatuses();
-    // fetchCalls[47]: authenticated frame download -- credentials: "include"
+    // fetchCalls[42]: authenticated frame download -- credentials: "include"
     // is what actually authenticates this request (see fetchMonitorFrame's
     // comment in lib/api.ts); a plain <img src> would never send it.
     await fetchMonitorFrame("PC-11");
 
     // Stage 7: promo management API request-shape smoke coverage.
-    // fetchCalls[48]/[49]: owner_states must be sent as REPEATED query
+    // fetchCalls[43]/[44]: owner_states must be sent as REPEATED query
     // parameters, never a single comma-joined value.
     await fetchPromos();
     await fetchPromos(["enabled", "draft"]);
@@ -1117,7 +1098,7 @@ async function runAsyncAssertions() {
       total_redemption_limit: 10
     });
     await transitionPromoState("promo-1", { owner_state: "enabled" });
-    // fetchCalls[54]: reactivation carries the new ends_at through untouched.
+    // fetchCalls[49]: reactivation carries the new ends_at through untouched.
     await transitionPromoState("promo-1", {
       owner_state: "enabled",
       ends_at: "2026-03-01T00:00:00.000Z"
@@ -1133,17 +1114,12 @@ async function runAsyncAssertions() {
         { method: "POST", url: "http://localhost:8000/auth/operator/quick" },
         { method: "POST", url: "http://localhost:8000/auth/operator/admin" },
         { method: "GET", url: "http://localhost:8000/auth/me" },
-        { method: "GET", url: "http://localhost:8000/users" },
         { method: "GET", url: "http://localhost:8000/sales/report?period=today" },
         { method: "GET", url: "http://localhost:8000/dashboard/today-sales" },
         { method: "GET", url: "http://localhost:8000/settings" },
         { method: "PUT", url: "http://localhost:8000/settings" },
         { method: "POST", url: "http://localhost:8000/settings/reset" },
         { method: "GET", url: "http://localhost:8000/pcs/layout?include_disabled=true" },
-        { method: "POST", url: "http://localhost:8000/users" },
-        { method: "PUT", url: "http://localhost:8000/users/user-1" },
-        { method: "PATCH", url: "http://localhost:8000/users/user-1/status" },
-        { method: "POST", url: "http://localhost:8000/users/user-1/reset-password" },
         { method: "POST", url: "http://localhost:8000/auth/logout" },
         { method: "POST", url: "http://localhost:8000/members/member-1/pin" },
         { method: "GET", url: "http://localhost:8000/rates?include_inactive=true" },
@@ -1188,18 +1164,18 @@ async function runAsyncAssertions() {
       ]
     );
     assert.equal(fetchCalls.every((call) => call.credentials === "include"), true);
-    assert.deepEqual(fetchCalls[43].body, { pc_name: "PC-11" });
-    assert.deepEqual(fetchCalls[44].body, { pc_name: "PC-11" });
-    assert.deepEqual(fetchCalls[45].body, null);
-    assert.equal(fetchCalls[46].url, "http://localhost:8000/monitor/pcs");
-    assert.equal(fetchCalls[47].url, "http://localhost:8000/monitor/pcs/PC-11/frame");
-    assert.equal(fetchCalls[47].credentials, "include");
+    assert.deepEqual(fetchCalls[38].body, { pc_name: "PC-11" });
+    assert.deepEqual(fetchCalls[39].body, { pc_name: "PC-11" });
+    assert.deepEqual(fetchCalls[40].body, null);
+    assert.equal(fetchCalls[41].url, "http://localhost:8000/monitor/pcs");
+    assert.equal(fetchCalls[42].url, "http://localhost:8000/monitor/pcs/PC-11/frame");
+    assert.equal(fetchCalls[42].credentials, "include");
 
     // Stage 7 promo API body/URL shape checks.
-    assert.deepEqual(fetchCalls[48].body, null);
-    assert.deepEqual(fetchCalls[49].body, null);
-    assert.deepEqual(fetchCalls[50].body, null);
-    assert.deepEqual(fetchCalls[51].body, {
+    assert.deepEqual(fetchCalls[43].body, null);
+    assert.deepEqual(fetchCalls[44].body, null);
+    assert.deepEqual(fetchCalls[45].body, null);
+    assert.deepEqual(fetchCalls[46].body, {
       name: "Test Promo",
       audience: "standard",
       amount_mode: "exact",
@@ -1217,10 +1193,10 @@ async function runAsyncAssertions() {
     // status -- the request body sent over the wire has no such keys at
     // all, matching server/schemas.py's PromoCreate (those fields are
     // deliberately absent from the client type, not just unset).
-    assert.equal("created_by_user_id" in (fetchCalls[51].body as object), false);
-    assert.equal("owner_state" in (fetchCalls[51].body as object), false);
-    assert.equal("status" in (fetchCalls[51].body as object), false);
-    assert.deepEqual(fetchCalls[52].body, {
+    assert.equal("created_by_user_id" in (fetchCalls[46].body as object), false);
+    assert.equal("owner_state" in (fetchCalls[46].body as object), false);
+    assert.equal("status" in (fetchCalls[46].body as object), false);
+    assert.deepEqual(fetchCalls[47].body, {
       name: "Updated Promo",
       audience: "member_topup",
       amount_mode: "minimum",
@@ -1234,13 +1210,13 @@ async function runAsyncAssertions() {
       per_member_redemption_limit: 2,
       total_redemption_limit: 10
     });
-    assert.deepEqual(fetchCalls[53].body, { owner_state: "enabled" });
-    assert.deepEqual(fetchCalls[54].body, {
+    assert.deepEqual(fetchCalls[48].body, { owner_state: "enabled" });
+    assert.deepEqual(fetchCalls[49].body, {
       owner_state: "enabled",
       ends_at: "2026-03-01T00:00:00.000Z"
     });
-    assert.deepEqual(fetchCalls[55].body, null);
-    assert.deepEqual(fetchCalls[56].body, null);
+    assert.deepEqual(fetchCalls[50].body, null);
+    assert.deepEqual(fetchCalls[51].body, null);
 
     assert.deepEqual(fetchCalls[0].body, {
       username: "owner",
@@ -1252,21 +1228,18 @@ async function runAsyncAssertions() {
     assert.deepEqual(fetchCalls[3].body, {
       password: "password123"
     });
-    assert.deepEqual(fetchCalls[15].body, {
-      password: "new-password"
-    });
-    assert.deepEqual(fetchCalls[17].body, {
+    assert.deepEqual(fetchCalls[12].body, {
       pin: "1234",
       confirm_pin: "1234"
     });
-    assert.equal((fetchCalls[9].body as { general: { shop_display_name: string } }).general.shop_display_name, "Secret Grounds");
-    assert.deepEqual(fetchCalls[10].body, {
+    assert.equal((fetchCalls[8].body as { general: { shop_display_name: string } }).general.shop_display_name, "Secret Grounds");
+    assert.deepEqual(fetchCalls[9].body, {
       category: "general"
     });
-    assert.equal((fetchCalls[19].body as RateProfileInput).price, "12.30");
-    assert.equal((fetchCalls[20].body as RateProfileInput).price, "50.00");
-    assert.equal((fetchCalls[20].body as RateProfileInput).duration_seconds, 1800);
-    assert.deepEqual(fetchCalls[22].body, {
+    assert.equal((fetchCalls[14].body as RateProfileInput).price, "12.30");
+    assert.equal((fetchCalls[15].body as RateProfileInput).price, "50.00");
+    assert.equal((fetchCalls[15].body as RateProfileInput).duration_seconds, 1800);
+    assert.deepEqual(fetchCalls[17].body, {
       display_name: "PC 3",
       area_label: "SECRET GROUND SHOP",
       layout_order: 30,
@@ -1274,13 +1247,13 @@ async function runAsyncAssertions() {
       is_enabled: false,
       mac_address: null
     });
-    assert.deepEqual(fetchCalls[23].body, {
+    assert.deepEqual(fetchCalls[18].body, {
       pc_name: "PC-01",
       member_username: "ada.player",
       duration_seconds: 3600,
       member_pin: "1234"
     });
-    assert.deepEqual(fetchCalls[24].body, {
+    assert.deepEqual(fetchCalls[19].body, {
       pc_name: "PC-01",
       amount: "20.00"
     });
@@ -1288,22 +1261,22 @@ async function runAsyncAssertions() {
     // the sole authority on the canonical "SECRET GROUNDS" sender/title
     // (see MessageCommandRequest.enforce_canonical_title), so trusting a
     // dashboard-supplied title was never an option to begin with.
-    assert.deepEqual(fetchCalls[25].body, {
+    assert.deepEqual(fetchCalls[20].body, {
       message: "Please return to the cashier.",
       severity: "info",
       require_acknowledgement: false
     });
-    assert.deepEqual(fetchCalls[26].body, {});
-    assert.deepEqual(fetchCalls[27].body, {
+    assert.deepEqual(fetchCalls[21].body, {});
+    assert.deepEqual(fetchCalls[22].body, {
       amount: "5.00"
     });
-    assert.deepEqual(fetchCalls[28].body, null);
-    assert.deepEqual(fetchCalls[29].body, {
+    assert.deepEqual(fetchCalls[23].body, null);
+    assert.deepEqual(fetchCalls[24].body, {
       payment_method: "cash",
       amount: "20.00",
       cash_received: "50.00"
     });
-    assert.deepEqual(fetchCalls[34].body, {
+    assert.deepEqual(fetchCalls[29].body, {
       filename: "secretgrounds_2026-07-29_143500.db",
       confirm: true
     });
@@ -2159,6 +2132,16 @@ async function runAsyncAssertions() {
 
     const authShellSource = readFileSync("src/components/AuthShell.tsx", "utf8");
     assert.match(authShellSource, /isAdminOperator/);
+    // Phase 3: frontend admin gate is role-based (canAccess), never username.
+    assert.match(authShellSource, /function canAccess\(user: CurrentUser \| null, minimumRole: UserRole\)/);
+    assert.match(authShellSource, /const ROLE_RANK: Record<UserRole, number> = \{\s*cashier: 1,\s*admin: 2,\s*owner: 3/);
+    assert.match(authShellSource, /const isAdminOperator = canAccess\(user, "admin"\)/);
+    assert.match(authShellSource, /ADMIN_ONLY_PATHS\.includes\(pathname\) && !canAccess\(currentUser, "admin"\)/);
+    assert.doesNotMatch(authShellSource, /username === "admin"/);
+    assert.doesNotMatch(authShellSource, /username !== "admin"/);
+    // Dashboard + Members stay ungated.
+    assert.doesNotMatch(authShellSource, /ADMIN_ONLY_PATHS = \[[^\]]*"\/members"/s);
+    assert.doesNotMatch(authShellSource, /ADMIN_ONLY_PATHS = \[[^\]]*"\/"[\s,]/s);
     assert.doesNotMatch(authShellSource, /user\?\.role === "cashier" && shift === null/);
     assert.doesNotMatch(authShellSource, /before recording payments/);
     assert.match(authShellSource, /appShell__adminMenu/);
@@ -2189,6 +2172,75 @@ async function runAsyncAssertions() {
     assert.match(authShellSource, /const isAdminNavPath = ADMIN_NAV_ITEMS\.some/);
     assert.match(authShellSource, /className=\{isAdminNavPath \? "appShell__linkActive" : ""\}/);
     assert.doesNotMatch(authShellSource, /const isAdminPath/);
+
+    // --- role gate (normal admin) + System-admin gate truth table --------
+    // mirrors AuthShell.canAccess / canManageSystem.
+    const roleRank: Record<string, number> = { cashier: 1, admin: 2, owner: 3 };
+    const canAccessAdmin = (role: string | null): boolean =>
+      role !== null && roleRank[role] >= roleRank.admin;
+    const canManageSystem = (isProtected: boolean): boolean => isProtected === true;
+    assert.equal(canAccessAdmin("owner"), true, "owner has normal admin access");
+    assert.equal(canAccessAdmin("admin"), true, "admin has normal admin access");
+    assert.equal(canAccessAdmin("cashier"), false, "cashier has no admin access");
+    assert.equal(canAccessAdmin(null), false, "unauthenticated has no admin access");
+
+    // Personas: protected Admin (owner, is_protected) / Tyrone (owner, not
+    // protected) / cashier.
+    const protectedAdmin = { role: "owner", is_protected: true };
+    const tyrone = { role: "owner", is_protected: false };
+    const cashier = { role: "cashier", is_protected: false };
+
+    assert.equal(canAccessAdmin(protectedAdmin.role) && canManageSystem(protectedAdmin.is_protected), true,
+      "protected Admin -> normal admin + System");
+    assert.equal(canAccessAdmin(tyrone.role), true, "Tyrone -> normal admin");
+    assert.equal(canManageSystem(tyrone.is_protected), false, "Tyrone -> NO System/Remote Commands");
+    assert.equal(canAccessAdmin(cashier.role), false, "cashier -> no admin at all");
+    assert.equal(canManageSystem(cashier.is_protected), false, "cashier -> no System");
+
+    // Admin dropdown visibility (normal items) == canAccessAdmin(role)
+    for (const [role, visible] of [["owner", true], ["admin", true], ["cashier", false]] as const) {
+      assert.equal(canAccessAdmin(role), visible, `Admin dropdown visible for ${role}: ${visible}`);
+    }
+
+    const adminOnlyPaths = [
+      "/operator-activity", "/operators", "/promotions", "/sales",
+      "/settings", "/system", "/shifts", "/remote-commands"
+    ];
+    const systemAdminPaths = ["/system", "/remote-commands"];
+    // Phase 4: /users management surface removed -> no longer a gated path.
+    assert.doesNotMatch(authShellSource, /ADMIN_ONLY_PATHS = \[[^\]]*"\/users"/s);
+    assert.equal(adminOnlyPaths.includes("/users"), false, "/users is no longer an admin path");
+
+    const wouldRedirect = (persona: { role: string; is_protected: boolean } | null, path: string): boolean => {
+      if (persona === null) return true;
+      if (adminOnlyPaths.includes(path) && !canAccessAdmin(persona.role)) return true;
+      if (systemAdminPaths.includes(path) && !canManageSystem(persona.is_protected)) return true;
+      return false;
+    };
+    // normal admin route
+    assert.equal(wouldRedirect(cashier, "/settings"), true, "cashier redirected off /settings");
+    assert.equal(wouldRedirect(tyrone, "/settings"), false, "Tyrone stays on /settings");
+    assert.equal(wouldRedirect(protectedAdmin, "/settings"), false, "Admin stays on /settings");
+    // System-admin routes
+    assert.equal(wouldRedirect(protectedAdmin, "/system"), false, "Admin stays on /system");
+    assert.equal(wouldRedirect(protectedAdmin, "/remote-commands"), false, "Admin stays on /remote-commands");
+    assert.equal(wouldRedirect(tyrone, "/system"), true, "Tyrone (owner, not protected) redirected off /system");
+    assert.equal(wouldRedirect(tyrone, "/remote-commands"), true, "Tyrone redirected off /remote-commands");
+    assert.equal(wouldRedirect(cashier, "/system"), true, "cashier redirected off /system");
+    // ungated
+    assert.equal(wouldRedirect(cashier, "/"), false, "Dashboard is never gated");
+    assert.equal(wouldRedirect(cashier, "/members"), false, "Members is never gated");
+    assert.equal(wouldRedirect(tyrone, "/"), false, "owner Dashboard never gated");
+    assert.ok(!adminOnlyPaths.includes("/") && !adminOnlyPaths.includes("/members"));
+
+    // AuthShell source wires the System-admin gate.
+    assert.match(authShellSource, /const SYSTEM_ADMIN_PATHS = \["\/system", "\/remote-commands"\]/);
+    assert.match(authShellSource, /function canManageSystem\(user: CurrentUser \| null\)/);
+    assert.match(authShellSource, /user\?\.is_protected === true/);
+    assert.match(authShellSource, /SYSTEM_ADMIN_PATHS\.includes\(pathname\) && !canManageSystem\(currentUser\)/);
+    assert.match(authShellSource, /SYSTEM_ADMIN_PATHS\.includes\(item\.href\) \|\| canManageSystem\(user\)/);
+    const typesSourceGate = readFileSync("src/lib/types.ts", "utf8");
+    assert.match(typesSourceGate, /interface CurrentUser \{[^}]*is_protected: boolean/s);
     assert.match(authShellSource, /href: "\/settings"/);
     assert.match(authShellSource, /href: "\/system"/);
     assert.match(authShellSource, /href: "\/history"/);
@@ -2220,13 +2272,55 @@ async function runAsyncAssertions() {
     assert.match(operatorsSource, /Manage who can operate Secret Grounds/);
     assert.match(operatorsSource, /Add Operator/);
     assert.match(operatorsSource, /Search operators/);
-    assert.match(operatorsSource, /Administrator/);
     assert.match(operatorsSource, /staffDirectoryRow/);
     assert.match(operatorsSource, /Password Required/);
     assert.match(operatorsSource, /Quick Access/);
     assert.match(operatorsSource, /Never signed in/);
     assert.match(operatorsSource, /createAdminOperator/);
     assert.match(operatorsSource, /updateAdminOperator/);
+    // Phase 2: role management in the Staff editor.
+    assert.match(operatorsSource, /ROLE_OPTIONS/);
+    assert.match(operatorsSource, /label="Role"/);
+    assert.match(operatorsSource, /name="role"/);
+    assert.match(operatorsSource, /staffRoleBadge/);
+    assert.match(operatorsSource, /Assigning <strong>\{roleLabel\(role\)\}<\/strong>/);
+
+    // --- Staff role badge: protected Admin reads ADMINISTRATOR ------------
+    // Display only -- the DB role stays `owner`, authorization is untouched.
+    // The label is keyed on is_protected, never on username.
+    assert.match(operatorsSource, /function staffRoleBadgeLabel\(operator: OperatorManagementRecord\)/);
+    assert.match(operatorsSource, /if \(operator\.is_protected\) \{[\s\S]*?return "ADMINISTRATOR";/);
+    assert.match(operatorsSource, /return roleLabel\(operator\.role\)\.toUpperCase\(\)/);
+    assert.match(operatorsSource, /data-protected=\{operator\.is_protected \? "true" : undefined\}/);
+    assert.match(operatorsSource, /\{staffRoleBadgeLabel\(operator\)\}/);
+    assert.doesNotMatch(operatorsSource, /username === "admin"/);
+    // Mirror of staffRoleBadgeLabel -- kept faithful by the source asserts above.
+    const roleBadgeText = (operator: { role: string; is_protected: boolean }): string =>
+      operator.is_protected
+        ? "ADMINISTRATOR"
+        : ({ owner: "Owner", admin: "Admin", cashier: "Cashier" }[operator.role] ?? "Cashier").toUpperCase();
+    assert.equal(roleBadgeText({ role: "owner", is_protected: true }), "ADMINISTRATOR",
+      "is_protected owner -> ADMINISTRATOR");
+    assert.equal(roleBadgeText({ role: "owner", is_protected: false }), "OWNER", "normal owner -> OWNER");
+    assert.equal(roleBadgeText({ role: "cashier", is_protected: false }), "CASHIER", "cashier -> CASHIER");
+    assert.equal(roleBadgeText({ role: "admin", is_protected: false }), "ADMIN", "admin -> ADMIN");
+    for (const persona of [
+      { role: "owner", is_protected: true },
+      { role: "owner", is_protected: false },
+      { role: "admin", is_protected: false },
+      { role: "cashier", is_protected: false }
+    ]) {
+      const label = roleBadgeText(persona);
+      assert.equal(label, label.toUpperCase(), `role badge label is uppercase: ${label}`);
+    }
+    // Named personas from the request.
+    assert.equal(roleBadgeText({ role: "owner", is_protected: true }), "ADMINISTRATOR"); // admin account
+    assert.equal(roleBadgeText({ role: "owner", is_protected: false }), "OWNER"); // Tyrone
+    for (const cashierName of ["Mama", "Neil", "Rogene", "Rojan", "Bel", "Karen", "Kin"]) {
+      assert.equal(roleBadgeText({ role: "cashier", is_protected: false }), "CASHIER", `${cashierName} -> CASHIER`);
+    }
+    // Protected Admin cannot be demoted below Admin in the picker.
+    assert.match(operatorsSource, /option\.value !== "cashier"/);
     assert.match(operatorsSource, /disableAdminOperator/);
     assert.match(operatorsSource, /enableAdminOperator/);
     assert.match(operatorsSource, /archiveAdminOperator/);
@@ -2237,13 +2331,20 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(operatorsSource, /Reset Quick Access Session/);
     assert.doesNotMatch(operatorsSource, /Reset Password/);
     assert.match(operatorsSource, /Change Password/);
+    // Topic 1: the same more-menu entry offers "Set Password" for a
+    // quick-access operator (converts quick -> password via reset_password)
+    // and "Change Password" once password_required is already true.
+    assert.match(operatorsSource, /\{operator\.password_required \? "Change Password" : "Set Password"\}/);
+    assert.match(operatorsSource, /Use Set Password to give this operator password access\./);
     assert.match(operatorsSource, /View Activity/);
     assert.match(operatorsSource, /staffActivityDrawer/);
     assert.match(operatorsSource, /fetchOperatorActivity\(\{ dateScope: "all", operatorId: operator\.operator_id \}\)/);
     assert.doesNotMatch(operatorsSource, /href=\{`\/operator-activity/);
     assert.match(operatorsSource, /passwordDialog/);
-    assert.match(operatorsSource, /Change Password<\/h2>/);
+    assert.match(operatorsSource, /\{operator\.password_required \? "Change Password" : "Set Password"\}<\/h2>/);
     assert.match(operatorsSource, /Set a new password for \{operator\.display_name\}\./);
+    // Topic 1: quick -> password conversion is called out in the dialog.
+    assert.match(operatorsSource, /Saving switches \{operator\.display_name\} from Quick Access to Password Required\./);
     assert.match(operatorsSource, /The current password cannot be viewed\. Saving will replace it with the new password\./);
     assert.match(operatorsSource, /At least 8 characters\./);
     assert.match(operatorsSource, /showPassword/);
@@ -2261,9 +2362,28 @@ async function runAsyncAssertions() {
 
     const operatorsCss = readFileSync("src/app/users/users.module.css", "utf8");
     assert.match(operatorsCss, /\.staffDirectoryRow/);
+    assert.match(operatorsCss, /\.staffRoleBadge/);
+    assert.match(operatorsCss, /\.staffRoleBadge\[data-role="owner"\]/);
     assert.match(operatorsCss, /\.staffPageHeader/);
     assert.match(operatorsCss, /\.staffHeaderActions/);
-    assert.match(operatorsCss, /\.adminMiniBadge/);
+    // The ADMINISTRATOR badge uses the pink/protected treatment, identical
+    // to the normal-owner pink badge (the old blue .adminMiniBadge is gone).
+    assert.doesNotMatch(operatorsCss, /\.adminMiniBadge/);
+    assert.match(operatorsCss, /\.staffRoleBadge\[data-protected="true"\]/);
+    const pinkOwnerBlock = operatorsCss.match(/\.staffRoleBadge\[data-role="owner"\]\s*\{([^}]*)\}/);
+    const pinkProtectedBlock = operatorsCss.match(/\.staffRoleBadge\[data-protected="true"\]\s*\{([^}]*)\}/);
+    assert.ok(pinkOwnerBlock && pinkProtectedBlock, "both pink badge rules present");
+    assert.equal(
+      pinkProtectedBlock![1].replace(/\s+/g, " ").trim(),
+      pinkOwnerBlock![1].replace(/\s+/g, " ").trim(),
+      "ADMINISTRATOR badge uses the same pink treatment as the owner badge"
+    );
+    assert.match(pinkProtectedBlock![1], /rgba\(236, 72, 153/);
+    assert.match(pinkProtectedBlock![1], /#f9a8d4/);
+    // Base badge rule uppercases every label.
+    assert.match(operatorsCss, /\.staffRoleBadge\s*\{[^}]*text-transform:\s*uppercase/s);
+    // Protected row accent keys off the protected badge, in pink.
+    assert.match(operatorsCss, /\.staffDirectoryRow:has\(\.staffRoleBadge\[data-protected="true"\]\)/);
     assert.match(operatorsCss, /\.staffRowActions/);
     assert.match(operatorsCss, /\.staffMoreMenu/);
     assert.match(operatorsCss, /\.staffDialog/);
@@ -2281,6 +2401,24 @@ async function runAsyncAssertions() {
     assert.match(operatorsCss, /grid-template-columns: minmax\(260px, 1\.6fr\) minmax\(132px, 0\.62fr\) minmax\(78px, 0\.28fr\) minmax\(190px, 0\.72fr\) 156px/);
     assert.match(operatorsCss, /@media \(max-width: 960px\)/);
     assert.match(operatorsCss, /grid-template-columns: 1fr auto/);
+
+    // --- Phase 4: legacy /users management surface removed --------------
+    assert.equal(existsSync("src/app/users/page.tsx"), false, "/users route deleted");
+    assert.equal(existsSync("src/components/UsersManager.tsx"), false, "UsersManager deleted");
+    assert.equal(existsSync("src/app/users/users.module.css"), true, "users.module.css kept (Staff stylesheet)");
+    const apiSourceP4 = readFileSync("src/lib/api.ts", "utf8");
+    assert.doesNotMatch(apiSourceP4, /export async function (fetchUsers|createUser|updateUser|updateUserStatus|resetUserPassword)\b/);
+    assert.doesNotMatch(apiSourceP4, /getApiBaseUrl\(\)\}\/users(\/|`)/);
+    assert.match(apiSourceP4, /getApiBaseUrl\(\)\}\/admin\/operators/); // Staff API kept
+    assert.match(apiSourceP4, /getApiBaseUrl\(\)\}\/auth\/login/); // /auth/login kept
+    const typesSourceP4 = readFileSync("src/lib/types.ts", "utf8");
+    assert.doesNotMatch(typesSourceP4, /interface (UserAdminRecord|UserCreateInput|UserUpdateInput)\b/);
+    assert.match(typesSourceP4, /export type UserRole =/); // UserRole kept
+    assert.match(typesSourceP4, /interface OperatorCreateInput/); // Staff types kept
+    assert.doesNotMatch(authShellSource, /"\/users"/); // dropped from ADMIN_ONLY_PATHS
+    for (const kept of ["/operators", "/settings", "/system", "/promotions", "/sales", "/operator-activity", "/remote-commands", "/shifts"]) {
+      assert.ok(authShellSource.includes(`"${kept}"`), `ADMIN_ONLY_PATHS still contains ${kept}`);
+    }
 
     const operatorActivitySource = readFileSync("src/components/OperatorActivity.tsx", "utf8");
     assert.match(operatorActivitySource, /summaryCards/);
@@ -2752,7 +2890,6 @@ async function runAsyncAssertions() {
       ["src/app/remote-commands/page.tsx", /PageTitleIcon name="terminal"/],
       ["src/app/settings/page.tsx", /PageTitleIcon name="settings"/],
       ["src/app/system/page.tsx", /PageTitleIcon name="monitor-cog"/],
-      ["src/app/users/page.tsx", /PageTitleIcon name="users"/],
       ["src/components/MembersManager.tsx", /PageTitleIcon name="members"/],
       ["src/components/OperatorsManager.tsx", /PageTitleIcon name="shield"/],
       ["src/components/ShiftsManager.tsx", /PageTitleIcon name="receipt"/]

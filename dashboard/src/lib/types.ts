@@ -454,6 +454,9 @@ export interface CurrentUser {
   username: string;
   display_name: string;
   role: UserRole;
+  // The singular protected Admin account. Gates the System-admin tier
+  // (System, Remote Commands) on top of the role-based admin gate.
+  is_protected: boolean;
 }
 
 export interface OperatorAccess {
@@ -463,19 +466,11 @@ export interface OperatorAccess {
   user: CurrentUser | null;
 }
 
-export interface UserAdminRecord extends CurrentUser {
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-  last_login_at: string | null;
-}
-
 export interface OperatorManagementRecord extends CurrentUser {
   operator_id: string;
   access_method: "quick" | "password";
   password_required: boolean;
   is_active: boolean;
-  is_protected: boolean;
   active_session_count: number;
   archived_at: string | null;
   created_at: string | null;
@@ -489,6 +484,7 @@ export interface OperatorCreateInput {
   access_method: "quick" | "password";
   password?: string;
   is_active: boolean;
+  role: UserRole;
 }
 
 export interface OperatorUpdateInput {
@@ -496,6 +492,7 @@ export interface OperatorUpdateInput {
   display_name: string;
   access_method: "quick" | "password";
   is_active: boolean;
+  role: UserRole;
 }
 
 export interface OperatorActivityRecord {
@@ -774,19 +771,6 @@ export interface SystemClientHealth {
   last_heartbeat: string | null;
   version: string | null;
   current_state: string;
-}
-
-export interface UserCreateInput {
-  username: string;
-  display_name: string;
-  password: string;
-  role: UserRole;
-}
-
-export interface UserUpdateInput {
-  username: string;
-  display_name: string;
-  role: UserRole;
 }
 
 export type ShiftStatus = "open" | "closed";
