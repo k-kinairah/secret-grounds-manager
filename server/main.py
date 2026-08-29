@@ -131,12 +131,8 @@ from server.schemas import (
     TestCommandResponse,
     WakeCommandResponse,
     VoidPaymentRequest,
-    UserAdminRecord,
-    UserCreateRequest,
     UserPublic,
     UserRecord,
-    UserStatusUpdate,
-    UserUpdateRequest,
     PromoQuoteRequest,
     PromoQuoteResponse,
     Promo,
@@ -163,6 +159,7 @@ from server.auth import (
     list_family_operator_access,
     require_owner,
     require_role,
+    require_system_admin,
     set_auth_cookie,
     to_public_user,
     user_repository,
@@ -525,7 +522,7 @@ def get_me_alias(current_user=Depends(get_current_user)) -> UserPublic:
 
 @app.get("/settings", response_model=AdminSettingsResponse)
 def get_admin_settings(
-    _: object = Depends(require_admin_operator),
+    _: object = Depends(require_role("admin")),
 ) -> AdminSettingsResponse:
     return admin_settings_service.get_response()
 
@@ -533,7 +530,7 @@ def get_admin_settings(
 @app.put("/settings", response_model=AdminSettingsResponse)
 def update_admin_settings(
     request: AdminSettingsUpdateRequest,
-    current_user=Depends(require_admin_operator),
+    current_user=Depends(require_role("admin")),
 ) -> AdminSettingsResponse:
     return admin_settings_service.update_settings(request, current_user.user_id)
 
@@ -541,13 +538,13 @@ def update_admin_settings(
 @app.post("/settings/reset", response_model=AdminSettingsResponse)
 def reset_admin_settings(
     request: AdminSettingsResetRequest,
-    current_user=Depends(require_admin_operator),
+    current_user=Depends(require_role("admin")),
 ) -> AdminSettingsResponse:
     return admin_settings_service.reset_settings(request, current_user.user_id)
 
 
 @app.get("/system/health")
-def get_system_health(_: object = Depends(require_admin_operator)) -> dict[str, object]:
+def get_system_health(_: object = Depends(require_system_admin)) -> dict[str, object]:
     mark_stale_pcs_offline()
     return system_service.get_health(
         app_version=app.version,
@@ -558,24 +555,24 @@ def get_system_health(_: object = Depends(require_admin_operator)) -> dict[str, 
 
 
 @app.get("/system/database")
-def get_system_database(_: object = Depends(require_admin_operator)) -> dict[str, object]:
+def get_system_database(_: object = Depends(require_system_admin)) -> dict[str, object]:
     return system_service.get_database_health()
 
 
 @app.get("/system/backups")
-def get_system_backups(_: object = Depends(require_admin_operator)) -> list[dict[str, object]]:
+def get_system_backups(_: object = Depends(require_system_admin)) -> list[dict[str, object]]:
     return system_service.list_backups()
 
 
 @app.post("/system/backup")
-def create_system_backup(_: object = Depends(require_admin_operator)) -> dict[str, object]:
+def create_system_backup(_: object = Depends(require_system_admin)) -> dict[str, object]:
     return system_service.create_backup()
 
 
 @app.post("/system/restore")
 def restore_system_backup(
     payload: dict[str, object] = Body(...),
-    _: object = Depends(require_admin_operator),
+    _: object = Depends(require_system_admin),
 ) -> dict[str, object]:
     filename = str(payload.get("filename") or "")
     confirm = bool(payload.get("confirm"))
@@ -586,7 +583,7 @@ def restore_system_backup(
 def delete_system_backup(
     filename: str,
     confirm: bool = Query(False),
-    _: object = Depends(require_admin_operator),
+    _: object = Depends(require_system_admin),
 ) -> dict[str, str]:
     return system_service.delete_backup(filename, confirm)
 
@@ -594,7 +591,7 @@ def delete_system_backup(
 @app.get("/system/backups/{filename}/download")
 def download_system_backup(
     filename: str,
-    _: object = Depends(require_admin_operator),
+    _: object = Depends(require_system_admin),
 ) -> FileResponse:
     backup_path = system_service.resolve_backup_path(filename)
     return FileResponse(
@@ -605,12 +602,12 @@ def download_system_backup(
 
 
 @app.get("/system/storage")
-def get_system_storage(_: object = Depends(require_admin_operator)) -> dict[str, object]:
+def get_system_storage(_: object = Depends(require_system_admin)) -> dict[str, object]:
     return system_service.get_storage()
 
 
 @app.get("/system/info")
-def get_system_info(_: object = Depends(require_admin_operator)) -> dict[str, object]:
+def get_system_info(_: object = Depends(require_system_admin)) -> dict[str, object]:
     return system_service.get_info(
         app_version=app.version,
         server_started_at=SERVER_STARTED_AT,
@@ -618,12 +615,12 @@ def get_system_info(_: object = Depends(require_admin_operator)) -> dict[str, ob
 
 
 @app.get("/system/logs")
-def get_system_logs(_: object = Depends(require_admin_operator)) -> list[dict[str, str]]:
+def get_system_logs(_: object = Depends(require_system_admin)) -> list[dict[str, str]]:
     return system_service.get_logs()
 
 
 @app.get("/system/clients")
-def get_system_clients(_: object = Depends(require_admin_operator)) -> list[dict[str, object]]:
+def get_system_clients(_: object = Depends(require_system_admin)) -> list[dict[str, object]]:
     mark_stale_pcs_offline()
     layouts = {layout.pc_name: layout for layout in pc_layout_repository.list_layouts(include_disabled=True)}
     clients: list[dict[str, object]] = []
@@ -950,53 +947,11 @@ def update_membership_product_status(
     return product
 
 
-@app.get("/users", response_model=list[UserAdminRecord])
-def list_users(_: object = Depends(require_admin_operator)) -> list[UserAdminRecord]:
-    return user_repository.list_users()
-
-
-@app.post("/users", response_model=UserAdminRecord)
-def create_user(
-    request: UserCreateRequest,
-    _: object = Depends(require_admin_operator),
-) -> UserAdminRecord:
-    return user_repository.create_user(request)
-
-
-@app.put("/users/{user_id}", response_model=UserAdminRecord)
-def update_user(
-    user_id: str,
-    request: UserUpdateRequest,
-    _: object = Depends(require_admin_operator),
-) -> UserAdminRecord:
-    user = user_repository.update_user(user_id, request)
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
-
-
-@app.patch("/users/{user_id}/status", response_model=UserAdminRecord)
-def update_user_status(
-    user_id: str,
-    request: UserStatusUpdate,
-    _: object = Depends(require_admin_operator),
-) -> UserAdminRecord:
-    user = user_repository.set_active(user_id, request)
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
-
-
-@app.post("/users/{user_id}/reset-password", response_model=UserAdminRecord)
-def reset_user_password(
-    user_id: str,
-    request: PasswordResetRequest,
-    _: object = Depends(require_admin_operator),
-) -> UserAdminRecord:
-    user = user_repository.reset_password(user_id, request)
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+# Phase 4: the legacy /users management routes (GET/POST /users,
+# PUT/PATCH /users/{id}, POST /users/{id}/reset-password) were removed --
+# Staff (/admin/operators) is now the canonical user-management surface and
+# owns role assignment. UserRepository, the users table, /auth/login and the
+# rest of the auth core are untouched and still used by every login flow.
 
 
 def operator_name_for_user(user_id: str | None, users_by_id: dict[str, str]) -> str:
@@ -1031,7 +986,7 @@ IMPORTANT_SESSION_EVENTS: dict[str, tuple[str, str]] = {
 
 @app.get("/admin/operators", response_model=list[OperatorManagementRecord])
 def list_admin_operators(
-    _: object = Depends(require_admin_operator),
+    _: object = Depends(require_role("admin")),
 ) -> list[OperatorManagementRecord]:
     return operator_repository.list_operators()
 
@@ -1039,7 +994,7 @@ def list_admin_operators(
 @app.post("/admin/operators", response_model=OperatorManagementRecord)
 def create_admin_operator(
     request: OperatorCreateRequest,
-    current_user=Depends(require_admin_operator),
+    current_user=Depends(require_role("admin")),
 ) -> OperatorManagementRecord:
     return operator_repository.create_operator(request, current_user)
 
@@ -1048,7 +1003,7 @@ def create_admin_operator(
 def update_admin_operator(
     operator_id: str,
     request: OperatorUpdateRequest,
-    current_user=Depends(require_admin_operator),
+    current_user=Depends(require_role("admin")),
 ) -> OperatorManagementRecord:
     return operator_repository.update_operator(operator_id, request, current_user)
 
@@ -1056,7 +1011,7 @@ def update_admin_operator(
 @app.post("/admin/operators/{operator_id}/enable", response_model=OperatorManagementRecord)
 def enable_admin_operator(
     operator_id: str,
-    current_user=Depends(require_admin_operator),
+    current_user=Depends(require_role("admin")),
 ) -> OperatorManagementRecord:
     return operator_repository.set_enabled(operator_id, True, current_user)
 
@@ -1064,7 +1019,7 @@ def enable_admin_operator(
 @app.post("/admin/operators/{operator_id}/disable", response_model=OperatorManagementRecord)
 def disable_admin_operator(
     operator_id: str,
-    current_user=Depends(require_admin_operator),
+    current_user=Depends(require_role("admin")),
 ) -> OperatorManagementRecord:
     return operator_repository.set_enabled(operator_id, False, current_user)
 
@@ -1073,7 +1028,7 @@ def disable_admin_operator(
 def reset_admin_operator_password(
     operator_id: str,
     request: OperatorPasswordResetRequest,
-    current_user=Depends(require_admin_operator),
+    current_user=Depends(require_role("admin")),
 ) -> OperatorManagementRecord:
     return operator_repository.reset_password(operator_id, request, current_user)
 
@@ -1081,7 +1036,7 @@ def reset_admin_operator_password(
 @app.post("/admin/operators/{operator_id}/sign-out", response_model=OperatorManagementRecord)
 def sign_out_admin_operator(
     operator_id: str,
-    current_user=Depends(require_admin_operator),
+    current_user=Depends(require_role("admin")),
 ) -> OperatorManagementRecord:
     return operator_repository.sign_out_operator(operator_id, current_user)
 
@@ -1089,7 +1044,7 @@ def sign_out_admin_operator(
 @app.delete("/admin/operators/{operator_id}", response_model=OperatorManagementRecord)
 def archive_admin_operator(
     operator_id: str,
-    current_user=Depends(require_admin_operator),
+    current_user=Depends(require_role("admin")),
 ) -> OperatorManagementRecord:
     return operator_repository.archive_operator(operator_id, current_user)
 
@@ -1100,7 +1055,7 @@ def list_operator_activity(
     operator_id: str | None = None,
     category: str | None = None,
     limit: int = Query(200, ge=1, le=500),
-    _: object = Depends(require_admin_operator),
+    _: object = Depends(require_role("admin")),
 ) -> list[OperatorActivityRecord]:
     return build_operator_activity(date_scope, operator_id, category, limit)
 
@@ -1916,7 +1871,7 @@ def get_sales_report(
     period: SalesPeriod = Query("today"),
     start_date: date | None = None,
     end_date: date | None = None,
-    _: object = Depends(require_admin_operator),
+    _: object = Depends(require_role("admin")),
 ) -> SalesReport:
     return build_sales_report(period, start_date, end_date)
 
@@ -1926,7 +1881,7 @@ def export_sales_report(
     period: SalesPeriod = Query("today"),
     start_date: date | None = None,
     end_date: date | None = None,
-    _: object = Depends(require_admin_operator),
+    _: object = Depends(require_role("admin")),
 ) -> Response:
     report = build_sales_report(period, start_date, end_date, recent_limit=10000)
     output = StringIO()
@@ -2620,7 +2575,7 @@ def get_pc_session_state(pc_name: str) -> PCSessionStateResponse:
 @app.post("/commands/test-ping", response_model=TestCommandResponse)
 async def send_test_ping_command(
     request: TestCommandRequest,
-    _: object = Depends(require_role("admin")),
+    _: object = Depends(require_system_admin),
 ) -> TestCommandResponse:
     pc_name = request.pc_name.strip()
     mark_stale_pcs_offline()
@@ -3248,8 +3203,11 @@ async def broadcast_announcement(
 
 @app.get("/remote-commands", response_model=list[RemoteCommandRecord])
 def list_remote_commands(
-    current_user: object = Depends(require_role("cashier")),
+    current_user: object = Depends(require_system_admin),
 ) -> list[RemoteCommandRecord]:
+    # Reserved for the protected Admin (System-admin tier). The role arg is
+    # kept for remote_command_repository.list_commands' signature; the
+    # protected Admin is an owner, so it takes the full (non-cashier) view.
     return remote_command_repository.list_commands(
         getattr(current_user, "role", "cashier"),
         get_actor_user_id(current_user),

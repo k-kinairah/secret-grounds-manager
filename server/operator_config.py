@@ -12,7 +12,7 @@ class OperatorDefinition:
 FAMILY_OPERATORS: tuple[OperatorDefinition, ...] = (
     OperatorDefinition("operator_mama", "operator_mama", "Mama", False),
     OperatorDefinition("operator_neil", "operator_neil", "Neil", False),
-    OperatorDefinition("operator_tyrone", "operator_tyrone", "Tyrone", False),
+    OperatorDefinition("operator_tyrone", "operator_tyrone", "Tyrone", True),
     OperatorDefinition("operator_rogene", "operator_rogene", "Rogene", False),
     OperatorDefinition("operator_rojan", "operator_rojan", "Rojan", False),
     OperatorDefinition("operator_bel", "operator_bel", "Bel", False),

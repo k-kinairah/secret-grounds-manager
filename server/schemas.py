@@ -1494,6 +1494,9 @@ class UserPublic(BaseModel):
     username: str
     display_name: str
     role: UserRole
+    # The singular protected Admin account (seeder-enforced). Gates the
+    # System-admin capability -- see server/auth.require_system_admin.
+    is_protected: bool = False
 
 
 class UserRecord(UserPublic):
@@ -1533,6 +1536,7 @@ class OperatorCreateRequest(BaseModel):
     access_method: OperatorAccessMethod
     password: str | None = Field(default=None, min_length=8)
     is_active: bool = True
+    role: UserRole = "cashier"
 
 
 class OperatorUpdateRequest(BaseModel):
@@ -1540,6 +1544,9 @@ class OperatorUpdateRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=80)
     access_method: OperatorAccessMethod
     is_active: bool = True
+    # Optional so callers that only touch name/access still work unchanged;
+    # None means "leave the existing role as-is".
+    role: UserRole | None = None
 
 
 class OperatorPasswordResetRequest(BaseModel):

@@ -1357,6 +1357,16 @@ def seed_family_operators(connection: sqlite3.Connection) -> None:
             "SELECT user_id FROM users WHERE username_normalized = ?",
             (operator.username.casefold(),),
         ).fetchone()
+        if existing is None:
+            # The operator may have been renamed through the admin UI, so
+            # the username lookup above misses. Fall back to the stable
+            # operator_id (which is the seeded user_id) -- take the UPDATE
+            # path and keep the custom username rather than trying to
+            # re-INSERT and hitting a PRIMARY KEY collision.
+            existing = connection.execute(
+                "SELECT user_id FROM users WHERE user_id = ?",
+                (operator.operator_id,),
+            ).fetchone()
         if existing is not None:
             access_method = "password" if operator.password_required else "quick"
             is_protected = 1 if operator.username == "admin" else 0

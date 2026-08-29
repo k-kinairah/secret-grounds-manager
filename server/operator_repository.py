@@ -160,7 +160,7 @@ class OperatorRepository:
                         role, is_active, created_at, updated_at, last_login_at,
                         is_operator, access_method, is_protected, archived_at
                     )
-                    VALUES (?, ?, ?, ?, ?, 'cashier', ?, ?, ?, NULL, 1, ?, 0, NULL)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, 0, NULL)
                     """,
                     (
                         user_id,
@@ -168,6 +168,7 @@ class OperatorRepository:
                         username,
                         request.display_name.strip(),
                         password_hash,
+                        request.role,
                         1 if request.is_active else 0,
                         now.isoformat(),
                         now.isoformat(),
@@ -183,7 +184,12 @@ class OperatorRepository:
                 actor,
                 user_id,
                 request.display_name.strip(),
-                {"username": username, "access_method": request.access_method, "is_active": request.is_active},
+                {
+                    "username": username,
+                    "access_method": request.access_method,
+                    "is_active": request.is_active,
+                    "role": request.role,
+                },
             )
         return operator_from_row(row)
 
@@ -192,8 +198,15 @@ class OperatorRepository:
         if existing is None or existing.archived_at is not None:
             raise HTTPException(status_code=404, detail="Operator not found.")
         username = normalize_operator_username(request.username)
+        # None -> keep the operator's current role unchanged.
+        new_role = request.role if request.role is not None else existing.role
         if existing.is_protected:
-            if username != "admin" or request.access_method != "password" or not request.is_active:
+            if (
+                username != "admin"
+                or request.access_method != "password"
+                or not request.is_active
+                or new_role not in ("admin", "owner")
+            ):
                 raise HTTPException(status_code=400, detail="Protected Admin rules cannot be changed.")
         elif username == "admin":
             raise HTTPException(status_code=400, detail="Username admin is reserved.")
@@ -203,6 +216,7 @@ class OperatorRepository:
             ("display_name", existing.display_name, request.display_name.strip()),
             ("access_method", existing.access_method, request.access_method),
             ("is_active", existing.is_active, request.is_active),
+            ("role", existing.role, new_role),
         ]:
             if old != new:
                 changed[field] = {"old": old, "new": new}
@@ -210,12 +224,18 @@ class OperatorRepository:
             raise HTTPException(status_code=400, detail="Use Reset Password before converting to password access.")
         now = current_utc_time()
         with get_connection() as connection:
+            # Last-active-owner protection, mirrored from UserRepository and
+            # checked on this connection before the write it guards.
+            demotes_owner = existing.role == "owner" and new_role != "owner"
+            deactivates_owner = existing.role == "owner" and existing.is_active and not request.is_active
+            if (demotes_owner or deactivates_owner) and self._count_active_owners(connection) <= 1:
+                raise HTTPException(status_code=400, detail="Cannot remove the last active owner")
             try:
                 connection.execute(
                     """
                     UPDATE users
                     SET username = ?, username_normalized = ?, display_name = ?,
-                        access_method = ?, is_active = ?, updated_at = ?
+                        access_method = ?, is_active = ?, role = ?, updated_at = ?
                     WHERE user_id = ?
                     """,
                     (
@@ -224,6 +244,7 @@ class OperatorRepository:
                         request.display_name.strip(),
                         request.access_method,
                         1 if request.is_active else 0,
+                        new_role,
                         now.isoformat(),
                         operator_id,
                     ),
@@ -237,6 +258,8 @@ class OperatorRepository:
                 self._record_audit(connection, "operator_updated", actor, operator_id, request.display_name.strip(), changed)
                 if "access_method" in changed:
                     self._record_audit(connection, "operator_access_method_changed", actor, operator_id, request.display_name.strip(), changed["access_method"])
+                if "role" in changed:
+                    self._record_audit(connection, "operator_role_changed", actor, operator_id, request.display_name.strip(), changed["role"])
         return operator_from_row(row)
 
     def set_enabled(self, operator_id: str, enabled: bool, actor: UserRecord) -> OperatorManagementRecord:
@@ -247,6 +270,13 @@ class OperatorRepository:
             raise HTTPException(status_code=400, detail="Protected Admin cannot be disabled.")
         now = current_utc_time()
         with get_connection() as connection:
+            if (
+                not enabled
+                and existing.role == "owner"
+                and existing.is_active
+                and self._count_active_owners(connection) <= 1
+            ):
+                raise HTTPException(status_code=400, detail="Cannot disable the last active owner")
             connection.execute(
                 "UPDATE users SET is_active = ?, updated_at = ? WHERE user_id = ?",
                 (1 if enabled else 0, now.isoformat(), operator_id),
@@ -272,6 +302,12 @@ class OperatorRepository:
             raise HTTPException(status_code=400, detail="Protected Admin cannot be archived.")
         now = current_utc_time()
         with get_connection() as connection:
+            if (
+                existing.role == "owner"
+                and existing.is_active
+                and self._count_active_owners(connection) <= 1
+            ):
+                raise HTTPException(status_code=400, detail="Cannot archive the last active owner")
             connection.execute(
                 "UPDATE users SET is_active = 0, archived_at = ?, updated_at = ? WHERE user_id = ?",
                 (now.isoformat(), now.isoformat(), operator_id),
@@ -323,6 +359,16 @@ class OperatorRepository:
         now = current_utc_time()
         with get_connection() as connection:
             self._revoke_sessions(connection, user_id, now.isoformat())
+
+    def _count_active_owners(self, connection: sqlite3.Connection) -> int:
+        """Same semantics as UserRepository.count_active_owners, but runs on
+        the caller's open connection so the check and the write it guards
+        happen in one transaction."""
+        return int(
+            connection.execute(
+                "SELECT COUNT(*) FROM users WHERE role = 'owner' AND is_active = 1"
+            ).fetchone()[0]
+        )
 
     def _record_audit(
         self,

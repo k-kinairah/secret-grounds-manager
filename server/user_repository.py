@@ -23,12 +23,14 @@ def normalize_username(username: str) -> str:
 
 
 def row_to_user(row: Any) -> UserRecord:
+    keys = row.keys()
     return UserRecord(
         user_id=row["user_id"],
         username=row["username"],
         display_name=row["display_name"],
         password_hash=row["password_hash"],
         role=row["role"],
+        is_protected=bool(row["is_protected"]) if "is_protected" in keys else False,
         is_active=bool(row["is_active"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),

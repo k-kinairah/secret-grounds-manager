@@ -23,6 +23,7 @@ def main() -> None:
             authenticate_admin_operator,
             auth_session_repository,
             authenticate_login,
+            authenticate_password_operator,
             authenticate_quick_operator,
             get_current_user,
             list_family_operator_access,
@@ -48,7 +49,6 @@ def main() -> None:
             record_payment,
             require_admin_operator,
             session_repository,
-            update_user_status,
         )
         from server.passwords import verify_password
         from server.schemas import (
@@ -86,13 +86,24 @@ def main() -> None:
         assert authenticate_quick_operator("operator_mama").display_name == "Mama"
         assert authenticate_quick_operator("operator_neil").display_name == "Neil"
         for operator_id in [
-            "operator_tyrone",
             "operator_rogene",
             "operator_rojan",
             "operator_bel",
             "operator_karen",
         ]:
             assert authenticate_quick_operator(operator_id).user_id == operator_id
+        # Tyrone is password-required (server/operator_config.py); quick access
+        # must be refused and the seeded password login must succeed.
+        try:
+            authenticate_quick_operator("operator_tyrone")
+        except HTTPException as error:
+            assert error.status_code == 403
+        else:
+            raise AssertionError("Tyrone quick access should be rejected (password required)")
+        assert (
+            authenticate_password_operator("operator_tyrone", "admin12345").user_id
+            == "operator_tyrone"
+        )
         try:
             authenticate_quick_operator("operator_not_real")
         except HTTPException as error:
@@ -270,17 +281,15 @@ def main() -> None:
         else:
             raise AssertionError("Admin should not pass owner gate")
 
-        updated_owner_status = update_user_status(
+        updated_owner_status = user_repository.set_active(
             owner.user_id,
             UserStatusUpdate(is_active=False),
-            stored_owner,
         )
         assert updated_owner_status is not None
         assert updated_owner_status.is_active is False
-        update_user_status(
+        user_repository.set_active(
             owner.user_id,
             UserStatusUpdate(is_active=True),
-            stored_owner,
         )
         quick_operator_login(
             QuickOperatorLoginRequest(operator_id="operator_rogene"),
@@ -354,10 +363,9 @@ def main() -> None:
             ).fetchone()
         assert audit_row["performed_by_user_id"] == admin.user_id
 
-        updated_cashier = update_user_status(
+        updated_cashier = user_repository.set_active(
             cashier.user_id,
             UserStatusUpdate(is_active=False),
-            stored_owner,
         )
         assert updated_cashier is not None
         assert updated_cashier.is_active is False

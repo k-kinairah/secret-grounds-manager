@@ -50,6 +50,7 @@ def to_public_user(user: UserRecord) -> UserPublic:
         username=user.username,
         display_name=user.display_name,
         role=user.role,
+        is_protected=getattr(user, "is_protected", False),
     )
 
 
@@ -178,6 +179,20 @@ def require_role(minimum_role: UserRole) -> Callable[[UserRecord], UserRecord]:
 def require_owner(current_user: UserRecord = Depends(get_current_user)) -> UserRecord:
     if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="Owner access required")
+    return current_user
+
+
+def require_system_admin(current_user: UserRecord = Depends(get_current_user)) -> UserRecord:
+    """System-admin capability: reserved for the protected Admin account
+    (is_protected == 1). This is deliberately NOT a role check and NOT a
+    username check -- normal admin features stay role-based; only the
+    infrastructure tier (System, Remote Commands, backups/restore, DB
+    health/logs) is gated here."""
+    if not getattr(current_user, "is_protected", False):
+        raise HTTPException(
+            status_code=403,
+            detail="System administration is restricted to the protected Admin account.",
+        )
     return current_user
 
 
