@@ -588,8 +588,6 @@ export function SessionDialog({
               >
                 <option value="cash">Cash</option>
                 <option value="gcash">GCash</option>
-                <option value="maya">Maya</option>
-                <option value="other">Other</option>
               </select>
             </label>
             {paymentMethod === "cash" ? (
