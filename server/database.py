@@ -873,7 +873,7 @@ def seed_default_membership_products(connection: sqlite3.Connection) -> None:
             ),
             (
                 "member-promo",
-                "Member Promo",
+                "Standard Top-up",
                 "50.00",
                 4 * 60 * 60,
                 "member_topup",
@@ -1201,6 +1201,21 @@ def activate_vip_promo_product_if_untouched(connection: sqlite3.Connection) -> N
         WHERE product_id = 'vip-promo-250'
           AND is_active = 0
           AND updated_at = created_at
+        """,
+        (current_utc_time().isoformat(),),
+    )
+
+
+def rename_untouched_member_promo_product(connection: sqlite3.Connection) -> None:
+    """Owner rename: the P50 'member-promo' product was originally seeded
+    'Member Promo', but it is an ordinary standard top-up, not a promo.
+    Guarded to the exact original seeded name so an owner-edited name is
+    never clobbered on a later restart."""
+    connection.execute(
+        """
+        UPDATE membership_products
+        SET name = 'Standard Top-up', updated_at = ?
+        WHERE product_id = 'member-promo' AND name = 'Member Promo'
         """,
         (current_utc_time().isoformat(),),
     )
@@ -2589,3 +2604,6 @@ def initialize_database() -> None:
         # sell. See activate_vip_promo_product_if_untouched's docstring for
         # why this never fights a later owner disable.
         activate_vip_promo_product_if_untouched(connection)
+        # Owner rename: 'member-promo' is a standard top-up, not a promo --
+        # see the function's docstring for what "untouched" means here.
+        rename_untouched_member_promo_product(connection)
