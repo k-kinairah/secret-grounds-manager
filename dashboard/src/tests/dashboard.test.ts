@@ -1064,14 +1064,12 @@ async function runAsyncAssertions() {
       general: {
         shop_display_name: "Secret Grounds",
         shop_subtitle: "Computer Shop",
-        pc_naming_prefix: "PC",
         timezone_display: "Asia/Manila"
       },
       sessions: {
         expiration_grace_seconds: 120,
         automatic_shutdown_on_expiration: false,
-        reminder_thresholds_seconds: [900, 300, 60],
-        manual_end_default_behavior: "lock_only"
+        reminder_thresholds_seconds: [900, 300, 60]
       },
       customer_client: {
         reminder_sounds_enabled: true,
@@ -1079,19 +1077,6 @@ async function runAsyncAssertions() {
         active_overlay_enabled: true,
         overlay_position: "top-right",
         customer_branding_text: "Ask the cashier to add more time to continue."
-      },
-      wake_power: {
-        wake_on_lan_enabled: true,
-        shutdown_on_expiration_enabled: false,
-        expected_shutdown_timeout_seconds: 60,
-        power_command_safety_status: "Test mode active"
-      },
-      members: {
-        default_member_pin_policy: "optional"
-      },
-      reports: {
-        default_sales_period: "today",
-        csv_timezone_display: "Asia/Manila"
       }
     });
     await resetAdminSettings("general");
@@ -2606,7 +2591,10 @@ async function runAsyncAssertions() {
     assert.match(settingsSource, /resetAdminSettings/);
     assert.match(settingsSource, /Expiration grace period/);
     assert.match(settingsSource, /Reminder thresholds/);
-    assert.match(settingsSource, /Power command safety status/);
+    // power_command_safety_status is surfaced only via the read-only
+    // Protected Configuration block now (the Wake & Power category was removed).
+    assert.match(settingsSource, /Protected Configuration/);
+    assert.match(settingsSource, /read_only/);
     assert.match(settingsSource, /Reset Unsaved Changes/);
     assert.match(settingsSource, /Reset All Defaults/);
     assert.doesNotMatch(settingsSource, /SECRET_GROUNDS_TEST_MODE/);
@@ -2645,7 +2633,7 @@ async function runAsyncAssertions() {
 
     const settingsCss = readFileSync("src/app/settings/settings.module.css", "utf8");
     assert.match(settingsCss, /\.categoryNav/);
-    assert.match(settingsCss, /\.switchField/);
+    assert.match(settingsCss, /\.toggle/);
     assert.match(settingsCss, /\.ratesGroup/);
     assert.match(settingsCss, /\.ratesGroupPromo/);
     assert.match(settingsCss, /\.ratesSubgroup/);

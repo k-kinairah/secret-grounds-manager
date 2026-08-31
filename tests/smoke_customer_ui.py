@@ -186,6 +186,71 @@ def test_reminders_fire_once_and_do_not_replay_after_reconnect() -> None:
     assert overlay.update_time(898) == []
 
 
+def test_reminder_threshold_signals_the_hud_not_the_sidebar_notice() -> None:
+    # Generic formatter: the standard thresholds and arbitrary valid ones.
+    assert CustomerOverlayController._format_reminder_text(15 * 60) == "15 minutes left"
+    assert CustomerOverlayController._format_reminder_text(5 * 60) == "5 minutes left"
+    assert CustomerOverlayController._format_reminder_text(60) == "1 minute left"
+    assert CustomerOverlayController._format_reminder_text(10 * 60) == "10 minutes left"
+    assert CustomerOverlayController._format_reminder_text(90) == "1 minute 30 seconds left"
+    assert CustomerOverlayController._format_reminder_text(45) == "45 seconds left"
+
+    overlay = CustomerOverlayController("PC-REMINDER", enable_gui=False)
+    overlay.show_session("Prepaid")
+    overlay.update_time(901)
+    vm = overlay.build_view_model()
+    assert vm.reminder_hud_text is None
+    assert vm.reminder_hud_token == 0
+
+    # Crossing 900 bumps the HUD token with the generic text -- and never
+    # touches the sidebar notice slot. The message-list return contract is
+    # unchanged.
+    assert overlay.update_time(900) == [
+        "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
+    ]
+    vm = overlay.build_view_model()
+    assert vm.reminder_hud_text == "15 minutes left"
+    assert vm.reminder_hud_token == 1
+    assert vm.notice is None
+
+    # A later crossing bumps the token again (fire-once dedup still applies:
+    # re-reporting 900 does not re-fire).
+    assert overlay.update_time(899) == []
+    assert overlay.build_view_model().reminder_hud_token == 1
+    overlay.update_time(301)
+    overlay.update_time(300)
+    vm = overlay.build_view_model()
+    assert vm.reminder_hud_text == "5 minutes left"
+    assert vm.reminder_hud_token == 2
+
+    # Threshold 0 / <=0 never signals the HUD (expiration/grace owns that).
+    overlay2 = CustomerOverlayController(
+        "PC-REMINDER-ZERO", thresholds_seconds=[60, 0], enable_gui=False
+    )
+    overlay2.show_session("Prepaid")
+    overlay2.update_time(1)
+    overlay2.update_time(0)
+    vm2 = overlay2.build_view_model()
+    assert vm2.reminder_hud_token == 0
+    assert vm2.reminder_hud_text is None
+
+
+def test_reminder_hud_does_not_disturb_the_time_added_confirmation() -> None:
+    overlay = CustomerOverlayController("PC-PRECEDENCE", enable_gui=False)
+    overlay.show_session("Prepaid")
+    overlay.update_time(301)
+    overlay.show_time_added_confirmation(600, 900)
+    assert "Time added" in (overlay.build_view_model().notice or "")
+
+    # A threshold crossing now goes to the HUD; the sidebar "Time added"
+    # confirmation in the notice slot is left completely alone.
+    overlay.update_time(300)
+    vm = overlay.build_view_model()
+    assert "Time added" in (vm.notice or "")
+    assert vm.reminder_hud_text == "5 minutes left"
+    assert vm.reminder_hud_token == 1
+
+
 def test_add_time_confirmation_and_countdown_update() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
         client = create_client(temp_directory)
@@ -484,6 +549,8 @@ def main() -> None:
     test_member_start_command_shows_display_name()
     test_customer_logout_sends_completion_and_locks()
     test_reminders_fire_once_and_do_not_replay_after_reconnect()
+    test_reminder_threshold_signals_the_hud_not_the_sidebar_notice()
+    test_reminder_hud_does_not_disturb_the_time_added_confirmation()
     test_add_time_confirmation_and_countdown_update()
     test_grace_screen_uses_shutdown_countdown_and_final_warning_once()
     test_original_timer_never_negative()

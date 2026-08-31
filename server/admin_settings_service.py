@@ -15,23 +15,17 @@ from server.schemas import (
 )
 from server.settings import (
     AUTOMATIC_SHUTDOWN_ON_EXPIRATION,
-    CSV_TIMEZONE_DISPLAY,
     CUSTOMER_BRANDING_TEXT,
     CUSTOMER_OVERLAY_ENABLED,
     CUSTOMER_OVERLAY_POSITION,
-    DEFAULT_SALES_PERIOD,
-    EXPECTED_SHUTDOWN_TIMEOUT_SECONDS,
     EXPIRATION_GRACE_SECONDS,
     EXPIRATION_SOUND_ENABLED,
-    MANUAL_END_DEFAULT_BEHAVIOR,
-    PC_NAMING_PREFIX,
     REMINDER_SOUNDS_ENABLED,
     REMINDER_THRESHOLDS_SECONDS,
     SHOP_DISPLAY_NAME,
     SHOP_SUBTITLE,
     TEST_MODE,
     TIMEZONE_DISPLAY,
-    WAKE_ON_LAN_ENABLED,
 )
 from server.time_utils import current_utc_time
 
@@ -47,23 +41,13 @@ class SettingsAuditChange:
     new_values: dict[str, Any]
 
 
-def _safe_manual_end_behavior(value: str) -> str:
-    return value if value in {"lock_only", "lock_and_settle"} else "lock_only"
-
-
 def _safe_overlay_position(value: str) -> str:
     allowed = {"top-right", "top-left", "bottom-right", "bottom-left"}
     return value if value in allowed else "top-right"
 
 
-def _safe_sales_period(value: str) -> str:
-    allowed = {"today", "yesterday", "this_week", "this_month"}
-    return value if value in allowed else "today"
-
-
 def build_default_settings() -> AdminSettings:
     grace_seconds = min(600, max(30, EXPIRATION_GRACE_SECONDS))
-    shutdown_timeout = min(300, max(10, EXPECTED_SHUTDOWN_TIMEOUT_SECONDS))
     thresholds = REMINDER_THRESHOLDS_SECONDS or [900, 300, 60]
     thresholds = sorted({max(1, min(24 * 60 * 60, item)) for item in thresholds}, reverse=True)
     return AdminSettings.model_validate(
@@ -71,16 +55,12 @@ def build_default_settings() -> AdminSettings:
             "general": {
                 "shop_display_name": SHOP_DISPLAY_NAME,
                 "shop_subtitle": SHOP_SUBTITLE or None,
-                "pc_naming_prefix": PC_NAMING_PREFIX,
                 "timezone_display": TIMEZONE_DISPLAY,
             },
             "sessions": {
                 "expiration_grace_seconds": grace_seconds,
                 "automatic_shutdown_on_expiration": AUTOMATIC_SHUTDOWN_ON_EXPIRATION,
                 "reminder_thresholds_seconds": thresholds,
-                "manual_end_default_behavior": _safe_manual_end_behavior(
-                    MANUAL_END_DEFAULT_BEHAVIOR
-                ),
             },
             "customer_client": {
                 "reminder_sounds_enabled": REMINDER_SOUNDS_ENABLED,
@@ -88,19 +68,6 @@ def build_default_settings() -> AdminSettings:
                 "active_overlay_enabled": CUSTOMER_OVERLAY_ENABLED,
                 "overlay_position": _safe_overlay_position(CUSTOMER_OVERLAY_POSITION),
                 "customer_branding_text": CUSTOMER_BRANDING_TEXT,
-            },
-            "wake_power": {
-                "wake_on_lan_enabled": WAKE_ON_LAN_ENABLED,
-                "shutdown_on_expiration_enabled": AUTOMATIC_SHUTDOWN_ON_EXPIRATION,
-                "expected_shutdown_timeout_seconds": shutdown_timeout,
-                "power_command_safety_status": power_command_safety_status(),
-            },
-            "members": {
-                "default_member_pin_policy": "optional",
-            },
-            "reports": {
-                "default_sales_period": _safe_sales_period(DEFAULT_SALES_PERIOD),
-                "csv_timezone_display": CSV_TIMEZONE_DISPLAY,
             },
         }
     )
@@ -132,9 +99,15 @@ class AdminSettingsService:
 
         merged = defaults.model_dump(mode="json")
         for category, values in stored.items():
+            # Skip whole categories the schema no longer defines (e.g. the
+            # retired "members", "reports", and "wake_power" categories) and,
+            # within a surviving category, only carry over keys it still
+            # defines (e.g. the retired general.pc_naming_prefix). Either way
+            # an obsolete key in an already-persisted row must not trip
+            # AdminSettings' extra="forbid" validation below.
             if isinstance(values, dict) and isinstance(merged.get(category), dict):
-                merged[category].update(values)
-        merged["wake_power"]["power_command_safety_status"] = power_command_safety_status()
+                known = merged[category]
+                known.update({key: value for key, value in values.items() if key in known})
         return AdminSettings.model_validate(merged)
 
     def get_response(self) -> AdminSettingsResponse:
@@ -156,9 +129,7 @@ class AdminSettingsService:
                     "power_command_executables": "Fixed allowlist in code",
                 },
                 "read_only": {
-                    "pc_naming_prefix": "Display only for this milestone",
                     "power_command_safety_status": power_command_safety_status(),
-                    "default_member_pin_policy": "Optional; member PIN enforcement is handled by member records",
                 },
                 "restart_required_fields": [],
                 "updated_at": updated_at,
@@ -274,12 +245,6 @@ class AdminSettingsService:
 
     def _normalize_update(self, request: AdminSettingsUpdateRequest) -> AdminSettings:
         payload = request.model_dump(mode="json")
-        payload["general"]["pc_naming_prefix"] = self.get_settings().general.pc_naming_prefix
-        payload["wake_power"]["power_command_safety_status"] = power_command_safety_status()
-        payload["wake_power"]["shutdown_on_expiration_enabled"] = payload["sessions"][
-            "automatic_shutdown_on_expiration"
-        ]
-        payload["members"]["default_member_pin_policy"] = "optional"
         return AdminSettings.model_validate(payload)
 
     def _diff_settings(

@@ -267,6 +267,39 @@ def apply_window_opacity(window: webview.Window, opacity: float) -> None:
         _diagnostic(f"native window opacity failed: {error}")
 
 
+def hud_geometry(width: int, height: int) -> tuple[int, int]:
+    """Upper-middle of the primary work area, clearly above centre -- where a
+    lightweight game HUD notification belongs, not dead centre."""
+    left, top, right, bottom = primary_work_area()
+    x = left + max(0, (right - left - width) // 2)
+    y = top + int((bottom - top) * 0.18)
+    return (x, y)
+
+
+def apply_click_through(window: webview.Window) -> None:
+    """Let mouse and keyboard fall straight through the window to the game
+    underneath (Windows). WS_EX_TRANSPARENT makes hit-testing pass through;
+    WS_EX_NOACTIVATE stops it ever stealing focus. Layered-window paint path
+    is kept alive by apply_window_opacity(1.0) first."""
+    apply_window_opacity(window, 1.0)
+    try:
+        from ctypes import wintypes
+
+        hwnd = int(window.native.Handle.ToInt64())
+        get_style = ctypes.windll.user32.GetWindowLongPtrW
+        get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+        get_style.restype = ctypes.c_ssize_t
+        set_style = ctypes.windll.user32.SetWindowLongPtrW
+        set_style.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        set_style.restype = ctypes.c_ssize_t
+        ws_ex_transparent = 0x00000020
+        ws_ex_noactivate = 0x08000000
+        extended_style = get_style(hwnd, -20)
+        set_style(hwnd, -20, extended_style | ws_ex_transparent | ws_ex_noactivate)
+    except Exception as error:
+        _diagnostic(f"native click-through failed: {error}")
+
+
 def apply_pill_native_geometry(pill: webview.Window, content_width: int, content_height: int) -> None:
     """Size/position the pill host snug to its CSS content, clipped to match."""
     x, y = bottom_right_geometry(content_width, content_height)
@@ -548,6 +581,10 @@ class SecretGroundsWebViewHost:
         self.refresh_stop = Event()
         self.pending_lock_refresh = False
         self.pending_overlay_refresh = False
+        # Remaining-time reminder HUD: last token acted on, and any text
+        # queued while the HUD window is still loading its content.
+        self._last_hud_token = 0
+        self._pending_hud_text: str | None = None
         self.refresh_thread: Thread | None = None
         self.setup_active = False
         self._native_lock_deactivate_handler: Callable[..., None] | None = None
@@ -701,14 +738,44 @@ class SecretGroundsWebViewHost:
             text_select=False,
         )
         _diagnostic("after create_window pill")
-        self.windows = {"lock": lock_window, "overlay": overlay_window, "pill": pill_window}
+        # Remaining-time reminder HUD: a small frameless transparent window
+        # near the top-centre of the screen, click-through so it never blocks
+        # gameplay input. Created off-screen; shown only for the ~3s a
+        # reminder is on screen.
+        _diagnostic("before create_window hud")
+        hud_window = webview.create_window(
+            "Secret Grounds",
+            url=url,
+            js_api=WebViewBridge(self, "hud"),
+            width=460,
+            height=110,
+            x=-32000,
+            y=-32000,
+            frameless=True,
+            on_top=True,
+            resizable=False,
+            min_size=(1, 1),
+            hidden=False,
+            transparent=True,
+            background_color="#000000",
+            text_select=False,
+        )
+        _diagnostic("after create_window hud")
+        self.windows = {
+            "lock": lock_window,
+            "overlay": overlay_window,
+            "pill": pill_window,
+            "hud": hud_window,
+        }
         self.window_visibility = {
             "lock": lock_initially_visible,
             "overlay": False,
             "pill": False,
+            "hud": False,
         }
         self._bind_window_events("overlay", overlay_window)
         self._bind_window_events("pill", pill_window)
+        self._bind_window_events("hud", hud_window)
 
     def _bind_window_events(self, key: str, window: webview.Window) -> None:
         window.events.loaded += lambda key=key: self._handle_loaded(key)
@@ -777,6 +844,14 @@ class SecretGroundsWebViewHost:
                 self.request_overlay_refresh()
             else:
                 self.render_pill()
+        elif key == "hud":
+            if window is not None:
+                move_window_exact(window, *hud_geometry(460, 110))
+                apply_click_through(window)
+            if self._pending_hud_text is not None:
+                text = self._pending_hud_text
+                self._pending_hud_text = None
+                self._fire_hud(text)
 
     def request_lock_refresh(self) -> None:
         _diagnostic("request lock refresh")
@@ -896,6 +971,12 @@ class SecretGroundsWebViewHost:
             f"visible={model.is_visible} collapsed={model.is_collapsed} "
             f"seconds={model.seconds_value} elapsed={model.is_elapsed}"
         )
+        # Remaining-time reminder HUD -- independent of the session card's
+        # own visible/collapsed state (the customer is playing), so fire it
+        # here before any of the card branching below.
+        if model.reminder_hud_token != self._last_hud_token:
+            self._last_hud_token = model.reminder_hud_token
+            self._fire_hud(model.reminder_hud_text)
         overlay = self.windows.get("overlay")
         pill = self.windows.get("pill")
         if not self.enable_overlay_window or not model.is_visible:
@@ -919,6 +1000,34 @@ class SecretGroundsWebViewHost:
 
     def render_pill(self) -> None:
         self._evaluate("pill", {"view": "pill", "logo_url": secret_grounds_logo_url(), "pc_name": self.pc_name})
+
+    def _fire_hud(self, text: str | None) -> None:
+        """Show the remaining-time reminder HUD once for a fresh crossing.
+        The HUD window's own JS/CSS handles the ~3s show + fade + auto-hide
+        (it then emits hud_done, and we hide the native window)."""
+        if not text:
+            return
+        hud = self.windows.get("hud")
+        if hud is None:
+            return
+        if "hud" not in self.loaded:
+            # First use: make the window visible off-screen so WebView2
+            # actually loads its content, then _handle_loaded("hud") fires
+            # the queued reminder.
+            self._pending_hud_text = text
+            self._set_window_visible("hud", True)
+            return
+        self._evaluate(
+            "hud",
+            {
+                "view": "hud",
+                "logo_url": secret_grounds_logo_url(),
+                "hud_text": text,
+                "hud_token": self._last_hud_token,
+            },
+        )
+        self._set_window_visible("hud", True)
+        self._set_window_on_top("hud", hud, True)
 
     def show_collapsed_control(self) -> None:
         pill = self.windows.get("pill")
@@ -1048,6 +1157,13 @@ class SecretGroundsWebViewHost:
                 height = max(32, min(60, int(payload.get("height", 38))))
                 self.last_pill_size = (width, height)
                 apply_pill_native_geometry(pill, width, height)
+            return
+        if action == "hud_done" and window_key == "hud":
+            # The HUD finished its show/fade; hide the native window until the
+            # next reminder. A stale token (a newer reminder already replaced
+            # it) means the newer animation is still running -- leave it.
+            if int(payload.get("token", -1)) == self._last_hud_token:
+                self._set_window_visible("hud", False)
             return
         if action == "collapse_overlay":
             if self.overlay_controller is not None:

@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode
+} from "react";
 import {
   fetchAdminPricing,
   fetchAdminSettings,
@@ -29,14 +37,55 @@ const categories: { key: CategoryKey; label: string; description: string }[] = [
   { key: "general", label: "General", description: "Shop identity and display defaults." },
   { key: "sessions", label: "Sessions", description: "Expiration, reminders, and manual end behavior." },
   { key: "customer_client", label: "Customer Client", description: "Customer-facing overlay and reminder presentation." },
-  { key: "wake_power", label: "Wake & Power", description: "Safe power behavior and read-only power safety status." },
-  { key: "members", label: "Members", description: "Supported member account defaults." },
-  { key: "reports", label: "Reports", description: "Default sales and export display preferences." },
   { key: "rates_pricing", label: "Rates & Pricing", description: "Edit Standard, VIP, and member session pricing." }
 ];
 
 function cloneSettings(settings: AdminSettings): AdminSettings {
   return JSON.parse(JSON.stringify(settings)) as AdminSettings;
+}
+
+// Curated IANA zones for the General timezone picker. The server validates
+// general.timezone_display against the full zoneinfo database and rejects
+// anything invalid (422), so this list only needs to cover the common
+// cases; a persisted value outside the list is still shown (see the
+// timezone render in the General panel). "Asia/Manila" is the shop default.
+const CURATED_TIMEZONES: string[] = [
+  "Asia/Manila",
+  "Asia/Hong_Kong",
+  "Asia/Singapore",
+  "Asia/Taipei",
+  "Asia/Shanghai",
+  "Asia/Tokyo",
+  "Asia/Seoul",
+  "Asia/Bangkok",
+  "Asia/Jakarta",
+  "Asia/Kuala_Lumpur",
+  "Asia/Kolkata",
+  "Asia/Dubai",
+  "Australia/Perth",
+  "Australia/Sydney",
+  "Pacific/Guam",
+  "Pacific/Auckland",
+  "Pacific/Honolulu",
+  "America/Los_Angeles",
+  "America/Denver",
+  "America/Chicago",
+  "America/New_York",
+  "America/Sao_Paulo",
+  "Europe/London",
+  "Europe/Paris",
+  "Europe/Berlin",
+  "Europe/Madrid",
+  "UTC"
+];
+
+// Options for the timezone <select>: the curated list, plus the currently
+// persisted value if it is something exotic set outside this UI.
+function timezoneOptions(current: string): [string, string][] {
+  const values = CURATED_TIMEZONES.includes(current)
+    ? CURATED_TIMEZONES
+    : [current, ...CURATED_TIMEZONES];
+  return values.map((zone) => [zone, zone]);
 }
 
 function formatMinutes(seconds: number): string {
@@ -66,6 +115,8 @@ export function SettingsManager() {
   });
   const [isSaving, setIsSaving] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+
+  const activeMeta = categories.find((category) => category.key === activeCategory);
 
   const hasUnsavedChanges = useMemo(() => {
     if (response === null || draft === null) {
@@ -121,8 +172,6 @@ export function SettingsManager() {
     try {
       const normalizedDraft = cloneSettings(draft);
       normalizedDraft.sessions.reminder_thresholds_seconds = parseThresholds(thresholdText);
-      normalizedDraft.wake_power.shutdown_on_expiration_enabled =
-        normalizedDraft.sessions.automatic_shutdown_on_expiration;
       const nextResponse = await updateAdminSettings(normalizedDraft);
       setResponse(nextResponse);
       setDraft(cloneSettings(nextResponse.settings));
@@ -196,9 +245,11 @@ export function SettingsManager() {
 
         {activeCategory !== "rates_pricing" ? (
           <div className={styles.toolbar}>
-            <div>
-              <strong>{categories.find((category) => category.key === activeCategory)?.label}</strong>
-              <span>{hasUnsavedChanges ? "Unsaved changes" : "Saved settings"}</span>
+            <div className={styles.toolbarStatus}>
+              <strong>{activeMeta?.label}</strong>
+              <span className={`${styles.statusPill} ${hasUnsavedChanges ? styles.statusPillDirty : styles.statusPillClean}`}>
+                {hasUnsavedChanges ? "Unsaved changes" : "All changes saved"}
+              </span>
             </div>
             <div className={styles.toolbarActions}>
               <button className={styles.secondaryButton} disabled={!hasUnsavedChanges || isSaving} onClick={resetUnsavedChanges} type="button">
@@ -215,168 +266,131 @@ export function SettingsManager() {
         ) : null}
 
         {activeCategory === "general" ? (
-          <SettingsPanel title="General">
-            <TextField
-              label="Shop display name"
-              onChange={(value) => updateDraft((settings) => ({ ...settings, general: { ...settings.general, shop_display_name: value } }))}
-              value={draft.general.shop_display_name}
-            />
-            <TextField
-              label="Optional subtitle"
-              onChange={(value) => updateDraft((settings) => ({ ...settings, general: { ...settings.general, shop_subtitle: value || null } }))}
-              value={draft.general.shop_subtitle ?? ""}
-            />
-            <TextField label="PC naming prefix" readOnly value={draft.general.pc_naming_prefix} />
-            <TextField
-              label="Timezone display"
-              onChange={(value) => updateDraft((settings) => ({ ...settings, general: { ...settings.general, timezone_display: value } }))}
-              value={draft.general.timezone_display}
-            />
-          </SettingsPanel>
+          <CategoryPanel description="Shop identity and how it is presented across the dashboard and customer screens." title="General">
+            <FieldGroup title="Shop identity">
+              <TextField
+                label="Shop display name"
+                onChange={(value) => updateDraft((settings) => ({ ...settings, general: { ...settings.general, shop_display_name: value } }))}
+                value={draft.general.shop_display_name}
+              />
+              <TextField
+                helper="Shown under the shop name where the layout allows it."
+                label="Optional subtitle"
+                onChange={(value) => updateDraft((settings) => ({ ...settings, general: { ...settings.general, shop_subtitle: value || null } }))}
+                value={draft.general.shop_subtitle ?? ""}
+              />
+              <SelectField
+                helper="Used for scheduled rate and promo windows. Defaults to Asia/Manila."
+                label="Timezone"
+                onChange={(value) => updateDraft((settings) => ({ ...settings, general: { ...settings.general, timezone_display: value } }))}
+                options={timezoneOptions(draft.general.timezone_display)}
+                value={draft.general.timezone_display}
+              />
+            </FieldGroup>
+          </CategoryPanel>
         ) : null}
 
         {activeCategory === "sessions" ? (
-          <SettingsPanel title="Sessions">
-            <NumberField
-              helper={`${formatMinutes(draft.sessions.expiration_grace_seconds)}. Applies only to future grace periods.`}
-              label="Expiration grace period"
-              max={600}
-              min={30}
-              onChange={(value) => updateDraft((settings) => ({ ...settings, sessions: { ...settings.sessions, expiration_grace_seconds: value } }))}
-              value={draft.sessions.expiration_grace_seconds}
-            />
-            <SwitchField
-              checked={draft.sessions.automatic_shutdown_on_expiration}
-              label="Automatic shutdown on capped-session expiration"
-              onChange={(checked) =>
-                updateDraft((settings) => ({
-                  ...settings,
-                  sessions: { ...settings.sessions, automatic_shutdown_on_expiration: checked },
-                  wake_power: { ...settings.wake_power, shutdown_on_expiration_enabled: checked }
-                }))
-              }
-            />
-            <TextField
-              helper="Comma-separated seconds, descending. Example: 900, 300, 60"
-              label="Reminder thresholds"
-              onChange={setThresholdText}
-              value={thresholdText}
-            />
-            <SelectField
-              label="Manual session-end default behavior"
-              onChange={(value) => updateDraft((settings) => ({ ...settings, sessions: { ...settings.sessions, manual_end_default_behavior: value as AdminSettings["sessions"]["manual_end_default_behavior"] } }))}
-              options={[
-                ["lock_only", "Lock only"],
-                ["lock_and_settle", "Lock and settle"]
-              ]}
-              value={draft.sessions.manual_end_default_behavior}
-            />
-          </SettingsPanel>
+          <CategoryPanel description="How running sessions expire, warn the customer, and end." title="Sessions">
+            <FieldGroup title="Expiration">
+              <NumberField
+                helper={`${formatMinutes(draft.sessions.expiration_grace_seconds)}. Applies only to future grace periods.`}
+                label="Expiration grace period"
+                max={600}
+                min={30}
+                onChange={(value) => updateDraft((settings) => ({ ...settings, sessions: { ...settings.sessions, expiration_grace_seconds: value } }))}
+                value={draft.sessions.expiration_grace_seconds}
+              />
+              <SwitchField
+                checked={draft.sessions.automatic_shutdown_on_expiration}
+                helper="Powers off the PC once a capped session's grace period runs out."
+                label="Automatic shutdown on capped-session expiration"
+                onChange={(checked) =>
+                  updateDraft((settings) => ({
+                    ...settings,
+                    sessions: { ...settings.sessions, automatic_shutdown_on_expiration: checked }
+                  }))
+                }
+              />
+            </FieldGroup>
+            <FieldGroup title="Reminders">
+              <TextField
+                helper="Comma-separated seconds, descending. Example: 900, 300, 60"
+                label="Reminder thresholds"
+                onChange={setThresholdText}
+                value={thresholdText}
+              />
+            </FieldGroup>
+          </CategoryPanel>
         ) : null}
 
         {activeCategory === "customer_client" ? (
-          <SettingsPanel title="Customer Client">
-            <SwitchField
-              checked={draft.customer_client.active_overlay_enabled}
-              label="Active overlay enabled"
-              onChange={(checked) => updateDraft((settings) => ({ ...settings, customer_client: { ...settings.customer_client, active_overlay_enabled: checked } }))}
-            />
-            <SwitchField
-              checked={draft.customer_client.reminder_sounds_enabled}
-              label="Reminder sounds enabled"
-              onChange={(checked) => updateDraft((settings) => ({ ...settings, customer_client: { ...settings.customer_client, reminder_sounds_enabled: checked } }))}
-            />
-            <SwitchField
-              checked={draft.customer_client.final_warning_sound_enabled}
-              label="Final warning sound enabled"
-              onChange={(checked) => updateDraft((settings) => ({ ...settings, customer_client: { ...settings.customer_client, final_warning_sound_enabled: checked } }))}
-            />
-            <SelectField
-              label="Overlay position"
-              onChange={(value) => updateDraft((settings) => ({ ...settings, customer_client: { ...settings.customer_client, overlay_position: value as AdminSettings["customer_client"]["overlay_position"] } }))}
-              options={[
-                ["top-right", "Top right"],
-                ["top-left", "Top left"],
-                ["bottom-right", "Bottom right"],
-                ["bottom-left", "Bottom left"]
-              ]}
-              value={draft.customer_client.overlay_position}
-            />
-            <TextField
-              label="Customer-facing branding text"
-              onChange={(value) => updateDraft((settings) => ({ ...settings, customer_client: { ...settings.customer_client, customer_branding_text: value } }))}
-              value={draft.customer_client.customer_branding_text}
-            />
-          </SettingsPanel>
-        ) : null}
-
-        {activeCategory === "wake_power" ? (
-          <SettingsPanel title="Wake & Power">
-            <SwitchField
-              checked={draft.wake_power.wake_on_lan_enabled}
-              label="Wake-on-LAN enabled"
-              onChange={(checked) => updateDraft((settings) => ({ ...settings, wake_power: { ...settings.wake_power, wake_on_lan_enabled: checked } }))}
-            />
-            <SwitchField checked={draft.wake_power.shutdown_on_expiration_enabled} label="Shutdown-on-expiration enabled" readOnly />
-            <NumberField
-              helper="Used for expected shutdown/offline diagnostics. Does not change power executables."
-              label="Expected shutdown timeout"
-              max={300}
-              min={10}
-              onChange={(value) => updateDraft((settings) => ({ ...settings, wake_power: { ...settings.wake_power, expected_shutdown_timeout_seconds: value } }))}
-              value={draft.wake_power.expected_shutdown_timeout_seconds}
-            />
-            <TextField label="Power command safety status" readOnly value={draft.wake_power.power_command_safety_status} />
-          </SettingsPanel>
-        ) : null}
-
-        {activeCategory === "members" ? (
-          <SettingsPanel title="Members">
-            <TextField label="Default member PIN policy" readOnly value={draft.members.default_member_pin_policy} />
-            <p className={styles.panelNote}>Member PINs are optional in the current backend. Required-by-default PIN policy is intentionally not enabled in this milestone.</p>
-          </SettingsPanel>
-        ) : null}
-
-        {activeCategory === "reports" ? (
-          <SettingsPanel title="Reports">
-            <SelectField
-              label="Default Sales date period"
-              onChange={(value) => updateDraft((settings) => ({ ...settings, reports: { ...settings.reports, default_sales_period: value as AdminSettings["reports"]["default_sales_period"] } }))}
-              options={[
-                ["today", "Today"],
-                ["yesterday", "Yesterday"],
-                ["this_week", "This week"],
-                ["this_month", "This month"]
-              ]}
-              value={draft.reports.default_sales_period}
-            />
-            <TextField
-              label="CSV export timezone/display"
-              onChange={(value) => updateDraft((settings) => ({ ...settings, reports: { ...settings.reports, csv_timezone_display: value } }))}
-              value={draft.reports.csv_timezone_display}
-            />
-          </SettingsPanel>
+          <CategoryPanel description="What the customer sees and hears on their screen during a session." title="Customer Client">
+            <FieldGroup title="Overlay">
+              <SwitchField
+                checked={draft.customer_client.active_overlay_enabled}
+                helper="Shows the live time-remaining overlay on the customer screen."
+                label="Active overlay enabled"
+                onChange={(checked) => updateDraft((settings) => ({ ...settings, customer_client: { ...settings.customer_client, active_overlay_enabled: checked } }))}
+              />
+              <SelectField
+                label="Overlay position"
+                onChange={(value) => updateDraft((settings) => ({ ...settings, customer_client: { ...settings.customer_client, overlay_position: value as AdminSettings["customer_client"]["overlay_position"] } }))}
+                options={[
+                  ["top-right", "Top right"],
+                  ["top-left", "Top left"],
+                  ["bottom-right", "Bottom right"],
+                  ["bottom-left", "Bottom left"]
+                ]}
+                value={draft.customer_client.overlay_position}
+              />
+              <TextField
+                label="Customer-facing branding text"
+                onChange={(value) => updateDraft((settings) => ({ ...settings, customer_client: { ...settings.customer_client, customer_branding_text: value } }))}
+                value={draft.customer_client.customer_branding_text}
+              />
+            </FieldGroup>
+            <FieldGroup title="Sounds">
+              <SwitchField
+                checked={draft.customer_client.reminder_sounds_enabled}
+                helper="Plays a chime at each reminder threshold."
+                label="Reminder sounds enabled"
+                onChange={(checked) => updateDraft((settings) => ({ ...settings, customer_client: { ...settings.customer_client, reminder_sounds_enabled: checked } }))}
+              />
+              <SwitchField
+                checked={draft.customer_client.final_warning_sound_enabled}
+                helper="Plays a distinct alert as the session reaches its final warning."
+                label="Final warning sound enabled"
+                onChange={(checked) => updateDraft((settings) => ({ ...settings, customer_client: { ...settings.customer_client, final_warning_sound_enabled: checked } }))}
+              />
+            </FieldGroup>
+          </CategoryPanel>
         ) : null}
 
         {activeCategory === "rates_pricing" ? <RatesPricingPanel /> : null}
 
         {activeCategory !== "rates_pricing" ? (
           <section className={styles.diagnostics}>
-            <h2>Protected Configuration</h2>
-            <div className={styles.diagnosticGrid}>
+            <div className={styles.diagnosticsHead}>
+              <h2>Protected Configuration</h2>
+              <p className={styles.diagnosticsLead}>
+                Fixed in code or the deployment environment. Listed for reference — not editable from Settings.
+              </p>
+            </div>
+            <dl className={styles.diagnosticList}>
               {Object.entries(response?.environment_only ?? {}).map(([key, value]) => (
-                <div key={key}>
-                  <span>{key.replaceAll("_", " ")}</span>
-                  <strong>{value}</strong>
+                <div className={styles.diagnosticItem} key={key}>
+                  <dt>{key.replaceAll("_", " ")}</dt>
+                  <dd>{value}</dd>
                 </div>
               ))}
               {Object.entries(response?.read_only ?? {}).map(([key, value]) => (
-                <div key={key}>
-                  <span>{key.replaceAll("_", " ")}</span>
-                  <strong>{value}</strong>
+                <div className={styles.diagnosticItem} key={key}>
+                  <dt>{key.replaceAll("_", " ")}</dt>
+                  <dd>{value}</dd>
                 </div>
               ))}
-            </div>
+            </dl>
           </section>
         ) : null}
       </div>
@@ -975,12 +989,66 @@ function RatesPricingPanel() {
   );
 }
 
-function SettingsPanel({ children, title }: { children: ReactNode; title: string }) {
+function CategoryPanel({
+  children,
+  description,
+  title
+}: {
+  children: ReactNode;
+  description?: string;
+  title: string;
+}) {
   return (
     <section className={styles.panel}>
-      <h2>{title}</h2>
-      <div className={styles.formGrid}>{children}</div>
+      <div className={styles.panelHead}>
+        <h2>{title}</h2>
+        {description ? <p className={styles.panelLead}>{description}</p> : null}
+      </div>
+      {children}
     </section>
+  );
+}
+
+function FieldGroup({
+  children,
+  note,
+  title
+}: {
+  children: ReactNode;
+  note?: string;
+  title: string;
+}) {
+  return (
+    <div className={styles.group}>
+      <div className={styles.groupHead}>
+        <h3 className={styles.groupTitle}>{title}</h3>
+        {note ? <p className={styles.groupNote}>{note}</p> : null}
+      </div>
+      <div className={styles.rows}>{children}</div>
+    </div>
+  );
+}
+
+// One setting = one row: label (+ optional hint) on the left, the control on
+// the right. Wrapping the whole row in <label> keeps the click/focus target
+// association without per-field ids.
+function Row({
+  children,
+  hint,
+  label
+}: {
+  children: ReactNode;
+  hint?: string;
+  label: string;
+}) {
+  return (
+    <label className={styles.row}>
+      <span className={styles.rowLabel}>
+        <span className={styles.rowLabelText}>{label}</span>
+        {hint ? <span className={styles.rowHint}>{hint}</span> : null}
+      </span>
+      <span className={styles.rowControl}>{children}</span>
+    </label>
   );
 }
 
@@ -998,15 +1066,14 @@ function TextField({
   value: string;
 }) {
   return (
-    <label className={styles.field}>
-      <span>{label}</span>
+    <Row hint={helper} label={label}>
       <input
+        className={styles.control}
         onChange={(event) => onChange?.(event.target.value)}
         readOnly={readOnly}
         value={value}
       />
-      {helper ? <small>{helper}</small> : null}
-    </label>
+    </Row>
   );
 }
 
@@ -1026,9 +1093,9 @@ function NumberField({
   value: number;
 }) {
   return (
-    <label className={styles.field}>
-      <span>{label}</span>
+    <Row hint={helper} label={label}>
       <input
+        className={styles.control}
         inputMode="numeric"
         max={max}
         min={min}
@@ -1036,56 +1103,181 @@ function NumberField({
         type="number"
         value={value}
       />
-      {helper ? <small>{helper}</small> : null}
-    </label>
+    </Row>
   );
 }
 
+// Custom listbox. A native <select>'s open popup is drawn by the OS and can't
+// be themed, so this is a button + role="listbox" following the WAI-ARIA
+// listbox pattern (roving aria-activedescendant, type-agnostic key handling,
+// click-outside + Escape to close, focus returns to the trigger).
 function SelectField({
+  helper,
   label,
   onChange,
   options,
   value
 }: {
+  helper?: string;
   label: string;
   onChange: (value: string) => void;
   options: [string, string][];
   value: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const baseId = useId();
+
+  const selectedIndex = options.findIndex(([optionValue]) => optionValue === value);
+  const selectedLabel = selectedIndex >= 0 ? options[selectedIndex][1] : value;
+
+  function openList() {
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
+    setOpen(true);
+  }
+
+  function closeList(returnFocus: boolean) {
+    setOpen(false);
+    if (returnFocus) {
+      triggerRef.current?.focus();
+    }
+  }
+
+  function commit(index: number) {
+    const option = options[index];
+    if (option) {
+      onChange(option[0]);
+    }
+    closeList(true);
+  }
+
+  // While open: keep the active option scrolled into view, and close on any
+  // pointer press outside the widget.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    listRef.current?.focus();
+    function onPointerDown(event: PointerEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (open) {
+      (listRef.current?.children[activeIndex] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
+    }
+  }, [open, activeIndex]);
+
+  function onTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openList();
+    }
+  }
+
+  function onListKeyDown(event: ReactKeyboardEvent<HTMLUListElement>) {
+    if (event.key === "Escape" || event.key === "Tab") {
+      closeList(event.key === "Escape");
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.min(options.length - 1, index + 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.max(0, index - 1));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setActiveIndex(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setActiveIndex(options.length - 1);
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      commit(activeIndex);
+    }
+  }
+
   return (
-    <label className={styles.field}>
-      <span>{label}</span>
-      <select onChange={(event) => onChange(event.target.value)} value={value}>
-        {options.map(([optionValue, labelText]) => (
-          <option key={optionValue} value={optionValue}>
-            {labelText}
-          </option>
-        ))}
-      </select>
-    </label>
+    <Row hint={helper} label={label}>
+      {/* Stop clicks reaching the wrapping <label>, which would re-dispatch
+          them to the trigger and reopen the list right after a selection. */}
+      <div className={styles.selectWrap} onClick={(event) => event.stopPropagation()} ref={wrapRef}>
+        <button
+          aria-controls={`${baseId}-list`}
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          className={styles.selectTrigger}
+          onClick={() => (open ? closeList(false) : openList())}
+          onKeyDown={onTriggerKeyDown}
+          ref={triggerRef}
+          type="button"
+        >
+          <span>{selectedLabel}</span>
+          <svg aria-hidden="true" className={styles.selectChevron} viewBox="0 0 24 24">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
+        {open ? (
+          <ul
+            aria-activedescendant={`${baseId}-opt-${activeIndex}`}
+            aria-label={label}
+            className={styles.selectPopup}
+            id={`${baseId}-list`}
+            onKeyDown={onListKeyDown}
+            ref={listRef}
+            role="listbox"
+            tabIndex={-1}
+          >
+            {options.map(([optionValue, optionLabel], index) => (
+              <li
+                aria-selected={optionValue === value}
+                className={`${styles.selectOption} ${index === activeIndex ? styles.selectOptionActive : ""}`}
+                id={`${baseId}-opt-${index}`}
+                key={optionValue}
+                onClick={() => commit(index)}
+                onMouseEnter={() => setActiveIndex(index)}
+                role="option"
+              >
+                {optionLabel}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </Row>
   );
 }
 
 function SwitchField({
   checked,
+  helper,
   label,
   onChange,
   readOnly = false
 }: {
   checked: boolean;
+  helper?: string;
   label: string;
   onChange?: (checked: boolean) => void;
   readOnly?: boolean;
 }) {
   return (
-    <label className={styles.switchField}>
-      <span>{label}</span>
+    <Row hint={helper} label={label}>
       <input
         checked={checked}
+        className={styles.toggle}
         disabled={readOnly}
         onChange={(event) => onChange?.(event.target.checked)}
+        role="switch"
         type="checkbox"
       />
-    </label>
+    </Row>
   );
 }

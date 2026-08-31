@@ -11,6 +11,34 @@ from client.utils import get_logo_path
 
 DEFAULT_REMINDER_THRESHOLDS_SECONDS = [15 * 60, 5 * 60, 60, 0]
 TIME_ADDED_CONFIRMATION_TICKS = 6
+# Milliseconds the Tk-fallback reminder HUD stays on screen. The production
+# WebView HUD runs its own CSS-timed ~3.4s show/fade; this is the plain
+# Tk equivalent (no fade -- Tk -alpha tweening is jittery).
+REMINDER_HUD_TK_MS = 3200
+
+
+def _apply_tk_click_through(window) -> None:
+    """Best-effort: let mouse/keyboard fall through the Tk HUD to the game
+    underneath (Windows only). Any failure just leaves a normal top-most
+    borderless window, which is an acceptable fallback."""
+    try:
+        import ctypes
+
+        window.update_idletasks()
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
+        gwl_exstyle = -20
+        ws_ex_layered = 0x00080000
+        ws_ex_transparent = 0x00000020
+        ws_ex_noactivate = 0x08000000
+        current = user32.GetWindowLongW(hwnd, gwl_exstyle)
+        user32.SetWindowLongW(
+            hwnd,
+            gwl_exstyle,
+            current | ws_ex_layered | ws_ex_transparent | ws_ex_noactivate,
+        )
+    except Exception:
+        pass
 
 
 @dataclass(frozen=True)
@@ -35,6 +63,11 @@ class CustomerOverlayViewModel:
     used_seconds: int = 0
     can_lock_pc: bool = False
     presentation_token: int = 0
+    # Remaining-time reminder HUD: the text for the current crossing and a
+    # monotonic token bumped on every fresh crossing. Consumers show the HUD
+    # once per token change; the HUD's own timer handles the auto-dismiss.
+    reminder_hud_text: str | None = None
+    reminder_hud_token: int = 0
 
 
 @dataclass
@@ -52,6 +85,12 @@ class CustomerOverlayState:
     fired_thresholds: set[int] = field(default_factory=set)
     notice: str | None = None
     notice_ticks_remaining: int = 0
+    # Remaining-time reminder HUD (rendered as a separate lightweight overlay
+    # over gameplay, NOT in the sidebar notice slot). reminder_hud_token is
+    # bumped once per fresh threshold crossing; reminder_hud_text is the
+    # "5 minutes left" style string for that crossing.
+    reminder_hud_text: str | None = None
+    reminder_hud_token: int = 0
     # Wall-clock elapsed since this controller last saw a *new* session
     # start (client.py's start_local_session with is_new_session=True), used
     # purely for the "USED TIME" stat. Deliberately separate from
@@ -120,6 +159,12 @@ class CustomerOverlayController:
         # instance -- Tkinter only supports one real Tk() per process safely.
         self.collapsed_root = None
         self.collapsed_text_label = None
+        # Tk-fallback reminder HUD (lazily built the first time a threshold is
+        # crossed). Separate borderless Toplevel over gameplay, not the card.
+        self._hud_root = None
+        self._hud_text_label = None
+        self._hud_hide_job = None
+        self._last_hud_token = 0
         self._button_row = None
         self._identity_row = None
         self._used_time_row = None
@@ -163,6 +208,7 @@ class CustomerOverlayController:
             self.state.last_seconds_value = None
             self.state.notice = None
             self.state.notice_ticks_remaining = 0
+            self.state.reminder_hud_text = None
             if is_new_session:
                 # A genuinely new (or resumed-from-grace) session should be
                 # visible, not silently stuck in whatever collapsed state a
@@ -202,6 +248,7 @@ class CustomerOverlayController:
             self.state.fired_thresholds.clear()
             self.state.notice = None
             self.state.notice_ticks_remaining = 0
+            self.state.reminder_hud_text = None
         self.schedule_gui_refresh()
         print("Customer overlay hidden.")
 
@@ -240,6 +287,17 @@ class CustomerOverlayController:
                     if crossed_threshold and threshold not in self.state.fired_thresholds:
                         self.state.fired_thresholds.add(threshold)
                         messages.append(self.build_reminder_message(threshold))
+                        # Signal the remaining-time reminder HUD for a genuine
+                        # mid-session crossing. Skip the 0 "time's up" sentinel
+                        # and anything already at/below zero -- expiration/grace
+                        # handling owns that moment. The HUD renders as a
+                        # separate lightweight overlay over gameplay; it never
+                        # touches the sidebar notice slot. Descending list, so
+                        # if several cross in one tick the smallest/most-urgent
+                        # one wins (its token bump is last).
+                        if threshold > 0 and seconds_value > 0:
+                            self.state.reminder_hud_text = self._format_reminder_text(threshold)
+                            self.state.reminder_hud_token += 1
         for message in messages:
             print(f"Customer reminder: {message}")
         self.schedule_gui_refresh()
@@ -288,6 +346,8 @@ class CustomerOverlayController:
                 last_seconds_value=self.state.last_seconds_value,
                 notice=self.state.notice,
                 notice_ticks_remaining=self.state.notice_ticks_remaining,
+                reminder_hud_text=self.state.reminder_hud_text,
+                reminder_hud_token=self.state.reminder_hud_token,
                 session_started_monotonic=self.state.session_started_monotonic,
                 presentation_token=self.state.presentation_token,
             )
@@ -331,6 +391,8 @@ class CustomerOverlayController:
             # this client-side gate alone.
             can_lock_pc=is_member_session and self.lock_pc_action is not None,
             presentation_token=state.presentation_token,
+            reminder_hud_text=state.reminder_hud_text,
+            reminder_hud_token=state.reminder_hud_token,
         )
 
     def _tick_notice_locked(self) -> None:
@@ -349,6 +411,25 @@ class CustomerOverlayController:
         if threshold == 60:
             return "Your session will end in 1 minute. Please save your work."
         return "Your time has ended. Please proceed to the cashier."
+
+    @staticmethod
+    def _format_reminder_text(seconds: int) -> str:
+        """Short, generic 'time left' banner text for any valid threshold.
+
+        900 -> "15 minutes left", 300 -> "5 minutes left", 60 -> "1 minute
+        left", 600 -> "10 minutes left", 90 -> "1 minute 30 seconds left".
+        Only called for a positive threshold (the 0 sentinel is skipped).
+        """
+        hours, remainder = divmod(max(0, seconds), 3600)
+        minutes, secs = divmod(remainder, 60)
+        parts: list[str] = []
+        if hours:
+            parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+        if minutes:
+            parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+        if secs or not parts:
+            parts.append(f"{secs} second{'s' if secs != 1 else ''}")
+        return f"{' '.join(parts)} left"
 
     def ensure_gui(self) -> None:
         if not self.enable_gui or self.gui_started:
@@ -745,6 +826,84 @@ class CustomerOverlayController:
             theme.fade_in(self.collapsed_root, duration_ms=100, steps=6)
         self.collapsed_root.attributes("-topmost", True)
 
+    def _show_tk_reminder_hud(self, text: str) -> None:
+        """Tk-fallback remaining-time HUD: a small borderless strip near the
+        top-centre of the screen, over gameplay, auto-hidden after a few
+        seconds. Best-effort and fully guarded -- any failure just means the
+        HUD does not appear on the Tk path (the WebView path is the
+        production one)."""
+        if self.root is None:
+            return
+        try:
+            import tkinter as tk
+
+            if self._hud_root is None:
+                hud = tk.Toplevel(self.root)
+                hud.overrideredirect(True)
+                hud.attributes("-topmost", True)
+                try:
+                    hud.attributes("-alpha", 0.96)
+                except Exception:
+                    pass
+                hud.configure(bg="#0B1220")
+                strip = tk.Frame(
+                    hud,
+                    bg="#0B1220",
+                    padx=14,
+                    pady=7,
+                    highlightthickness=1,
+                    highlightbackground=theme.ACCENT_CYAN,
+                )
+                strip.pack(fill="both", expand=True)
+                mark = self._build_compact_mark(tk, strip, bg="#0B1220")
+                mark.pack(side="left")
+                self._hud_text_label = tk.Label(
+                    strip,
+                    text="",
+                    bg="#0B1220",
+                    fg=theme.ACCENT_CYAN,
+                    font=("Segoe UI", 11, "bold"),
+                )
+                self._hud_text_label.pack(side="left", padx=(9, 0))
+                hud.withdraw()
+                self._hud_root = hud
+                _apply_tk_click_through(hud)
+
+            self._hud_text_label.configure(text=text)
+            self._hud_root.deiconify()
+            self._hud_root.update_idletasks()
+            width = max(1, self._hud_root.winfo_reqwidth())
+            height = max(1, self._hud_root.winfo_reqheight())
+            screen_width = self._hud_root.winfo_screenwidth()
+            screen_height = self._hud_root.winfo_screenheight()
+            x = max(0, (screen_width - width) // 2)
+            # Upper-middle, clearly above centre.
+            y = max(0, int(screen_height * 0.20))
+            self._hud_root.geometry(f"{width}x{height}+{x}+{y}")
+            self._hud_root.attributes("-topmost", True)
+            theme.apply_rounded_corners(self._hud_root, width, height, theme.RADIUS_PILL)
+
+            if self._hud_hide_job is not None:
+                try:
+                    self._hud_root.after_cancel(self._hud_hide_job)
+                except Exception:
+                    pass
+            token = self._last_hud_token
+            self._hud_hide_job = self._hud_root.after(
+                REMINDER_HUD_TK_MS, lambda t=token: self._hide_tk_reminder_hud(t)
+            )
+        except Exception as error:
+            print(f"Tk reminder HUD unavailable: {error}")
+
+    def _hide_tk_reminder_hud(self, token: int) -> None:
+        # Ignore a stale timer if a newer reminder has since taken over.
+        if self._hud_root is None or token != self._last_hud_token:
+            return
+        try:
+            self._hud_root.withdraw()
+        except Exception:
+            pass
+
     def handle_minimize_clicked(self) -> None:
         with self.lock:
             self.state.is_collapsed = True
@@ -835,6 +994,17 @@ class CustomerOverlayController:
         with self.lock:
             is_visible = self.state.is_visible
             is_collapsed = self.state.is_collapsed
+            hud_token = self.state.reminder_hud_token
+            hud_text = self.state.reminder_hud_text
+
+        # The reminder HUD is independent of the session card: it must still
+        # fire while the card is collapsed to the pill (the customer is
+        # playing), so this runs before the is_visible / is_collapsed
+        # early-returns below.
+        if hud_token != self._last_hud_token:
+            self._last_hud_token = hud_token
+            if hud_text:
+                self._show_tk_reminder_hud(hud_text)
 
         if not is_visible:
             self.root.withdraw()

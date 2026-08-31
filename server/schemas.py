@@ -1,6 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -113,9 +114,7 @@ RemoteCommandStatus = Literal[
     "timed_out",
 ]
 MessageSeverity = Literal["info", "warning", "urgent"]
-ManualEndBehavior = Literal["lock_only", "lock_and_settle"]
 OverlayPosition = Literal["top-right", "top-left", "bottom-right", "bottom-left"]
-SalesPeriodSetting = Literal["today", "yesterday", "this_week", "this_month"]
 
 
 class PCRegistration(BaseModel):
@@ -216,10 +215,9 @@ class SettingsGeneral(BaseModel):
 
     shop_display_name: str = Field(..., min_length=1, max_length=60)
     shop_subtitle: str | None = Field(default=None, max_length=80)
-    pc_naming_prefix: str = Field(..., min_length=1, max_length=12)
     timezone_display: str = Field(..., min_length=1, max_length=64)
 
-    @field_validator("shop_display_name", "shop_subtitle", "pc_naming_prefix", "timezone_display")
+    @field_validator("shop_display_name", "shop_subtitle", "timezone_display")
     @classmethod
     def clean_display_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -229,6 +227,23 @@ class SettingsGeneral(BaseModel):
             raise ValueError("Text value must not be blank")
         return cleaned
 
+    @field_validator("timezone_display")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        """Runs after clean_display_text. The stored string is the single
+        authoritative shop timezone (server.admin_settings_service
+        .get_runtime_shop_timezone_display -> rate eligibility + promo
+        windows), so it must be a real IANA zone -- reject an invalid one
+        here (422) instead of letting resolve_shop_timezone() silently
+        fall back to the default or UTC."""
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError, KeyError) as error:
+            raise ValueError(
+                f"{value!r} is not a valid IANA timezone name (for example 'Asia/Manila')."
+            ) from error
+        return value
+
 
 class SettingsSessions(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -236,7 +251,6 @@ class SettingsSessions(BaseModel):
     expiration_grace_seconds: int = Field(..., ge=30, le=600)
     automatic_shutdown_on_expiration: bool
     reminder_thresholds_seconds: list[int] = Field(..., min_length=1, max_length=6)
-    manual_end_default_behavior: ManualEndBehavior
 
     @field_validator("reminder_thresholds_seconds")
     @classmethod
@@ -270,45 +284,12 @@ class SettingsCustomerClient(BaseModel):
         return cleaned
 
 
-class SettingsWakePower(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    wake_on_lan_enabled: bool
-    shutdown_on_expiration_enabled: bool
-    expected_shutdown_timeout_seconds: int = Field(..., ge=10, le=300)
-    power_command_safety_status: str
-
-
-class SettingsMembers(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    default_member_pin_policy: Literal["optional"] = "optional"
-
-
-class SettingsReports(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    default_sales_period: SalesPeriodSetting
-    csv_timezone_display: str = Field(..., min_length=1, max_length=64)
-
-    @field_validator("csv_timezone_display")
-    @classmethod
-    def clean_timezone(cls, value: str) -> str:
-        cleaned = " ".join(value.replace("\x00", "").replace("<", "").replace(">", "").split())
-        if not cleaned:
-            raise ValueError("Timezone display must not be blank")
-        return cleaned
-
-
 class AdminSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     general: SettingsGeneral
     sessions: SettingsSessions
     customer_client: SettingsCustomerClient
-    wake_power: SettingsWakePower
-    members: SettingsMembers
-    reports: SettingsReports
 
 
 class AdminSettingsResponse(BaseModel):
@@ -328,9 +309,6 @@ class AdminSettingsResetRequest(BaseModel):
         "general",
         "sessions",
         "customer_client",
-        "wake_power",
-        "members",
-        "reports",
         "all",
     ] = "all"
 

@@ -7,6 +7,7 @@ import type {
   AdminPricingUpdate,
   AdminSettings,
   AdminSettingsResponse,
+  ClientSafeSettings,
   CurrentUser,
   ForceEndSessionResponse,
   IncomeGroup,
@@ -188,6 +189,13 @@ export async function fetchCurrentUser(): Promise<CurrentUser> {
 
 export async function fetchAdminSettings(): Promise<AdminSettingsResponse> {
   return requestJson<AdminSettingsResponse>(`${getApiBaseUrl()}/settings`, {
+    cache: "no-store"
+  });
+}
+
+// Public (unauthenticated) shop-safe settings -- e.g. the header shop name.
+export async function fetchClientSettings(): Promise<ClientSafeSettings> {
+  return requestJson<ClientSafeSettings>(`${getApiBaseUrl()}/client-settings`, {
     cache: "no-store"
   });
 }

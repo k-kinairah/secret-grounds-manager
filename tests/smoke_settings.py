@@ -29,7 +29,10 @@ def main() -> None:
         service = AdminSettingsService()
         defaults = service.get_settings()
         assert defaults.sessions.expiration_grace_seconds == 120
-        assert defaults.wake_power.power_command_safety_status.startswith("Test mode")
+        # power_command_safety_status is server-generated and lives only in the
+        # read-only Protected Configuration map (the Wake & Power category was
+        # removed); it is always TEST_MODE-derived and never client-writable.
+        assert service.get_response().read_only["power_command_safety_status"].startswith("Test mode")
 
         mama = user_repository.get_user("operator_mama")
         admin = user_repository.get_by_username("admin")
@@ -54,13 +57,14 @@ def main() -> None:
         settings["sessions"]["expiration_grace_seconds"] = 180
         settings["sessions"]["reminder_thresholds_seconds"] = [600, 120, 30]
         settings["customer_client"]["customer_branding_text"] = "Ask the cashier for more time."
-        settings["wake_power"]["power_command_safety_status"] = "attempted spoof"
-        settings["members"]["default_member_pin_policy"] = "optional"
         updated = update_admin_settings(AdminSettingsUpdateRequest.model_validate(settings), admin)
         updated_settings = updated.settings.model_dump(mode="json")
         assert updated_settings["general"]["shop_display_name"] == "Secret Grounds Test"
         assert updated_settings["sessions"]["expiration_grace_seconds"] == 180
-        assert updated_settings["wake_power"]["power_command_safety_status"].startswith("Test mode")
+        # The retired Wake & Power category is not persisted, and the
+        # server-generated safety status stays TEST_MODE-derived.
+        assert "wake_power" not in updated_settings
+        assert updated.read_only["power_command_safety_status"].startswith("Test mode")
 
         invalid_grace = dict(updated_settings)
         invalid_grace["sessions"] = dict(updated_settings["sessions"])
@@ -90,6 +94,41 @@ def main() -> None:
             pass
         else:
             raise AssertionError("Unknown settings must be rejected")
+
+        # timezone_display must be a real IANA zone -- an invalid one is
+        # rejected (422) rather than silently falling back at runtime.
+        for bad_timezone in ("Not/AZone", "Manila", "GMT+8", "   "):
+            invalid_timezone = dict(updated_settings)
+            invalid_timezone["general"] = dict(updated_settings["general"])
+            invalid_timezone["general"]["timezone_display"] = bad_timezone
+            try:
+                AdminSettingsUpdateRequest.model_validate(invalid_timezone)
+            except Exception:
+                pass
+            else:
+                raise AssertionError(
+                    f"Invalid timezone {bad_timezone!r} should be rejected"
+                )
+
+        # A valid, non-default IANA zone is accepted and persisted, and the
+        # runtime shop-timezone source reflects it.
+        from server.admin_settings_service import get_runtime_shop_timezone_display
+
+        valid_timezone = dict(updated_settings)
+        valid_timezone["general"] = dict(updated_settings["general"])
+        valid_timezone["general"]["timezone_display"] = "Asia/Tokyo"
+        tz_updated = update_admin_settings(
+            AdminSettingsUpdateRequest.model_validate(valid_timezone), admin
+        )
+        assert tz_updated.settings.general.timezone_display == "Asia/Tokyo"
+        assert get_runtime_shop_timezone_display() == "Asia/Tokyo"
+        # Restore the default so later assertions in this test are unaffected.
+        restore_timezone = valid_timezone
+        restore_timezone["general"]["timezone_display"] = "Asia/Manila"
+        update_admin_settings(
+            AdminSettingsUpdateRequest.model_validate(restore_timezone), admin
+        )
+        assert get_runtime_shop_timezone_display() == "Asia/Manila"
 
         safe_payload = service.get_client_settings().model_dump(mode="json")
         assert safe_payload["shop_display_name"] == "Secret Grounds Test"

@@ -696,22 +696,32 @@ export interface SalesReport {
   pending_attribution_count: number;
 }
 
-export type ManualEndBehavior = "lock_only" | "lock_and_settle";
 export type OverlayPosition = "top-right" | "top-left" | "bottom-right" | "bottom-left";
-export type SettingsSalesPeriod = "today" | "yesterday" | "this_week" | "this_month";
+
+// Mirrors server/schemas.py's ClientSafeSettings -- the payload of the public
+// (unauthenticated) GET /client-settings. The customer client already reads
+// shop_display_name from here; the dashboard header uses it too.
+export interface ClientSafeSettings {
+  shop_display_name: string;
+  shop_subtitle: string | null;
+  reminder_thresholds_seconds: number[];
+  reminder_sounds_enabled: boolean;
+  final_warning_sound_enabled: boolean;
+  active_overlay_enabled: boolean;
+  overlay_position: OverlayPosition;
+  customer_branding_text: string;
+}
 
 export interface AdminSettings {
   general: {
     shop_display_name: string;
     shop_subtitle: string | null;
-    pc_naming_prefix: string;
     timezone_display: string;
   };
   sessions: {
     expiration_grace_seconds: number;
     automatic_shutdown_on_expiration: boolean;
     reminder_thresholds_seconds: number[];
-    manual_end_default_behavior: ManualEndBehavior;
   };
   customer_client: {
     reminder_sounds_enabled: boolean;
@@ -719,19 +729,6 @@ export interface AdminSettings {
     active_overlay_enabled: boolean;
     overlay_position: OverlayPosition;
     customer_branding_text: string;
-  };
-  wake_power: {
-    wake_on_lan_enabled: boolean;
-    shutdown_on_expiration_enabled: boolean;
-    expected_shutdown_timeout_seconds: number;
-    power_command_safety_status: string;
-  };
-  members: {
-    default_member_pin_policy: "optional";
-  };
-  reports: {
-    default_sales_period: SettingsSalesPeriod;
-    csv_timezone_display: string;
   };
 }
 

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { closeShift, fetchCurrentShift, fetchCurrentUser, logout, openShift } from "@/lib/api";
+import { closeShift, fetchClientSettings, fetchCurrentShift, fetchCurrentUser, logout, openShift } from "@/lib/api";
 import { formatDateTime, formatMoney } from "@/lib/time";
 import type { CashierShiftDetail, CurrentUser, UserRole } from "@/lib/types";
 import { ToastProvider } from "./ToastProvider";
@@ -50,6 +50,9 @@ export function AuthShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [shift, setShift] = useState<CashierShiftDetail | null>(null);
+  // Header branding. Falls back to "SECRET GROUNDS" until GET /client-settings
+  // resolves, and stays on the fallback if that request fails.
+  const [shopName, setShopName] = useState("SECRET GROUNDS");
   const [isChecking, setIsChecking] = useState(true);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [shiftMessage, setShiftMessage] = useState<string | null>(null);
@@ -63,6 +66,22 @@ export function AuthShell({ children }: { children: ReactNode }) {
   // username is no longer an authorization condition.
   const isAdminOperator = canAccess(user, "admin");
   const isAdminNavPath = ADMIN_NAV_ITEMS.some((item) => item.href === pathname);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchClientSettings()
+      .then((clientSettings) => {
+        if (isMounted && clientSettings.shop_display_name) {
+          setShopName(clientSettings.shop_display_name.toUpperCase());
+        }
+      })
+      .catch(() => {
+        // Best-effort branding: keep the "SECRET GROUNDS" fallback on failure.
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -252,7 +271,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
             src="/secret-grounds-logo.png"
             width={38}
           />
-          <span>SECRET GROUNDS</span>
+          <span>{shopName}</span>
         </Link>
         <div className="appShell__links">
           <Link className={pathname === "/" ? "appShell__linkActive" : ""} href="/">

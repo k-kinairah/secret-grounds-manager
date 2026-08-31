@@ -629,7 +629,9 @@ function escapeHtml(value) {
 }
 
 function render() {
-  if (currentState.view === "pill") {
+  if (currentState.view === "hud") {
+    renderHud();
+  } else if (currentState.view === "pill") {
     renderPill();
   } else if (currentState.view === "overlay") {
     renderOverlay();
@@ -638,6 +640,33 @@ function render() {
   } else {
     renderLock();
   }
+}
+
+// Remaining-time reminder HUD: a one-line "[logo] 5 minutes left" strip that
+// briefly appears over gameplay and fades itself out. Its window is
+// click-through; it never blocks input. Each new reminder (a new hud_token)
+// restarts the entrance/exit animation.
+function renderHud() {
+  document.body.dataset.webviewSurface = "hud";
+  const text = currentState.hud_text || "";
+  const token = currentState.hud_token;
+  app.innerHTML = `
+    <section class="web-overlay-root hud-root">
+      <div class="hud-strip" id="hud-strip">
+        ${logoImage("hud-logo")}
+        <span class="hud-text">${escapeHtml(text)}</span>
+      </div>
+    </section>`;
+  const strip = document.getElementById("hud-strip");
+  if (!strip) return;
+  strip.style.animation = "none";
+  void strip.offsetWidth;
+  strip.style.animation = "";
+  strip.addEventListener(
+    "animationend",
+    () => emitAction("hud_done", { token }),
+    { once: true }
+  );
 }
 
 document.addEventListener("keydown", event => {

@@ -458,6 +458,67 @@ svg { width: 1em; height: 1em; }
   white-space: nowrap;
 }
 
+/* --- remaining-time reminder HUD -------------------------------------- */
+/* A lightweight game-HUD notification: one line, near the top-centre,
+   translucent dark strip, briefly appears then smoothly fades. The window
+   itself is click-through; pointer-events:none here is belt-and-braces. */
+body[data-webview-surface="hud"] { background: transparent; }
+.hud-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 8px;
+  background: transparent;
+  pointer-events: none;
+}
+.hud-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 15px 7px 12px;
+  border-radius: var(--radius-pill);
+  background: rgba(11, 18, 32, 0.72);
+  border: 1px solid rgba(34, 211, 238, 0.42);
+  box-shadow:
+    0 6px 22px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px rgba(34, 211, 238, 0.08);
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+  white-space: nowrap;
+  will-change: opacity, transform;
+  animation: hudPop 3.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.hud-logo {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 0 5px rgba(34, 211, 238, 0.35));
+}
+.hud-text {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #e6f6ff;
+}
+@keyframes hudPop {
+  0%   { opacity: 0; transform: translateY(-8px) scale(0.94); }
+  9%   { opacity: 1; transform: translateY(0) scale(1); }
+  82%  { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-5px) scale(0.98); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-strip { animation: hudFade 3.2s linear forwards; }
+  @keyframes hudFade {
+    0%   { opacity: 0; }
+    6%   { opacity: 1; }
+    86%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+}
+
 @media (max-height: 820px) {
   .lock-logo { width: 112px; margin-bottom: 18px; }
   .lock-title { font-size: 52px; margin-bottom: 14px; padding-bottom: 18px; }
