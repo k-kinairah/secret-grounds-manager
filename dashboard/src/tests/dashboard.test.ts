@@ -1509,7 +1509,14 @@ async function runAsyncAssertions() {
     assert.match(ratesManagerSource, /guest_only/);
     assert.match(ratesManagerSource, /eligible_start_local_time/);
 
-    const sessionDialogSourceForOpenTimeRetirement = readFileSync("src/components/SessionDialog.tsx", "utf8");
+    // Normalize CRLF -> LF: this file is checked out with CRLF endings on
+    // Windows (core.autocrlf), and several slice markers below embed a
+    // literal "\n" between lines. Without this, indexOf(...) returns -1 and
+    // the slices over-reach into unrelated JSX.
+    const sessionDialogSourceForOpenTimeRetirement = readFileSync(
+      "src/components/SessionDialog.tsx",
+      "utf8"
+    ).replace(/\r\n/g, "\n");
     assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /Enter Amount/);
     assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, />Open Time</);
     assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /"open_time"/);
@@ -2182,7 +2189,8 @@ async function runAsyncAssertions() {
     assert.match(membersSource, /Search by display name, username, or phone/);
     assert.match(membersSource, /useToast/);
     assert.match(membersSource, /pushToast/);
-    assert.match(membersSource, /Member time added successfully/);
+    assert.match(membersSource, /"Standard time added"/);
+    assert.match(membersSource, /"VIP time added"/);
     assert.match(membersSource, /Unable to add member time/);
     assert.match(membersSource, /Profile saved/);
     assert.match(membersSource, /PIN reset successfully/);
@@ -2194,8 +2202,13 @@ async function runAsyncAssertions() {
     assert.match(membersSource, /role="dialog"/);
     assert.match(membersSource, /Create Member/);
     assert.match(membersSource, /Username/);
-    assert.match(membersSource, /Display name, optional/);
     assert.match(membersSource, /Confirm PIN/);
+    // Display name was retired -- not on the Add Member modal, and no
+    // longer an editable field on the member's Overview tab either.
+    assert.doesNotMatch(membersSource, /Display name/);
+    assert.doesNotMatch(membersSource, /name="displayName"/);
+    assert.doesNotMatch(membersSource, /Customer name/);
+    assert.doesNotMatch(membersSource, /placeholder="No phone"/);
     assert.match(membersSource, /Account Summary/);
     assert.match(membersSource, /Balance Management/);
     assert.match(membersSource, /Security/);
@@ -2207,7 +2220,8 @@ async function runAsyncAssertions() {
     assert.match(membersSource, /activeMemberTab === "balance"/);
     assert.match(membersSource, /activeMemberTab === "security"/);
     assert.match(membersSource, /activeMemberTab === "activity"/);
-    assert.match(membersSource, /setActiveMemberTab\("overview"\)/);
+    // Opening a member lands on the Balance tab.
+    assert.match(membersSource, /setActiveMemberTab\("balance"\)/);
     assert.match(membersSource, /PIN entries do not match/);
     assert.match(membersSource, /Not configured/);
     assert.doesNotMatch(membersSource, /Technical Information/);
@@ -2221,18 +2235,22 @@ async function runAsyncAssertions() {
     assert.match(membersSource, /No members yet/);
     assert.match(membersSource, /No members found/);
     assert.match(membersSource, /Clear Filters/);
-    assert.match(membersSource, /No phone/);
     assert.match(membersSource, /Setup Required/);
     assert.match(membersSource, /Ready/);
     assert.match(membersSource, /getMemberAvatarInitial/);
     assert.match(membersSource, /getMemberLastActivityLabel/);
-    assert.match(membersSource, /memberCardList/);
-    assert.match(membersSource, /memberCardTopRow/);
-    assert.match(membersSource, /memberCardStatsGrid/);
-    assert.match(membersSource, /memberCardFooter/);
-    assert.match(membersSource, /memberCardSelected/);
+    assert.match(membersSource, /memberRowList/);
+    assert.match(membersSource, /memberRowIdentity/);
+    assert.match(membersSource, /memberRowMeta/);
+    assert.match(membersSource, /memberRowMetric/);
+    assert.match(membersSource, /memberRowStatus/);
+    assert.match(membersSource, /memberStatusDot/);
+    assert.match(membersSource, /memberRowSelected/);
     assert.match(membersSource, /memberAvatar/);
     assert.match(membersSource, /memberUsernameMissing/);
+    // The list is a row directory, not a card grid.
+    assert.doesNotMatch(membersSource, /memberCardStatsGrid/);
+    assert.doesNotMatch(membersSource, /memberCardFooter/);
     assert.match(membersSource, /\["all", "active", "setup", "inactive"\] as const/);
     assert.match(membersSource, /createError/);
     assert.match(membersSource, /confirmingStatusMember/);
@@ -2247,6 +2265,28 @@ async function runAsyncAssertions() {
     assert.match(membersSource, /This member will no longer be available for new sessions/);
     assert.doesNotMatch(membersSource, /phone_number \?\? "None"/);
 
+    // Account creation always charges the Membership Fee: the create form
+    // derives the fee, collects a payment method + cash/reference, posts it,
+    // and offers no "create without payment" path.
+    assert.match(membersSource, /product_type === "initial_membership"/);
+    assert.match(membersSource, /const membershipFee = /);
+    assert.match(membersSource, /createPaymentMethod/);
+    assert.match(membersSource, /createChangeState/);
+    assert.match(membersSource, /response\.creation_payment/);
+    assert.doesNotMatch(membersSource, /Create without payment/);
+    assert.doesNotMatch(membersSource, /canCompAccount/);
+    assert.doesNotMatch(membersSource, /createComp/);
+    // Premium Add Member modal: dedicated styling + amount on the CTA.
+    assert.match(membersSource, /createMemberModal/);
+    assert.match(membersSource, /createFeeCard/);
+    assert.match(membersSource, /Charge \$\{formatMoney\(membershipFee\.price\)\}/);
+    // The Membership Fee is never offered as a top-up: the picker is
+    // filtered to member_topup products only.
+    assert.match(membersSource, /const topupProducts = /);
+    assert.match(membersSource, /product\.product_type === "member_topup"/);
+    assert.match(membersSource, /\{topupProducts\.map\(\(product\) => \(/);
+    assert.doesNotMatch(membersSource, /const activeProducts = /);
+
     const membersCss = readFileSync("src/app/page.module.css", "utf8");
     assert.doesNotMatch(membersCss, /\.memberTable/);
     assert.match(membersCss, /\.memberModal/);
@@ -2255,15 +2295,15 @@ async function runAsyncAssertions() {
     assert.match(membersCss, /--member-modal-top: 104px/);
     assert.match(membersCss, /\.memberDetailTabs/);
     assert.match(membersCss, /\.memberDetailTabActive/);
-    assert.match(membersCss, /\.memberCardList/);
-    assert.match(membersCss, /\.memberCard\s*\{/);
-    assert.match(membersCss, /\.memberCardSelected/);
-    assert.match(membersCss, /\.memberCardTopRow/);
-    assert.match(membersCss, /\.memberCardStatsGrid/);
-    assert.match(membersCss, /\.memberCardFooter/);
+    assert.match(membersCss, /\.memberRowList/);
+    assert.match(membersCss, /\.memberRow\s*\{/);
+    assert.match(membersCss, /\.memberRowSelected/);
+    assert.match(membersCss, /\.memberRowMeta/);
+    assert.match(membersCss, /\.memberRowMetric/);
+    assert.match(membersCss, /\.memberRowStatus-ready/);
+    assert.match(membersCss, /\.memberStatusDot/);
     assert.match(membersCss, /\.memberAvatar/);
     assert.match(membersCss, /\.memberAvatarSetup/);
-    assert.match(membersCss, /\.memberCardStat/);
     assert.match(membersCss, /\.memberListEnd/);
     assert.match(membersCss, /\.memberSecurityError/);
     assert.match(membersCss, /\.memberStatus-ready/);
@@ -2279,7 +2319,7 @@ async function runAsyncAssertions() {
     assert.match(membersCss, /position: fixed/);
     assert.match(membersCss, /z-index: 80/);
     assert.match(membersCss, /@media \(max-width: 760px\)/);
-    assert.match(membersCss, /\.memberCardStatsGrid \{\s*\n\s*display: grid;/);
+    assert.match(membersCss, /\.memberRowMetric \{\s*\n\s*display: grid;/);
 
     const authShellSource = readFileSync("src/components/AuthShell.tsx", "utf8");
     assert.match(authShellSource, /isAdminOperator/);
@@ -3196,11 +3236,13 @@ async function runAsyncAssertions() {
     const mainPySourceForStage5 = readFileSync("../server/main.py", "utf8");
     assert.match(mainPySourceForStage5, /@app\.get\("\/sessions\/\{session_id\}\/balance-source"/);
 
-    // Members page: VIP promo product is explicitly marked VIP-only and
-    // non-refundable directly on the product card, not just in fine print.
+    // Members page: VIP top-up product is marked VIP-only on the product
+    // card; the non-refundable policy is stated in the balance preview
+    // fine print (the redundant card badge was removed).
     const membersSourceForStage5 = readFileSync("src/components/MembersManager.tsx", "utf8");
     assert.match(membersSourceForStage5, /VIP Only/);
-    assert.match(membersSourceForStage5, /Non-Refundable/);
+    assert.doesNotMatch(membersSourceForStage5, /Non-Refundable/);
+    assert.match(membersSourceForStage5, /VIP promo purchases are non-refundable/);
 
     // Rates page: station scope and Midnight-style eligibility windows are
     // visually distinguishable, deprecated metered/Open Time UI stays gone.

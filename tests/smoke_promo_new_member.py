@@ -1,11 +1,14 @@
 """Stage 5 smoke tests: New Member promotional account-creation offers.
 
-Covers eligibility (exact-only, no per_member_redemption_limit), the
-advisory quote endpoint, expected_promo_id, the atomic
-member+payment+ledger+redemption creation transaction, idempotency,
-total-limit enforcement, refund (reusing the existing generic
-refund_purchase path unchanged), attribution, and non-promo account
-creation staying byte-for-byte unchanged.
+NOTE: account creation now always charges the flat Membership Fee
+(server/member_repository.py::_create_member_paid); New Member promos no
+longer run at signup. The service + quote logic
+(server/promo_new_member_service.py) is kept dormant, so only the
+eligibility / quote / validation tests below still run. The
+create_member-integration tests (atomic claim, idempotency, total-limit,
+refund, attribution, rollback) remain defined but are omitted from the
+run list -- rewire them if the New Member promo entry point is ever
+restored, or delete this file when the feature is fully removed.
 """
 
 import os
@@ -629,6 +632,8 @@ def test_amount_without_matching_promo_rejected_cleanly(temp_directory: str) -> 
 
 
 def main() -> None:
+    # Only the eligibility / quote / validation tests -- the New Member
+    # promo claim no longer has a reachable entry point (see module note).
     tests = [
         test_minimum_amount_mode_rejected_for_new_member,
         test_per_member_limit_rejected_for_new_member,
@@ -639,19 +644,6 @@ def main() -> None:
         test_different_price_promo_works_as_temporary_offer,
         test_quote_makes_zero_writes,
         test_invalid_amount_handled_clearly,
-        test_expected_promo_mismatch_returns_409_no_writes,
-        test_atomic_account_payment_balance_redemption_creation,
-        test_total_limit_enforced_atomically,
-        test_idempotent_retry_creates_nothing_extra,
-        test_duplicate_username_rolls_back_everything,
-        test_failed_payment_rolls_back_member_creation,
-        test_refund_follows_existing_policy_and_reverses_atomically,
-        test_total_limit_freed_after_refund,
-        test_generic_payment_void_cannot_bypass_new_member_balance_safeguards,
-        test_attribution_snapshots_correct,
-        test_permanent_initial_membership_product_unchanged,
-        test_non_promo_member_creation_unchanged,
-        test_amount_without_matching_promo_rejected_cleanly,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:

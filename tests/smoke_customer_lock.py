@@ -66,6 +66,8 @@ def main() -> None:
                 display_name="Locker Member",
                 pin="1357",
                 confirm_pin="1357",
+                payment_method="cash",
+                cash_received=Decimal("100.00"),
             ),
             cashier_user,
         )

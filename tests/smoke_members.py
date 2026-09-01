@@ -83,6 +83,40 @@ def main() -> None:
         admin_user = user_repository.get_user(admin.user_id)
         assert admin_user is not None
 
+        # A cashier must always collect the membership fee -- no payment
+        # method means the admin/owner-only zero-balance path, which a
+        # cashier may not use.
+        try:
+            create_member(
+                MemberCreateRequest(username="NoPay.Player", pin="1234", confirm_pin="1234"),
+                cashier_user,
+            )
+        except HTTPException as error:
+            assert error.status_code == 403
+        else:
+            raise AssertionError("Cashier should not create a member without payment")
+
+        # Underpaid membership fee -> rejected, nothing created.
+        try:
+            create_member(
+                MemberCreateRequest(
+                    username="Ada.Player",
+                    display_name="Ada Player",
+                    pin="1234",
+                    confirm_pin="1234",
+                    phone_number="09170000000",
+                    payment_method="cash",
+                    cash_received=Decimal("1.00"),
+                ),
+                cashier_user,
+            )
+        except HTTPException as error:
+            assert error.status_code == 400
+            assert error.detail == "Cash received cannot be lower than payment amount"
+        else:
+            raise AssertionError("Underpaid membership fee should be rejected")
+        assert member_repository.get_member_by_username("Ada.Player") is None
+
         member = create_member(
             MemberCreateRequest(
                 username="Ada.Player",
@@ -90,6 +124,8 @@ def main() -> None:
                 pin="1234",
                 confirm_pin="1234",
                 phone_number="09170000000",
+                payment_method="cash",
+                cash_received=Decimal("500.00"),
             ),
             cashier_user,
         )
@@ -98,6 +134,12 @@ def main() -> None:
         assert member.member_code.startswith("SG-")
         assert member.has_pin is True
         assert member.requires_account_setup is False
+        assert member.time_balance_seconds == 6 * 60 * 60
+        assert member.creation_payment is not None
+        assert member.creation_payment.amount == Decimal("100.00")
+        assert member.creation_payment.change_given == Decimal("400.00")
+        assert member.creation_payment.recorded_by_user_id == cashier_user.user_id
+        assert member.creation_payment.shift_id is None
         try:
             create_member(
                 MemberCreateRequest(
@@ -105,6 +147,8 @@ def main() -> None:
                     display_name="Duplicate",
                     pin="1234",
                     confirm_pin="1234",
+                    payment_method="cash",
+                    cash_received=Decimal("100.00"),
                 ),
                 cashier_user,
             )
@@ -142,54 +186,32 @@ def main() -> None:
             raise AssertionError("Invalid member PIN should be rejected")
 
         products = list_membership_products()
-        membership_fee = next(product for product in products if product.product_id == "membership-fee")
         promo = next(product for product in products if product.product_id == "member-promo")
+        membership_fee = next(product for product in products if product.product_id == "membership-fee")
+        # The fee is billed only at account creation; it stays an
+        # initial_membership product (the dashboard hides it from top-ups).
+        assert membership_fee.product_type == "initial_membership"
+        assert promo.product_type == "member_topup"
 
-        try:
-            purchase_member_time(
-                member.member_id,
-                MemberPurchaseRequest(
-                    product_id=membership_fee.product_id,
-                    payment_method="cash",
-                    cash_received=Decimal("1.00"),
-                ),
-                cashier_user,
-            )
-        except HTTPException as error:
-            assert error.status_code == 400
-            assert error.detail == "Cash received cannot be lower than payment amount"
-        else:
-            raise AssertionError("Invalid member purchase payment should be rejected")
-        assert member_repository.get_member(member.member_id).time_balance_seconds == 0
-
-        purchase = purchase_member_time(
-            member.member_id,
-            MemberPurchaseRequest(
-                product_id=membership_fee.product_id,
-                payment_method="cash",
-                cash_received=Decimal("500.00"),
-            ),
-            cashier_user,
-        )
-        assert purchase.member.time_balance_seconds == 6 * 60 * 60
-        assert purchase.payment.change_given == Decimal("400.00")
-        assert purchase.payment.shift_id is None
-        assert purchase.payment.recorded_by_user_id == cashier_user.user_id
+        # The account-creation payment links a completed payment row to the
+        # membership_purchase ledger row, recorded by the cashier.
         with get_connection() as connection:
             payment_row = connection.execute(
                 """
-                SELECT p.recorded_by_user_id, p.shift_id, mt.related_payment_id
+                SELECT p.recorded_by_user_id, p.shift_id, mt.related_payment_id, mt.transaction_type
                 FROM payments p
                 JOIN member_time_transactions mt ON mt.related_payment_id = p.payment_id
                 WHERE p.payment_id = ?
                 """,
-                (purchase.payment.payment_id,),
+                (member.creation_payment.payment_id,),
             ).fetchone()
         assert payment_row is not None
         assert payment_row["recorded_by_user_id"] == cashier_user.user_id
         assert payment_row["shift_id"] is None
-        assert payment_row["related_payment_id"] == purchase.payment.payment_id
+        assert payment_row["related_payment_id"] == member.creation_payment.payment_id
+        assert payment_row["transaction_type"] == "membership_purchase"
 
+        # Admin/owner may still create a zero-balance account (comp).
         refund_member = create_member(
             MemberCreateRequest(
                 username="Refund.Player",
@@ -197,8 +219,9 @@ def main() -> None:
                 pin="1234",
                 confirm_pin="1234",
             ),
-            cashier_user,
+            admin_user,
         )
+        assert refund_member.time_balance_seconds == 0
         refund_purchase_key = "member-refund-smoke-key"
         refundable_purchase = purchase_member_time(
             refund_member.member_id,
@@ -305,7 +328,7 @@ def main() -> None:
                 pin="2468",
                 confirm_pin="2468",
             ),
-            cashier_user,
+            admin_user,
         )
         purchase_member_time(
             self_login_member.member_id,
@@ -360,7 +383,7 @@ def main() -> None:
                 pin="1357",
                 confirm_pin="1357",
             ),
-            cashier_user,
+            admin_user,
         )
         try:
             asyncio.run(

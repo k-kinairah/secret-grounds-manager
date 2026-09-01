@@ -90,6 +90,30 @@ function activityAmount(item: OperatorActivityRecord): string | null {
   return item.amount ? `PHP ${item.amount}` : null;
 }
 
+function activityDayLabel(timestamp: string): string {
+  return new Date(timestamp).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+}
+
+function activityTimeLabel(timestamp: string): string {
+  return new Date(timestamp).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function groupActivityByDay(
+  items: OperatorActivityRecord[]
+): { day: string; items: OperatorActivityRecord[] }[] {
+  const groups: { day: string; items: OperatorActivityRecord[] }[] = [];
+  for (const item of items) {
+    const day = activityDayLabel(item.timestamp);
+    const last = groups[groups.length - 1];
+    if (last && last.day === day) {
+      last.items.push(item);
+    } else {
+      groups.push({ day, items: [item] });
+    }
+  }
+  return groups;
+}
+
 export function OperatorsManager() {
   const [operators, setOperators] = useState<OperatorManagementRecord[]>([]);
   const [query, setQuery] = useState("");
@@ -104,6 +128,8 @@ export function OperatorsManager() {
   const drawerRef = useRef<HTMLElement | null>(null);
   const activityTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const { pushToast } = useToast();
+
+  const groupedActivity = useMemo(() => groupActivityByDay(activity), [activity]);
 
   const filteredOperators = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -394,7 +420,7 @@ export function OperatorsManager() {
                 <button className={styles.secondaryButton} onClick={() => { setFormError(null); setModal({ kind: "edit", operator }); }} type="button">
                   Edit
                 </button>
-                <details className={styles.staffMoreMenu}>
+                <details className={styles.staffMoreMenu} name="staff-more-menu">
                   <summary>More</summary>
                   <div role="menu">
                     <button
@@ -480,25 +506,54 @@ export function OperatorsManager() {
               <CloseButton label="Close operator activity" onClick={() => setActivityOperator(null)} />
             </div>
             <div className={styles.staffActivityMeta}>
-              <span>{accessLabel(activityOperator)}</span>
-              <span>{activityOperator.is_active ? "Active" : "Disabled"}</span>
-              <span>{activityOperator.last_login_at ? formatDateTime(activityOperator.last_login_at) : "Never signed in"}</span>
+              <span className={styles.staffMetaChip}>
+                <span>Access</span>
+                <strong>{accessLabel(activityOperator)}</strong>
+              </span>
+              <span className={styles.staffMetaChip}>
+                <span>Status</span>
+                <strong>{activityOperator.is_active ? "Active" : "Disabled"}</strong>
+              </span>
+              <span className={styles.staffMetaChip}>
+                <span>Last sign-in</span>
+                <strong>
+                  {activityOperator.last_login_at ? formatDateTime(activityOperator.last_login_at) : "Never"}
+                </strong>
+              </span>
             </div>
-            {isActivityLoading ? <div className={styles.staffActivityEmpty}>Loading activity...</div> : null}
-            {activityMessage ? <div className={styles.message}>{activityMessage}</div> : null}
-            {!isActivityLoading && activity.length === 0 && activityMessage === null ? (
-              <div className={styles.staffActivityEmpty}>No activity recorded for this operator yet.</div>
-            ) : null}
-            <div className={styles.staffActivityList}>
-              {activity.map((item, index) => (
-                <article className={styles.staffActivityItem} key={`${item.timestamp}-${item.action}-${index}`}>
-                  <div>
-                    <strong>{humanizeAction(item.action)}</strong>
-                    <time>{formatDateTime(item.timestamp)}</time>
-                  </div>
-                  <p>{[activityContext(item), activityAmount(item)].filter(Boolean).join(" / ")}</p>
-                  <span>{item.result ? humanizeAction(item.result) : "Completed"}</span>
-                </article>
+            <div className={styles.staffActivityBody}>
+              {isActivityLoading ? (
+                <div className={styles.staffActivityEmpty}>Loading activity…</div>
+              ) : null}
+              {activityMessage ? <div className={styles.message}>{activityMessage}</div> : null}
+              {!isActivityLoading && activity.length === 0 && activityMessage === null ? (
+                <div className={styles.staffActivityEmpty}>No activity recorded for this operator yet.</div>
+              ) : null}
+              {groupedActivity.map((group) => (
+                <section className={styles.staffActivityGroup} key={group.day}>
+                  <div className={styles.staffActivityDay}>{group.day}</div>
+                  <ol className={styles.staffActivityList}>
+                    {group.items.map((item, index) => {
+                      const detail = [activityContext(item), activityAmount(item)].filter(Boolean).join(" · ");
+                      const result = item.result ? humanizeAction(item.result) : "Completed";
+                      return (
+                        <li
+                          className={styles.staffActivityItem}
+                          key={`${item.timestamp}-${item.action}-${index}`}
+                        >
+                          <div className={styles.staffActivityRow}>
+                            <strong>{humanizeAction(item.action)}</strong>
+                            <time>{activityTimeLabel(item.timestamp)}</time>
+                          </div>
+                          <div className={styles.staffActivitySub}>
+                            {detail ? <span>{detail}</span> : null}
+                            <span className={styles.staffActivityResult}>{result}</span>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </section>
               ))}
             </div>
           </aside>

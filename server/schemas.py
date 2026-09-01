@@ -1310,22 +1310,22 @@ class MemberCreateRequest(BaseModel):
     confirm_pin: str
     phone_number: str | None = None
     expires_at: datetime | None = None
-    # Stage 5: entirely optional, additive fields for the New Member promo
-    # path only. Omitting `amount` preserves the exact pre-Stage-5 bare
-    # account-creation behavior (no payment, no balance, zero balance
-    # member) -- these fields are never consulted at all in that case.
-    # When `amount` is supplied, it is used ONLY to resolve an eligible
-    # New Member promo; no ordinary (non-promo) paid signup path exists
-    # here, so if no promo matches, creation is rejected 409 rather than
-    # silently either dropping the payment or creating a free account.
+    # `payment_method` is the switch between the two account-creation paths:
+    #   * supplied  -> the member is billed the current Membership Fee
+    #     product's price and credited its hours in one transaction
+    #     (see MemberRepository._create_member_paid). The fee amount is
+    #     server-authoritative; `cash_received`/`reference_number` follow
+    #     the same rules as a top-up purchase.
+    #   * omitted   -> a zero-balance account, restricted to admin/owner
+    #     (staff comps, corrections).
+    # `amount` / `expected_promo_id` are retained for the dormant New Member
+    # promo claim path only and are not consulted by either path above.
     amount: Decimal | None = None
     payment_method: PaymentMethod | None = None
     cash_received: Decimal | None = None
     reference_number: str | None = None
     notes: str | None = None
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
-    # Expectation only, never authority -- see PrepaidStartSessionRequest/
-    # MemberPurchaseRequest for the identical contract.
     expected_promo_id: str | None = None
 
     @field_validator("username")

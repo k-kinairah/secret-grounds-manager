@@ -27,6 +27,7 @@ import type {
   PcLayoutSlot,
   PcSummary,
   PaymentInput,
+  PaymentMethod,
   PreparedSessionSelection,
   PrepaidSessionSelection,
   Promo,
@@ -727,6 +728,10 @@ export async function createMember(input: {
   pin: string;
   confirm_pin: string;
   phone_number?: string;
+  payment_method?: PaymentMethod;
+  cash_received?: string;
+  reference_number?: string;
+  idempotency_key?: string;
 }): Promise<MemberRecord> {
   return requestJson<MemberRecord>(`${getApiBaseUrl()}/members`, {
     method: "POST",

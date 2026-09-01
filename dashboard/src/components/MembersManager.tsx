@@ -35,6 +35,22 @@ import type {
 import { PageTitleIcon } from "./PageTitleIcon";
 import { useToast } from "./ToastProvider";
 import { CloseButton } from "./CloseButton";
+import { SecretSelect, type SecretSelectOption } from "./SecretSelect";
+
+// Payment is collected as cash or GCash only.
+const PAYMENT_METHOD_OPTIONS: SecretSelectOption[] = [
+  { value: "cash", label: "Cash" },
+  { value: "gcash", label: "GCash" }
+];
+
+const REFUND_REASON_OPTIONS: SecretSelectOption[] = [
+  { value: "Duplicate transaction", label: "Duplicate transaction" },
+  { value: "Wrong member", label: "Wrong member" },
+  { value: "Wrong package", label: "Wrong package" },
+  { value: "Wrong amount", label: "Wrong amount" },
+  { value: "Customer cancellation", label: "Customer cancellation" },
+  { value: "Other", label: "Other" }
+];
 
 function formatMemberBalance(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
@@ -68,6 +84,35 @@ function MoreVerticalIcon() {
       <circle cx="12" cy="5" fill="currentColor" r="1.8" />
       <circle cx="12" cy="12" fill="currentColor" r="1.8" />
       <circle cx="12" cy="19" fill="currentColor" r="1.8" />
+    </svg>
+  );
+}
+
+function EyeIcon({ visible }: { visible: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={styles.memberEyeIcon}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      viewBox="0 0 24 24"
+    >
+      {visible ? (
+        <>
+          <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
+          <circle cx="12" cy="12" r="3" />
+        </>
+      ) : (
+        <>
+          <path d="M9.9 5.2A9.6 9.6 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3 3.6" />
+          <path d="M6.3 6.4A17.4 17.4 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4.3-1" />
+          <path d="M10 10a2.8 2.8 0 0 0 4 4" />
+          <line x1="3" y1="3" x2="21" y2="21" />
+        </>
+      )}
     </svg>
   );
 }
@@ -172,7 +217,7 @@ function describeActivity(transaction: MemberTimeTransaction): {
       };
     case "promo_topup":
       return {
-        title: balanceLabel === "VIP" ? "VIP Promo Purchased" : "Member Promo Purchased",
+        title: balanceLabel === "VIP" ? "VIP Time Purchased" : "Standard Top-up Purchased",
         detail: `Added ${formatNaturalDuration(delta)} of ${balanceLabel} time. New ${balanceLabel} balance: ${balance}.`,
         amount: transaction.amount_paid,
         isTechnical: false,
@@ -322,6 +367,9 @@ export function MembersManager() {
   const [statusFilter, setStatusFilter] = useState<MemberStatusFilter>("all");
   const [confirmingStatusMember, setConfirmingStatusMember] = useState<MemberRecord | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [createPaymentMethod, setCreatePaymentMethod] = useState<PaymentMethod>("cash");
+  const [createPaymentValue, setCreatePaymentValue] = useState("");
+  const createMemberKeyRef = useRef(createIdempotencyKey());
   const [pinDraft, setPinDraft] = useState("");
   const [confirmPinDraft, setConfirmPinDraft] = useState("");
   const [showPin, setShowPin] = useState(false);
@@ -343,10 +391,19 @@ export function MembersManager() {
     placement: "up" | "down";
   } | null>(null);
 
-  const activeProducts = useMemo(() => products.filter((product) => product.is_active), [products]);
+  // Top-up picker: never the Membership Fee (initial_membership) -- that
+  // product is only ever charged at account creation.
+  const topupProducts = useMemo(
+    () => products.filter((product) => product.is_active && product.product_type === "member_topup"),
+    [products]
+  );
+  const membershipFee = useMemo(
+    () => products.find((product) => product.is_active && product.product_type === "initial_membership") ?? null,
+    [products]
+  );
   const selectedProduct =
-    activeProducts.find((product) => product.product_id === selectedProductId) ??
-    activeProducts[0] ??
+    topupProducts.find((product) => product.product_id === selectedProductId) ??
+    topupProducts[0] ??
     null;
   const visibleLedger = useMemo(
     () =>
@@ -411,7 +468,7 @@ export function MembersManager() {
     setConfirmPinDraft("");
     setShowPin(false);
     setShowConfirmPin(false);
-    setActiveMemberTab("overview");
+    setActiveMemberTab("balance");
     setMemberPaymentMethod("cash");
     setMemberPaymentValue("");
     setMemberPaymentError("");
@@ -513,17 +570,51 @@ export function MembersManager() {
 
     const form = event.currentTarget;
     const formData = new FormData(form);
+
+    if (!membershipFee) {
+      setCreateError("No active membership fee is configured. Set one in Settings → Rates & Pricing.");
+      return;
+    }
+    const paymentValue = createPaymentValue.trim();
+    if (createPaymentMethod === "cash") {
+      const cashReceived = Number(paymentValue);
+      if (!paymentValue || !Number.isFinite(cashReceived) || cashReceived <= 0) {
+        setCreateError("Enter a valid cash amount.");
+        return;
+      }
+      if (cashReceived < Number(membershipFee.price)) {
+        setCreateError(`Cash received must be at least ${formatMoney(membershipFee.price)}.`);
+        return;
+      }
+    } else if (!paymentValue) {
+      setCreateError("Enter the payment reference.");
+      return;
+    }
+
     setIsSaving(true);
     setCreateError(null);
     try {
-      await createMember({
+      const response = await createMember({
         username: String(formData.get("username") ?? ""),
-        display_name: String(formData.get("displayName") ?? "") || undefined,
         pin: String(formData.get("memberPin") ?? ""),
         confirm_pin: String(formData.get("confirmMemberPin") ?? ""),
-        phone_number: String(formData.get("phoneNumber") ?? "") || undefined
+        payment_method: createPaymentMethod,
+        cash_received: createPaymentMethod === "cash" ? paymentValue : undefined,
+        reference_number: createPaymentMethod !== "cash" ? paymentValue : undefined,
+        idempotency_key: createMemberKeyRef.current
       });
-      pushToast("Member created", "success");
+      const payment = response.creation_payment;
+      const feePart =
+        createPaymentMethod === "cash"
+          ? `Change ${formatMoney(payment?.change_given ?? "0.00")}`
+          : `Ref ${payment?.reference_number ?? "recorded"}`;
+      pushToast(
+        "Member created",
+        "success",
+        `${response.username ?? response.full_name}  ·  Fee ${formatMoney(payment?.amount ?? membershipFee.price)}  ·  ${feePart}  ·  Balance ${formatMemberBalance(response.time_balance_seconds)}`
+      );
+      createMemberKeyRef.current = createIdempotencyKey();
+      setCreatePaymentValue("");
       await refresh();
       form.reset();
       setIsCreateOpen(false);
@@ -545,7 +636,8 @@ export function MembersManager() {
     try {
       const updated = await updateMember(selectedMember.member_id, {
         username: String(formData.get("username") ?? ""),
-        display_name: String(formData.get("displayName") ?? "") || undefined,
+        // No longer an editable field -- preserve whatever's stored.
+        display_name: selectedMember.display_name ?? undefined,
         phone_number: String(formData.get("phoneNumber") ?? "") || undefined
       });
       setSelectedMember(updated);
@@ -561,7 +653,7 @@ export function MembersManager() {
   async function handleSelect(member: MemberRecord) {
     closeMemberMenu();
     setSelectedMember(member);
-    setSelectedProductId(activeProducts[0]?.product_id ?? "");
+    setSelectedProductId(topupProducts[0]?.product_id ?? "");
     setShowAdvancedActivity(false);
     setLedger(await fetchMemberLedger(member.member_id));
   }
@@ -611,15 +703,19 @@ export function MembersManager() {
       setSelectedMember(response.member);
       setLedger(await fetchMemberLedger(selectedMember.member_id));
       const isVipPurchase = response.product.balance_type === "vip";
-      const newBalanceText = isVipPurchase
-        ? `New VIP balance: ${formatMemberBalance(response.member.vip_balance_seconds)}.`
-        : `New Standard balance: ${formatMemberBalance(response.member.time_balance_seconds)}.`;
-      pushToast(
-        isVipPurchase ? "VIP time added successfully" : "Member time added successfully",
-        "success",
+      const who = response.member.username ?? response.member.full_name;
+      const added = `+${formatMemberBalance(response.product.time_seconds)}`;
+      const balance = isVipPurchase
+        ? `VIP balance ${formatMemberBalance(response.member.vip_balance_seconds)}`
+        : `Balance ${formatMemberBalance(response.member.time_balance_seconds)}`;
+      const paymentPart =
         memberPaymentMethod === "cash"
-          ? `Member: ${response.member.username ?? response.member.full_name}. Package: ${response.product.name}. Amount due: ${formatMoney(response.payment.amount)}. Cash received: ${formatMoney(response.payment.cash_received ?? "0.00")}. Change: ${formatMoney(response.payment.change_given ?? "0.00")}. ${newBalanceText}`
-          : `Member: ${response.member.username ?? response.member.full_name}. Package: ${response.product.name}. Amount due: ${formatMoney(response.payment.amount)}. Reference: ${response.payment.reference_number ?? "Recorded"}. ${newBalanceText}`
+          ? `Change ${formatMoney(response.payment.change_given ?? "0.00")}`
+          : `Ref ${response.payment.reference_number ?? "recorded"}`;
+      pushToast(
+        isVipPurchase ? "VIP time added" : "Standard time added",
+        "success",
+        `${who}  ·  ${added}  ·  ${paymentPart}  ·  ${balance}`
       );
       memberPurchaseKeyRef.current = createIdempotencyKey();
       setMemberPaymentValue("");
@@ -757,6 +853,9 @@ export function MembersManager() {
   const memberChangeState = selectedProduct
     ? getChangeState(String(selectedProduct.price), memberPaymentValue)
     : { label: "Enter cash received", state: "muted" as const };
+  const createChangeState = membershipFee
+    ? getChangeState(String(membershipFee.price), createPaymentValue)
+    : { label: "Enter cash received", state: "muted" as const };
 
   return (
     <main className={styles.page}>
@@ -849,16 +948,15 @@ export function MembersManager() {
             )}
           </div>
         ) : (
-          <div className={styles.memberCardList}>
+          <div className={styles.memberRowList}>
             {filteredMembers.map((member) => {
               const accountState = getMemberAccountState(member);
-              const joined = formatMemberDateParts(member.joined_at);
               const isSelected = selectedMember?.member_id === member.member_id;
 
               return (
-                <article
-                  className={`${styles.memberCard} ${
-                    isSelected ? styles.memberCardSelected : ""
+                <div
+                  className={`${styles.memberRow} ${
+                    isSelected ? styles.memberRowSelected : ""
                   }`}
                   key={member.member_id}
                   onClick={() => void handleSelect(member)}
@@ -871,84 +969,76 @@ export function MembersManager() {
                   role="button"
                   tabIndex={0}
                 >
-                  <div className={styles.memberCardTopRow}>
-                    <div className={styles.memberCardIdentity}>
-                      <div
-                        aria-hidden="true"
-                        className={`${styles.memberAvatar} ${
-                          accountState === "setup" ? styles.memberAvatarSetup : ""
-                        }`}
+                  <div
+                    aria-hidden="true"
+                    className={`${styles.memberAvatar} ${
+                      accountState === "setup" ? styles.memberAvatarSetup : ""
+                    }`}
+                  >
+                    {getMemberAvatarInitial(member)}
+                  </div>
+
+                  <div className={styles.memberRowIdentity}>
+                    <strong>{member.full_name}</strong>
+                    <span className={styles.memberRowSub}>
+                      <span
+                        className={
+                          member.username ? styles.memberUsername : styles.memberUsernameMissing
+                        }
                       >
-                        {getMemberAvatarInitial(member)}
-                      </div>
-                      <div className={styles.memberIdentityText}>
-                        <strong>{member.full_name}</strong>
-                        <span
-                          className={
-                            member.username ? styles.memberUsername : styles.memberUsernameMissing
-                          }
-                        >
-                          {member.username ? `@${member.username}` : "Not configured"}
-                        </span>
-                        <small>{member.phone_number || "No phone"}</small>
-                      </div>
-                    </div>
-                    <button
-                      aria-expanded={openMemberMenu?.member.member_id === member.member_id}
-                      aria-haspopup="menu"
-                      aria-label={`More actions for ${member.username ?? member.member_code}`}
-                      className={styles.memberMoreButton}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleMemberMenu(member, event.currentTarget);
-                      }}
-                      ref={(node) => setMemberMenuTrigger(member.member_id, node)}
-                      type="button"
+                        {member.username ? `@${member.username}` : "Not configured"}
+                      </span>
+                      {member.phone_number ? (
+                        <>
+                          <span className={styles.memberRowSep}>·</span>
+                          <span>{member.phone_number}</span>
+                        </>
+                      ) : null}
+                    </span>
+                  </div>
+
+                  <div className={styles.memberRowMeta}>
+                    <span
+                      className={`${styles.memberRowStatus} ${
+                        styles[`memberRowStatus-${accountState}`]
+                      }`}
                     >
-                      <MoreVerticalIcon />
-                    </button>
-                  </div>
-
-                  <div className={styles.memberCardStatsGrid}>
-                    <div className={styles.memberCardStat}>
-                      <span>Standard Time</span>
-                      <strong className={styles.memberBalance}>
-                        {formatMemberBalance(member.time_balance_seconds)}
-                      </strong>
-                    </div>
-
-                    <div className={styles.memberCardStat}>
-                      <span>VIP Time</span>
-                      <strong className={styles.memberBalance}>
-                        {formatMemberBalance(member.vip_balance_seconds)}
-                      </strong>
-                    </div>
-
-                    <div className={styles.memberCardStat}>
-                      <span>Status</span>
-                      <strong>
-                        <span
-                          className={`${styles.memberStatusBadge} ${
-                            styles[`memberStatus-${accountState}`]
-                          }`}
-                        >
-                          {getMemberAccountLabel(accountState)}
-                        </span>
-                      </strong>
-                    </div>
-
-                    <div className={styles.memberCardStat}>
+                      <span className={styles.memberStatusDot} aria-hidden="true" />
+                      {getMemberAccountLabel(accountState)}
+                    </span>
+                    <span className={styles.memberRowMetric}>
+                      <span>Standard</span>
+                      <strong>{formatMemberBalance(member.time_balance_seconds)}</strong>
+                    </span>
+                    <span className={styles.memberRowMetric}>
+                      <span>VIP</span>
+                      <strong>{formatMemberBalance(member.vip_balance_seconds)}</strong>
+                    </span>
+                    <span className={`${styles.memberRowMetric} ${styles.memberRowMetricText}`}>
                       <span>Joined</span>
-                      <strong>{joined.date}</strong>
-                      <small>{joined.time}</small>
-                    </div>
+                      <strong>{formatMemberDateParts(member.joined_at).date}</strong>
+                    </span>
+                    <span className={`${styles.memberRowMetric} ${styles.memberRowMetricText} ${styles.memberRowActivity}`}>
+                      <span>Last activity</span>
+                      <strong>{getMemberLastActivityLabel(member)}</strong>
+                    </span>
                   </div>
 
-                  <div className={styles.memberCardFooter}>
-                    <span>Last activity</span>
-                    <strong>{getMemberLastActivityLabel(member)}</strong>
-                  </div>
-                </article>
+                  <button
+                    aria-expanded={openMemberMenu?.member.member_id === member.member_id}
+                    aria-haspopup="menu"
+                    aria-label={`More actions for ${member.username ?? member.member_code}`}
+                    className={styles.memberMoreButton}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleMemberMenu(member, event.currentTarget);
+                    }}
+                    ref={(node) => setMemberMenuTrigger(member.member_id, node)}
+                    type="button"
+                  >
+                    <MoreVerticalIcon />
+                  </button>
+                </div>
               );
             })}
             <div className={styles.memberListEnd}>You've reached the end of the list.</div>
@@ -961,66 +1051,119 @@ export function MembersManager() {
           <section
             aria-label="Add member"
             aria-modal="true"
-            className={styles.memberModal}
+            className={`${styles.memberModal} ${styles.createMemberModal}`}
             ref={createModalRef}
             role="dialog"
           >
-            <div className={styles.memberModalHeader}>
-              <div>
+            <div className={styles.createMemberHeader}>
+              <span className={styles.createMemberIcon} aria-hidden="true">
+                <PageTitleIcon name="members" />
+              </span>
+              <div className={styles.createMemberHeadingText}>
                 <h2>Add Member</h2>
-                <p>Create a reusable play-balance profile.</p>
+                <p>Collect the membership fee and set up a play-balance profile.</p>
               </div>
               <CloseButton label="Close add member dialog" onClick={() => setIsCreateOpen(false)} />
             </div>
             {createError ? <div className={styles.memberDialogMessage}>{createError}</div> : null}
-            <form className={styles.memberFormGrid} onSubmit={handleCreate}>
-              <label className={styles.field}>
-                Username
-                <input
-                  autoComplete="username"
-                  maxLength={30}
-                  minLength={3}
-                  name="username"
-                  pattern="[A-Za-z0-9._-]{3,30}"
-                  placeholder="ada.player"
-                  required
-                />
-              </label>
-              <label className={styles.field}>
-                Display name, optional
-                <input name="displayName" placeholder="Customer name" />
-              </label>
-              <label className={styles.field}>
-                PIN
-                <input
-                  inputMode="numeric"
-                  maxLength={6}
-                  minLength={4}
-                  name="memberPin"
-                  pattern="[0-9]{4,6}"
-                  placeholder="4-6 digits"
-                  required
-                  type="password"
-                />
-              </label>
-              <label className={styles.field}>
-                Confirm PIN
-                <input
-                  inputMode="numeric"
-                  maxLength={6}
-                  minLength={4}
-                  name="confirmMemberPin"
-                  pattern="[0-9]{4,6}"
-                  placeholder="Repeat PIN"
-                  required
-                  type="password"
-                />
-              </label>
-              <label className={styles.field}>
-                Phone, optional
-                <input name="phoneNumber" placeholder="No phone" />
-              </label>
-              <div className={styles.dialogActions}>
+            <form className={styles.createMemberForm} onSubmit={handleCreate}>
+              <section className={styles.createSection}>
+                <h3 className={styles.createSectionTitle}>Account</h3>
+                <label className={styles.field}>
+                  Username
+                  <input
+                    autoComplete="username"
+                    autoFocus
+                    maxLength={30}
+                    minLength={3}
+                    name="username"
+                    pattern="[A-Za-z0-9._-]{3,30}"
+                    placeholder="rogene"
+                    required
+                  />
+                </label>
+                <div className={styles.createFieldRow}>
+                  <label className={styles.field}>
+                    PIN
+                    <input
+                      inputMode="numeric"
+                      maxLength={6}
+                      minLength={4}
+                      name="memberPin"
+                      pattern="[0-9]{4,6}"
+                      placeholder="4-6 digits"
+                      required
+                      type="password"
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    Confirm PIN
+                    <input
+                      inputMode="numeric"
+                      maxLength={6}
+                      minLength={4}
+                      name="confirmMemberPin"
+                      pattern="[0-9]{4,6}"
+                      placeholder="Repeat PIN"
+                      required
+                      type="password"
+                    />
+                  </label>
+                </div>
+              </section>
+
+              <section className={styles.createSection}>
+                <h3 className={styles.createSectionTitle}>Membership fee</h3>
+                {membershipFee ? (
+                  <>
+                    <div className={styles.createFeeCard}>
+                      <div>
+                        <span className={styles.createFeeLabel}>{membershipFee.name}</span>
+                        <span className={styles.createFeeSub}>
+                          Adds {formatMemberBalance(membershipFee.time_seconds)} of Standard time
+                        </span>
+                      </div>
+                      <span className={styles.createFeeAmount}>{formatMoney(membershipFee.price)}</span>
+                    </div>
+                    <div className={styles.createFieldRow}>
+                      <SecretSelect
+                        label="Payment method"
+                        options={PAYMENT_METHOD_OPTIONS}
+                        value={createPaymentMethod}
+                        onChange={(next) => {
+                          setCreatePaymentMethod(next as PaymentMethod);
+                          setCreatePaymentValue("");
+                          setCreateError(null);
+                        }}
+                      />
+                      <label className={styles.field}>
+                        {createPaymentMethod === "cash" ? "Cash received" : "Reference number"}
+                        <input
+                          inputMode={createPaymentMethod === "cash" ? "decimal" : undefined}
+                          placeholder={createPaymentMethod === "cash" ? String(membershipFee.price) : "Required"}
+                          value={createPaymentValue}
+                          onChange={(event) => {
+                            setCreatePaymentValue(event.target.value);
+                            setCreateError(null);
+                          }}
+                        />
+                      </label>
+                    </div>
+                    {createPaymentMethod === "cash" ? (
+                      <div className={`${styles.changeSummary} ${styles[`changeSummary-${createChangeState.state}`]}`}>
+                        <span>Change</span>
+                        <strong>{createChangeState.label}</strong>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className={styles.formError}>
+                    No active membership fee is configured. Set one in Settings &rarr; Rates &amp; Pricing.
+                  </p>
+                )}
+              </section>
+
+              <div className={styles.createMemberActions}>
                 <button
                   className={styles.secondaryButton}
                   onClick={() => setIsCreateOpen(false)}
@@ -1028,8 +1171,16 @@ export function MembersManager() {
                 >
                   Cancel
                 </button>
-                <button className={styles.primaryButton} disabled={isSaving} type="submit">
-                  {isSaving ? "Creating..." : "Create Member"}
+                <button
+                  className={styles.primaryButton}
+                  disabled={isSaving || !membershipFee}
+                  type="submit"
+                >
+                  {isSaving
+                    ? "Creating…"
+                    : membershipFee
+                      ? `Charge ${formatMoney(membershipFee.price)} · Create`
+                      : "Create Member"}
                 </button>
               </div>
             </form>
@@ -1144,6 +1295,14 @@ export function MembersManager() {
           >
             <div className={styles.memberModalChrome}>
             <div className={styles.memberPopoutHeader}>
+              <span
+                className={`${styles.memberAvatar} ${
+                  selectedAccountState === "setup" ? styles.memberAvatarSetup : ""
+                }`}
+                aria-hidden="true"
+              >
+                {getMemberAvatarInitial(selectedMember)}
+              </span>
               <div>
                 <h2>{selectedMember.full_name}</h2>
                 <p>@{selectedMember.username ?? "not-configured"}</p>
@@ -1208,10 +1367,6 @@ export function MembersManager() {
                       pattern="[A-Za-z0-9._-]{3,30}"
                       required
                     />
-                  </label>
-                  <label className={styles.field}>
-                    Display name
-                    <input defaultValue={selectedMember.display_name ?? ""} name="displayName" />
                   </label>
                   <label className={styles.field}>
                     Phone
@@ -1281,16 +1436,18 @@ export function MembersManager() {
                     void handlePurchase(new FormData(event.currentTarget));
                   }}
                 >
-                  <div className={styles.memberBalanceHero}>
-                    <span>Standard Time</span>
-                    <strong>{formatMemberBalance(selectedMember.time_balance_seconds)}</strong>
-                  </div>
-                  <div className={styles.memberBalanceHero}>
-                    <span>VIP Time</span>
-                    <strong>{formatMemberBalance(selectedMember.vip_balance_seconds)}</strong>
+                  <div className={styles.memberBalanceHeroRow}>
+                    <div className={styles.memberBalanceHero}>
+                      <span>Standard Time</span>
+                      <strong>{formatMemberBalance(selectedMember.time_balance_seconds)}</strong>
+                    </div>
+                    <div className={styles.memberBalanceHero}>
+                      <span>VIP Time</span>
+                      <strong>{formatMemberBalance(selectedMember.vip_balance_seconds)}</strong>
+                    </div>
                   </div>
                   <div className={styles.memberProductGrid}>
-                    {activeProducts.map((product) => (
+                    {topupProducts.map((product) => (
                       <button
                         className={`${styles.rateOption} ${
                           selectedProduct?.product_id === product.product_id
@@ -1304,16 +1461,9 @@ export function MembersManager() {
                         <span className={styles.rateTitle}>
                           {product.name}
                           {product.balance_type === "vip" ? (
-                            <>
-                              <span className={`${styles.memberBalanceTypeBadge} ${styles["memberBalanceType-vip"]}`}>
-                                VIP Only
-                              </span>
-                              <span
-                                className={`${styles.memberBalanceTypeBadge} ${styles["memberBalanceType-nonrefundable"]}`}
-                              >
-                                Non-Refundable
-                              </span>
-                            </>
+                            <span className={`${styles.memberBalanceTypeBadge} ${styles["memberBalanceType-vip"]}`}>
+                              VIP Only
+                            </span>
                           ) : null}
                         </span>
                         <span className={styles.rateDuration}>
@@ -1346,23 +1496,16 @@ export function MembersManager() {
                     </div>
                   ) : null}
                   <div className={styles.memberPaymentGrid}>
-                  <label className={styles.field}>
-                    Payment method
-                    <select
-                      name="paymentMethod"
-                      onChange={(event) => {
-                        setMemberPaymentMethod(event.target.value as PaymentMethod);
-                        setMemberPaymentError("");
-                        setMemberPaymentValue("");
-                      }}
-                      value={memberPaymentMethod}
-                    >
-                      <option value="cash">Cash</option>
-                      <option value="gcash">GCash</option>
-                      <option value="maya">Maya</option>
-                      <option value="other">Other</option>
-                    </select>
-                  </label>
+                  <SecretSelect
+                    label="Payment method"
+                    options={PAYMENT_METHOD_OPTIONS}
+                    value={memberPaymentMethod}
+                    onChange={(next) => {
+                      setMemberPaymentMethod(next as PaymentMethod);
+                      setMemberPaymentError("");
+                      setMemberPaymentValue("");
+                    }}
+                  />
                   <label className={styles.field}>
                     {memberPaymentMethod === "cash" ? "Cash received" : "Reference number"}
                     <input
@@ -1431,10 +1574,7 @@ export function MembersManager() {
                           onClick={() => setShowPin((value) => !value)}
                           type="button"
                         >
-                          <span
-                            aria-hidden="true"
-                            className={`${styles.memberEyeIcon} ${showPin ? styles.memberEyeIconOpen : ""}`}
-                          />
+                          <EyeIcon visible={showPin} />
                         </button>
                       </span>
                     </label>
@@ -1458,10 +1598,7 @@ export function MembersManager() {
                           onClick={() => setShowConfirmPin((value) => !value)}
                           type="button"
                         >
-                          <span
-                            aria-hidden="true"
-                            className={`${styles.memberEyeIcon} ${showConfirmPin ? styles.memberEyeIconOpen : ""}`}
-                          />
+                          <EyeIcon visible={showConfirmPin} />
                         </button>
                       </span>
                     </label>
@@ -1519,27 +1656,22 @@ export function MembersManager() {
                       transaction.transaction_type === "promo_topup");
                   return (
                   <div className={styles.memberActivityRow} key={transaction.transaction_id}>
-                    <div>
-                      <strong>{activity.title}</strong>
-                      <span
-                        className={`${styles.memberBalanceTypeBadge} ${
-                          activity.balanceLabel === "VIP"
-                            ? styles["memberBalanceType-vip"]
-                            : styles["memberBalanceType-standard"]
-                        }`}
-                      >
-                        {activity.balanceLabel}
-                      </span>
-                      <span>{formatDateTime(transaction.created_at)}</span>
-                    </div>
-                    <div className={styles.memberActivityDetail}>
-                      <p>
-                        {activity.amount ? `${formatMoney(activity.amount)} - ` : ""}
-                        {activity.detail}
-                      </p>
+                    <div className={styles.memberActivityTop}>
+                      <div className={styles.memberActivityTitle}>
+                        <strong>{activity.title}</strong>
+                        <span
+                          className={`${styles.memberBalanceTypeBadge} ${
+                            activity.balanceLabel === "VIP"
+                              ? styles["memberBalanceType-vip"]
+                              : styles["memberBalanceType-standard"]
+                          }`}
+                        >
+                          {activity.balanceLabel}
+                        </span>
+                      </div>
                       {isRefundablePurchase ? (
                         <button
-                          className={styles.secondaryButton}
+                          className={styles.memberActivityRefund}
                           onClick={() => {
                             setRefundTarget(transaction);
                             setRefundReason("Duplicate transaction");
@@ -1552,6 +1684,13 @@ export function MembersManager() {
                         </button>
                       ) : null}
                     </div>
+                    <time className={styles.memberActivityTime}>
+                      {formatDateTime(transaction.created_at)}
+                    </time>
+                    <p className={styles.memberActivityText}>
+                      {activity.amount ? `${formatMoney(activity.amount)} — ` : ""}
+                      {activity.detail}
+                    </p>
                   </div>
                   );
                 })}
@@ -1571,7 +1710,18 @@ export function MembersManager() {
             ref={refundModalRef}
             role="dialog"
           >
-            <h2>Refund Member Purchase</h2>
+            <div className={styles.refundHeader}>
+              <span className={styles.refundIcon} aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 14 4 9l5-5" />
+                  <path d="M4 9h11a5 5 0 0 1 0 10h-4" />
+                </svg>
+              </span>
+              <div>
+                <h2>Refund Member Purchase</h2>
+                <p>Reverses the payment and removes the time. The original stays in history.</p>
+              </div>
+            </div>
             <div className={styles.refundSummary} aria-label="Refund summary">
               {selectedMember ? (
                 <div className={styles.refundSummaryRow}>
@@ -1602,37 +1752,34 @@ export function MembersManager() {
                 </div>
               ) : null}
               {refundBalanceAfter !== null ? (
-                <div className={styles.refundSummaryRow}>
+                <div className={`${styles.refundSummaryRow} ${styles.refundSummaryRowResult}`}>
                   <span>Balance after refund</span>
                   <strong>{formatMemberBalance(Math.max(0, refundBalanceAfter))}</strong>
                 </div>
               ) : null}
             </div>
-            <label className={styles.field}>
-              Refund reason
-              <select
-                onChange={(event) => setRefundReason(event.target.value)}
+            <div className={styles.refundFieldRow}>
+              <SecretSelect
+                label="Refund reason"
+                options={REFUND_REASON_OPTIONS}
                 value={refundReason}
-              >
-                <option value="Duplicate transaction">Duplicate transaction</option>
-                <option value="Wrong member">Wrong member</option>
-                <option value="Wrong package">Wrong package</option>
-                <option value="Wrong amount">Wrong amount</option>
-                <option value="Customer cancellation">Customer cancellation</option>
-                <option value="Other">Other</option>
-              </select>
-            </label>
-            <label className={styles.field}>
-              Notes
-              <input
-                onChange={(event) => setRefundNotes(event.target.value)}
-                placeholder={refundReason === "Other" ? "Required" : "Optional"}
-                value={refundNotes}
+                onChange={(next) => {
+                  setRefundReason(next);
+                  setRefundError("");
+                }}
               />
-            </label>
+              <label className={styles.field}>
+                {refundReason === "Other" ? "Notes (required)" : "Notes"}
+                <input
+                  onChange={(event) => setRefundNotes(event.target.value)}
+                  placeholder={refundReason === "Other" ? "Add a short note" : "Optional"}
+                  value={refundNotes}
+                />
+              </label>
+            </div>
             {refundError ? <p className={styles.formError}>{refundError}</p> : null}
             <p className={styles.refundWarning}>
-              This will reverse the original payment and remove {formatMemberBalance(refundTimeSeconds)} from the member's balance. The original transaction will remain in history.
+              Removes {formatMemberBalance(refundTimeSeconds)} from the member's balance and voids the payment.
             </p>
             <div className={styles.dialogActions}>
               <button className={styles.secondaryButton} disabled={isSaving} onClick={closeRefundDialog} type="button">

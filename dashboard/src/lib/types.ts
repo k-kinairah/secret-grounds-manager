@@ -927,6 +927,11 @@ export interface MemberRecord {
   created_by_user_id: string | null;
   created_at: string;
   updated_at: string;
+  // Present only on the response from creating a member with a paid
+  // membership fee (see MembersManager create flow).
+  creation_payment?: PaymentRecord | null;
+  creation_base_seconds?: number | null;
+  creation_benefit_seconds?: number | null;
 }
 
 export interface MembershipProduct {

@@ -35,6 +35,7 @@ import { PageTitleIcon } from "./PageTitleIcon";
 import { PcDetailsPanel } from "./PcDetailsPanel";
 import { PcMonitorTile } from "./PcMonitorTile";
 import { PaymentDialog } from "./PaymentDialog";
+import { SecretSelect, type SecretSelectOption } from "./SecretSelect";
 import { SessionDialog } from "./SessionDialog";
 import { StationAssignmentManager } from "./StationAssignmentManager";
 import { ActivityDrawerTrigger } from "./ActivityFeed";
@@ -801,6 +802,12 @@ function LayoutGridIcon() {
   );
 }
 
+const SEVERITY_OPTIONS: SecretSelectOption[] = [
+  { value: "info", label: "Info" },
+  { value: "warning", label: "Warning" },
+  { value: "urgent", label: "Urgent" }
+];
+
 function AnnouncementDialog({
   isLoading,
   onCancel,
@@ -821,13 +828,31 @@ function AnnouncementDialog({
 
   return (
     <div className={styles.overlay} role="presentation">
-      <section className={styles.dialog} role="dialog" aria-modal="true" aria-label="Broadcast announcement">
-        <h2>Broadcast Announcement</h2>
-        <div className={styles.amountPreview}>
-          <span>Targets</span>
-          <strong>All online PCs with active command connections.</strong>
+      <section
+        className={`${styles.dialog} ${styles.announcementDialog}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Broadcast announcement"
+      >
+        <div className={styles.announcementHeader}>
+          <span className={styles.announcementIcon} aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 9v6h4l7 4V5L8 9H4z" />
+              <path d="M18 8.5a4 4 0 0 1 0 7" />
+            </svg>
+          </span>
+          <div>
+            <h2>Broadcast Announcement</h2>
+            <p>Push a message to every active screen right now.</p>
+          </div>
         </div>
-        <p className={styles.panelText}>Sent to customers as SECRET GROUNDS.</p>
+
+        <div className={styles.announcementTargets}>
+          <span className={styles.announcementTargetsLabel}>Targets</span>
+          <strong>All online PCs with active command connections.</strong>
+          <span className={styles.announcementTargetsSub}>Shown to customers as SECRET GROUNDS.</span>
+        </div>
+
         <label className={styles.field}>
           Message
           <textarea
@@ -836,19 +861,28 @@ function AnnouncementDialog({
             placeholder="Please save your work. The shop is closing soon."
             value={message}
           />
+          <span className={styles.announcementCounter}>{message.length}/500</span>
         </label>
-        <label className={styles.field}>
-          Severity
-          <select onChange={(event) => setSeverity(event.target.value as MessageSeverity)} value={severity}>
-            <option value="info">Info</option>
-            <option value="warning">Warning</option>
-            <option value="urgent">Urgent</option>
-          </select>
-        </label>
-        <label className={styles.field}>
-          Display seconds
-          <input inputMode="numeric" onChange={(event) => setDuration(event.target.value)} value={duration} />
-        </label>
+
+        <div className={styles.announcementRow}>
+          <SecretSelect
+            label="Severity"
+            options={SEVERITY_OPTIONS}
+            value={severity}
+            onChange={(next) => setSeverity(next as MessageSeverity)}
+          />
+          <label className={styles.field}>
+            Display seconds
+            <input inputMode="numeric" onChange={(event) => setDuration(event.target.value)} value={duration} />
+          </label>
+        </div>
+
+        {severity === "urgent" ? (
+          <p className={styles.announcementNote}>
+            Urgent messages require the customer to acknowledge before continuing.
+          </p>
+        ) : null}
+
         <div className={styles.dialogActions}>
           <button className={styles.secondaryButton} disabled={isLoading} onClick={onCancel} type="button">
             Cancel

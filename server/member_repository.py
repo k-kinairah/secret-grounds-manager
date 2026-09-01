@@ -271,12 +271,58 @@ class MemberRepository:
         request: MemberCreateRequest,
         actor: UserRecord | None,
     ) -> MemberRecord:
-        if request.amount is None:
-            # Exact pre-Stage-5 behavior, byte-for-byte unchanged: no
-            # payment, no balance, zero-balance member. Every promo/payment
-            # field on MemberCreateRequest is simply never consulted.
+        if request.payment_method is None:
+            # Zero-balance account (staff comps, corrections, automated
+            # setup). A cashier must always collect the membership fee;
+            # admin/owner and internal (actor-less) callers may skip it.
+            if actor is not None and actor.role == "cashier":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Payment is required to create a member",
+                )
             return self._create_member_plain(request, actor)
-        return self._create_member_with_new_member_promo(request, actor)
+        return self._create_member_paid(request, actor)
+
+    def _resolve_membership_fee_product(self) -> MembershipProductRecord:
+        """The product a new account is billed for. The curated pricing
+        editor (server/pricing_service.py) always writes the fee to the
+        fixed 'membership-fee' row; fall back to any active
+        initial_membership product so a hand-edited catalog still works."""
+        product = self.get_product("membership-fee")
+        if product is not None and product.is_active:
+            return product
+        for candidate in self.list_products(include_inactive=False):
+            if candidate.product_type == "initial_membership":
+                return candidate
+        raise HTTPException(
+            status_code=409,
+            detail="No active membership fee product is configured",
+        )
+
+    def _resolve_payment_fields(
+        self,
+        payment_method: str,
+        amount: Decimal,
+        cash_received: Decimal | None,
+        reference_number: str | None,
+    ) -> tuple[Decimal | None, Decimal | None]:
+        """Validate cash/reference inputs against `amount` and return
+        (cash_received, change_given). Same rules a top-up purchase applies
+        (see MemberRepository.purchase)."""
+        cash_received = money(cash_received) if cash_received is not None else None
+        change_given: Decimal | None = None
+        if payment_method == "cash":
+            if cash_received is None:
+                raise HTTPException(status_code=400, detail="Cash received is required")
+            if cash_received < amount:
+                raise HTTPException(status_code=400, detail="Cash received cannot be lower than payment amount")
+            change_given = money(cash_received - amount)
+        else:
+            if cash_received is not None:
+                raise HTTPException(status_code=400, detail="Cash received is only valid for cash payments")
+            if not (reference_number or "").strip():
+                raise HTTPException(status_code=400, detail="Payment reference is required")
+        return cash_received, change_given
 
     def _create_member_plain(
         self,
@@ -355,6 +401,137 @@ class MemberRepository:
                 raise HTTPException(status_code=409, detail="Username already exists") from error
         return member
 
+    def _create_member_paid(
+        self,
+        request: MemberCreateRequest,
+        actor: UserRecord | None,
+    ) -> MemberRecord:
+        """Bill the current Membership Fee product and create the member
+        with its hours credited to the Standard balance -- member row,
+        payment, and the one membership_purchase ledger row all commit
+        together inside one BEGIN IMMEDIATE transaction, or nothing does."""
+        product = self._resolve_membership_fee_product()
+
+        # Idempotency short-circuit -- before any writes, so a retried
+        # request with the same key returns the original member instead of
+        # creating a second account or taking a second payment.
+        if request.idempotency_key:
+            existing_payment = self.payment_repository.get_payment_by_idempotency_key(request.idempotency_key)
+            if existing_payment is not None:
+                base_transaction, _ = self.resolve_purchase_transactions(existing_payment.payment_id)
+                if base_transaction is None:
+                    raise HTTPException(
+                        status_code=409, detail="Duplicate transaction key belongs to another payment"
+                    )
+                member = self.get_member(base_transaction.member_id)
+                if member is None:
+                    raise HTTPException(status_code=500, detail="Member disappeared after creation")
+                return self._attach_creation_metadata(member, existing_payment, base_transaction, 0)
+
+        now = current_utc_time()
+        cash_received, change_given = self._resolve_payment_fields(
+            request.payment_method, product.price, request.cash_received, request.reference_number
+        )
+
+        username = request.username.strip()
+        username_normalized = normalize_username(username)
+        display_name = clean_display_name(request.display_name)
+        pin_hash = hash_password(request.pin)
+        member_id = str(uuid4())
+        # A brand-new member has no active session -- attribution is always
+        # pending, same as the promo signup path.
+        attribution = attribution_pending_unknown_pc()
+        open_shift = self.shift_repository.get_open_shift_for_user(actor.user_id) if actor else None
+        shift_id = open_shift.shift_id if open_shift is not None else None
+
+        payment = PaymentRecord(
+            payment_id=str(uuid4()),
+            session_id=None,
+            amount=product.price,
+            payment_method=request.payment_method,
+            cash_received=cash_received,
+            change_given=change_given,
+            reference_number=request.reference_number,
+            notes=request.notes,
+            action_type="manual",
+            related_command_id=None,
+            review_required=False,
+            shift_id=shift_id,
+            recorded_by_user_id=actor.user_id if actor else None,
+            idempotency_key=request.idempotency_key,
+            status="completed",
+            created_at=now,
+            pc_name_snapshot=attribution.pc_name_snapshot,
+            income_group_id_snapshot=attribution.income_group_id_snapshot,
+            income_group_name_snapshot=attribution.income_group_name_snapshot,
+            attribution_status=attribution.status,  # type: ignore[arg-type]
+            attribution_assigned_at=attribution.assigned_at,
+            attribution_session_id=attribution.session_id,
+        )
+
+        def _insert_member(connection: sqlite3.Connection) -> None:
+            member_code = self.generate_member_code(connection)
+            member = MemberRecord(
+                member_id=member_id,
+                member_code=member_code,
+                username=username,
+                display_name=display_name,
+                full_name=display_name_for(username, display_name, ""),
+                phone_number=(request.phone_number or "").strip() or None,
+                has_pin=True,
+                requires_account_setup=False,
+                status="active",
+                time_balance_seconds=0,
+                joined_at=now,
+                expires_at=request.expires_at,
+                created_by_user_id=actor.user_id if actor else None,
+                created_at=now,
+                updated_at=now,
+            )
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO members (
+                        member_id, member_code, username, username_normalized, full_name,
+                        phone_number, pin_hash, requires_account_setup, pin_failed_attempts,
+                        pin_locked_until, status, time_balance_seconds, joined_at, expires_at,
+                        created_by_user_id, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        member.member_id, member.member_code, member.username, username_normalized,
+                        member.display_name or "", member.phone_number, pin_hash, 0, 0, None,
+                        member.status, member.time_balance_seconds, member.joined_at.isoformat(),
+                        member.expires_at.isoformat() if member.expires_at else None,
+                        member.created_by_user_id, member.created_at.isoformat(), member.updated_at.isoformat(),
+                    ),
+                )
+                self.record_member_audit(connection, "member_created", actor, member)
+            except sqlite3.IntegrityError as error:
+                raise HTTPException(status_code=409, detail="Username already exists") from error
+
+        with get_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _insert_member(connection)
+            self.payment_repository.create_payment(payment, connection=connection)
+            base_transaction = self.apply_balance_delta(
+                member_id,
+                "membership_purchase",
+                product.time_seconds,
+                actor.user_id if actor else None,
+                amount_paid=product.price,
+                related_payment_id=payment.payment_id,
+                notes=product.name,
+                balance_type="standard",
+                connection=connection,
+            )
+
+        member = self.get_member(member_id)
+        if member is None:
+            raise HTTPException(status_code=500, detail="Member disappeared after creation")
+        return self._attach_creation_metadata(member, payment, base_transaction, 0)
+
     def quote_new_member_promo(self, amount: Decimal) -> NewMemberPromoQuoteResponse:
         return build_new_member_promo_quote(
             promo_repository=self.promo_repository,
@@ -392,6 +569,11 @@ class MemberRepository:
         request: MemberCreateRequest,
         actor: UserRecord | None,
     ) -> MemberRecord:
+        # DORMANT: account creation now always charges the flat Membership
+        # Fee (see create_member -> _create_member_paid). This promo-claim
+        # path is kept only so promo_new_member_service does not rot; it is
+        # no longer reachable from any route. Rewire create_member if the
+        # New Member promo entry point is ever restored.
         if request.payment_method is None:
             raise HTTPException(status_code=400, detail="payment_method is required when amount is supplied")
 

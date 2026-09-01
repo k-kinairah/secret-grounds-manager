@@ -158,6 +158,8 @@ def main() -> None:
             )
         )
 
+        # Zero-balance account (admin comp) -- keeps the sales totals below
+        # driven only by the explicit top-up purchases in this test.
         member = create_member(
             MemberCreateRequest(
                 username="sales.member",
@@ -165,7 +167,7 @@ def main() -> None:
                 pin="1234",
                 confirm_pin="1234",
             ),
-            cashier,
+            admin,
         )
         products = list_membership_products()
         product = next(item for item in products if item.product_id == "member-promo")

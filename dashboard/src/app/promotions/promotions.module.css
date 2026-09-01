@@ -177,6 +177,26 @@
   opacity: 1;
 }
 
+/* Inline mm/dd/yyyy hh:mm editing inside the field: the active segment
+   highlights in the app's cyan rather than the OS default blue. (The
+   calendar/time dropdown itself is the browser's own popup and cannot be
+   themed further with CSS.) */
+.field input::-webkit-datetime-edit-fields-wrapper {
+  padding: 0;
+}
+
+.field input::-webkit-datetime-edit-year-field:focus,
+.field input::-webkit-datetime-edit-month-field:focus,
+.field input::-webkit-datetime-edit-day-field:focus,
+.field input::-webkit-datetime-edit-hour-field:focus,
+.field input::-webkit-datetime-edit-minute-field:focus,
+.field input::-webkit-datetime-edit-ampm-field:focus {
+  background: rgb(34 211 238 / 0.24);
+  border-radius: 4px;
+  color: #e0f2fe;
+  outline: none;
+}
+
 .fieldHint {
   color: #94a3b8;
   font-size: 11px;

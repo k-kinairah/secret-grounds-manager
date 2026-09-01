@@ -34,7 +34,6 @@ const METHOD_FILTER_OPTIONS: SecretSelectOption[] = [
   { label: "All methods", value: "all" },
   { label: "Cash", value: "cash" },
   { label: "GCash", value: "gcash" },
-  { label: "Maya", value: "maya" },
   { label: "Other", value: "other" }
 ];
 
@@ -59,6 +58,19 @@ const SORT_FILTER_OPTIONS: SecretSelectOption[] = [
   { label: "Highest amount", value: "highest" },
   { label: "Lowest amount", value: "lowest" }
 ];
+
+// Cyan-blue accent used for plain breakdown labels (Sales by Type,
+// Payment Methods, Pending Attribution).
+const ACCENT_LABEL = "#7dd3fc";
+
+// Per-owner display label + colour for the Income by Group breakdown,
+// keyed by the group's stored name.
+const INCOME_GROUP_STYLE: Record<string, { label?: string; color: string }> = {
+  Gene: { color: "#f472b6" }, // pink
+  "Mama/Lala": { color: "#da70d6" }, // orchid
+  Tyrone: { color: "#60a5fa" }, // blue
+  United: { label: "Shop", color: "#4ade80" } // green
+};
 
 function todayInputValue(): string {
   return new Date().toISOString().slice(0, 10);
@@ -334,92 +346,30 @@ export function SalesManager() {
             </section>
           ) : null}
 
-          <section className={styles.contentGrid}>
-            <div className={styles.mainColumn}>
-              <section className={styles.panel}>
-                <div className={styles.panelHeader}>
-                  <div>
-                    <h2>{report.grouping === "hour" ? "Sales by Hour" : "Sales by Day"}</h2>
-                    <p>Uses payment collection time, not session start time.</p>
-                  </div>
-                </div>
-                <div className={styles.chart} aria-label="Sales chart">
-                  {report.timeseries.length === 0 ? (
-                    <div className={styles.miniEmpty}>No chart data for this period.</div>
-                  ) : (
-                    report.timeseries.map((point) => {
-                      const percent = Math.max(4, (Number(point.amount) / chartMax) * 100);
-                      return (
-                        <div className={styles.chartRow} key={point.start_at}>
-                          <span>{point.label}</span>
-                          <div>
-                            <i style={{ width: `${percent}%` }} />
-                          </div>
-                          <strong>{formatMoney(point.amount)}</strong>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </section>
-
-              <section className={styles.panel}>
-                <div className={styles.panelHeader}>
-                  <div>
-                    <h2>Recent Payments</h2>
-                    <p>Newest collected payments first.</p>
-                  </div>
-                </div>
-                <div className={styles.tableWrap}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th>Time</th>
-                        <th>Operator</th>
-                        <th>Customer / Member</th>
-                        <th>PC</th>
-                        <th>Type</th>
-                        <th>Method</th>
-                        <th>Amount</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {report.recent_payments.map((payment) => (
-                        <tr key={payment.payment_id}>
-                          <td>{formatDateTime(payment.timestamp)}</td>
-                          <td>{payment.operator_name}</td>
-                          <td>{payment.customer ?? "Walk-in"}</td>
-                          <td>{payment.pc_name ?? "No PC"}</td>
-                          <td>{salesTypeLabel(payment.sales_type, payment.balance_type)}</td>
-                          <td>{displayMethod(payment.payment_method)}</td>
-                          <td>{formatMoney(payment.amount)}</td>
-                          <td>{payment.status === "completed" ? "Completed" : "Voided"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            </div>
-
-            <aside className={styles.sideColumn}>
-              <BreakdownPanel
-                title="Sales by Type"
-                rows={report.sales_types.map((item) => ({
-                  amount: item.amount,
-                  count: item.payment_count,
-                  label: item.label
-                }))}
-              />
-              <BreakdownPanel
-                title="Payment Methods"
-                rows={report.payment_methods.map((item) => ({
-                  amount: item.amount,
-                  count: item.payment_count,
-                  label: displayMethod(item.payment_method)
-                }))}
-              />
+          <section className={styles.breakdownGrid} aria-label="Sales breakdowns">
+            <div className={styles.breakdownRow3}>
+              <div className={styles.breakdownStack}>
+                <BreakdownPanel
+                  title="Sales by Type"
+                  rows={report.sales_types.map((item) => ({
+                    amount: item.amount,
+                    count: item.payment_count,
+                    label: item.label,
+                    color: ACCENT_LABEL
+                  }))}
+                />
+                <BreakdownPanel
+                  title="Payment Methods"
+                  rows={report.payment_methods
+                    .filter((item) => item.payment_method !== "maya" && item.payment_method !== "other")
+                    .map((item) => ({
+                      amount: item.amount,
+                      count: item.payment_count,
+                      label: displayMethod(item.payment_method),
+                      color: ACCENT_LABEL
+                    }))}
+                />
+              </div>
               <BreakdownPanel
                 title="Income by Group"
                 description="Revenue attributed to each income-group owner for this period, based on the PC each payment was made on at the time."
@@ -427,25 +377,34 @@ export function SalesManager() {
                   ...report.income_groups.map((group) => ({
                     amount: group.amount,
                     count: group.payment_count,
-                    label: group.income_group_name
+                    label: INCOME_GROUP_STYLE[group.income_group_name]?.label ?? group.income_group_name,
+                    color: INCOME_GROUP_STYLE[group.income_group_name]?.color
                   })),
                   {
                     amount: report.pending_attribution_amount,
                     count: report.pending_attribution_count,
                     label: "Pending Attribution",
-                    hint: "Payments awaiting automatic income-group assignment."
+                    hint: "Payments awaiting automatic income-group assignment.",
+                    color: ACCENT_LABEL
                   }
                 ]}
               />
+            </div>
+            <div className={styles.breakdownRow2}>
               <section className={styles.panel}>
                 <h2>Sales by Operator</h2>
                 <div className={styles.stackList}>
                   {report.operators.length === 0 ? <div className={styles.miniEmpty}>No operator sales yet.</div> : null}
                   {report.operators.map((operator) => (
                     <article key={operator.operator_id ?? operator.operator_name}>
-                      <strong>{operator.operator_name}</strong>
-                      <span>{formatMoney(operator.total_amount)} collected</span>
-                      <small>{operator.payment_count} payments / Cash {formatMoney(operator.cash_total)} / GCash {formatMoney(operator.gcash_total)} / Maya {formatMoney(operator.maya_total)}</small>
+                      <div className={styles.stackRow}>
+                        <strong>{operator.operator_name}</strong>
+                        <b>{formatMoney(operator.total_amount)}</b>
+                      </div>
+                      <small>
+                        {operator.payment_count} payments · Cash {formatMoney(operator.cash_total)} · GCash{" "}
+                        {formatMoney(operator.gcash_total)}
+                      </small>
                     </article>
                   ))}
                 </div>
@@ -456,17 +415,85 @@ export function SalesManager() {
                   {report.pcs.length === 0 ? <div className={styles.miniEmpty}>No station-linked sales yet.</div> : null}
                   {report.pcs.map((pc) => (
                     <article key={pc.pc_name}>
-                      <strong>{pc.pc_name}</strong>
-                      <span>{formatMoney(pc.total_amount)}</span>
+                      <div className={styles.stackRow}>
+                        <strong>{pc.pc_name}</strong>
+                        <b>{formatMoney(pc.total_amount)}</b>
+                      </div>
                       <small>
                         {pc.paid_session_count} paid sessions
-                        {pc.billable_seconds ? ` / ${formatNaturalDuration(pc.billable_seconds)} billable` : ""}
+                        {pc.billable_seconds ? ` · ${formatNaturalDuration(pc.billable_seconds)} billable` : ""}
                       </small>
                     </article>
                   ))}
                 </div>
               </section>
-            </aside>
+            </div>
+          </section>
+
+          <section className={styles.panel}>
+            <div className={styles.panelHeader}>
+              <div>
+                <h2>{report.grouping === "hour" ? "Sales by Hour" : "Sales by Day"}</h2>
+                <p>Uses payment collection time, not session start time.</p>
+              </div>
+            </div>
+            <div className={styles.chart} aria-label="Sales chart">
+              {report.timeseries.length === 0 ? (
+                <div className={styles.miniEmpty}>No chart data for this period.</div>
+              ) : (
+                report.timeseries.map((point) => {
+                  const percent = Math.max(4, (Number(point.amount) / chartMax) * 100);
+                  return (
+                    <div className={styles.chartRow} key={point.start_at}>
+                      <span>{point.label}</span>
+                      <div>
+                        <i style={{ width: `${percent}%` }} />
+                      </div>
+                      <strong>{formatMoney(point.amount)}</strong>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </section>
+
+          <section className={styles.panel}>
+            <div className={styles.panelHeader}>
+              <div>
+                <h2>Recent Payments</h2>
+                <p>Newest collected payments first.</p>
+              </div>
+            </div>
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Operator</th>
+                    <th>Customer / Member</th>
+                    <th>PC</th>
+                    <th>Type</th>
+                    <th>Method</th>
+                    <th>Amount</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.recent_payments.map((payment) => (
+                    <tr key={payment.payment_id}>
+                      <td>{formatDateTime(payment.timestamp)}</td>
+                      <td>{payment.operator_name}</td>
+                      <td>{payment.customer ?? "Walk-in"}</td>
+                      <td>{payment.pc_name ?? "No PC"}</td>
+                      <td>{salesTypeLabel(payment.sales_type, payment.balance_type)}</td>
+                      <td>{displayMethod(payment.payment_method)}</td>
+                      <td>{formatMoney(payment.amount)}</td>
+                      <td>{payment.status === "completed" ? "Completed" : "Voided"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           {report.outstanding_settlements.length > 0 ? (
@@ -1291,7 +1318,7 @@ function BreakdownPanel({
   title,
   description
 }: {
-  rows: Array<{ amount: string; count: number; label: string; hint?: string }>;
+  rows: Array<{ amount: string; count: number; label: string; hint?: string; color?: string }>;
   title: string;
   description?: string;
 }) {
@@ -1302,9 +1329,14 @@ function BreakdownPanel({
       <div className={styles.breakdownList}>
         {rows.map((row) => (
           <article key={row.label}>
-            <span>{row.label}</span>
-            <strong>{formatMoney(row.amount)}</strong>
-            <small>{row.hint ?? `${row.count} payments`}</small>
+            <div className={styles.breakdownRow}>
+              <span style={row.color ? { color: row.color } : undefined}>{row.label}</span>
+              <span className={styles.breakdownValue}>
+                <strong>{formatMoney(row.amount)}</strong>
+                {row.hint ? null : <span className={styles.breakdownCount}>{row.count}</span>}
+              </span>
+            </div>
+            {row.hint ? <small>{row.hint}</small> : null}
           </article>
         ))}
       </div>

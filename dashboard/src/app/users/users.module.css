@@ -356,6 +356,19 @@
     0 6px 18px rgba(0, 0, 0, 0.16);
 }
 
+/* The row hover applies a transform (new stacking context), which would
+   trap an open "More" menu behind the rows below it. Lift the whole row
+   while its menu is open and drop the hover transform so the solid menu
+   panel sits above everything beneath. */
+.staffDirectoryRow:has(.staffMoreMenu[open]) {
+  position: relative;
+  z-index: 40;
+}
+
+.staffDirectoryRow:has(.staffMoreMenu[open]):hover {
+  transform: none;
+}
+
 .staffIdentity {
   align-items: center;
   display: flex;
@@ -540,7 +553,7 @@
   position: absolute;
   right: 0;
   top: calc(100% + 8px);
-  z-index: 10;
+  z-index: 30;
 }
 
 .staffMoreMenu a,
@@ -755,7 +768,19 @@
 }
 
 .staffDialogHeader h2 {
+  color: var(--text);
+  font-size: 20px;
+  letter-spacing: -0.01em;
+  margin: 0 0 3px;
+}
+
+.staffDialogHeader p {
+  color: #7dd3fc;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.12em;
   margin: 0;
+  text-transform: uppercase;
 }
 
 .staffWarning {
@@ -792,17 +817,21 @@
 }
 
 .staffActivityDrawer {
-  background: #111827;
-  border-left: 1px solid rgba(148, 163, 184, 0.26);
-  box-shadow: -24px 0 70px rgb(0 0 0 / 0.34);
+  background:
+    radial-gradient(120% 36% at 100% 0%, rgb(56 189 248 / 0.12), transparent 60%),
+    linear-gradient(180deg, rgb(17 24 39 / 0.99), rgb(9 14 26 / 0.99));
+  border-left: 1px solid rgb(56 189 248 / 0.24);
+  box-shadow:
+    -30px 0 90px rgb(0 0 0 / 0.46),
+    inset 1px 0 0 rgb(255 255 255 / 0.04);
   display: grid;
-  gap: 14px;
+  gap: 16px;
   grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
   margin-left: auto;
   max-width: 520px;
-  overflow: auto;
-  padding: 18px;
+  overflow: hidden;
+  padding: 20px;
   width: min(520px, 94vw);
 }
 
@@ -812,59 +841,128 @@
   gap: 8px;
 }
 
-.staffActivityMeta span {
-  background: rgba(15, 23, 42, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 999px;
-  color: #dbeafe;
-  font-size: 12px;
+.staffMetaChip {
+  background: rgb(15 23 42 / 0.6);
+  border: 1px solid rgb(56 189 248 / 0.18);
+  border-radius: 10px;
+  display: grid;
+  gap: 2px;
+  padding: 8px 12px;
+}
+
+.staffMetaChip > span {
+  color: var(--muted);
+  font-size: 9.5px;
   font-weight: 900;
-  padding: 6px 9px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.staffMetaChip > strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 800;
+}
+
+/* Flex column (not grid): a grid inside the 1fr drawer row stretches its
+   implicit tracks to fill the height, which is what created the big dead
+   bands between the date headers and their entries. */
+.staffActivityBody {
+  align-content: start;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.staffActivityGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.staffActivityDay {
+  background: rgb(11 16 28 / 0.97);
+  color: #7dd3fc;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  padding: 2px 0 4px;
+  position: sticky;
+  text-transform: uppercase;
+  top: 0;
+  z-index: 1;
 }
 
 .staffActivityList {
-  display: grid;
-  gap: 8px;
-}
-
-.staffActivityItem,
-.staffActivityEmpty {
-  background: rgba(15, 23, 42, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 8px;
-  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .staffActivityItem {
-  display: grid;
-  gap: 7px;
+  border-left: 2px solid rgb(56 189 248 / 0.4);
+  border-radius: 0 8px 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 12px;
+  transition: background 140ms ease, border-color 140ms ease;
 }
 
-.staffActivityItem div {
-  align-items: center;
+.staffActivityItem:hover {
+  background: rgb(14 165 233 / 0.06);
+  border-left-color: #22d3ee;
+}
+
+.staffActivityRow {
+  align-items: baseline;
   display: flex;
-  gap: 10px;
+  gap: 12px;
   justify-content: space-between;
 }
 
-.staffActivityItem strong {
+.staffActivityRow strong {
   color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
 }
 
-.staffActivityItem time,
-.staffActivityItem p {
+.staffActivityRow time {
   color: var(--muted);
-  margin: 0;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
 }
 
-.staffActivityItem span {
-  color: #bfdbfe;
+.staffActivitySub {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
   font-size: 12px;
-  font-weight: 900;
+  gap: 4px 12px;
+}
+
+.staffActivityResult {
+  color: #93c5fd;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .staffActivityEmpty {
+  background: rgb(15 23 42 / 0.5);
+  border: 1px dashed rgb(56 189 248 / 0.22);
+  border-radius: 10px;
   color: var(--muted);
+  font-weight: 800;
+  padding: 16px;
   text-align: center;
 }
 
