@@ -1,16 +1,23 @@
-"""Stage 5 tests: authoritative Operator's Sale read path.
+"""Operator's Sale read path (shift-independent running total).
 
-Covers: GET /dashboard/operator-sale resolves the on-duty operator the
-exact same way payment attribution does (get_on_duty_operator), reports
-a clean shape when nobody is on duty or the on-duty operator has no open
-shift, reuses ShiftRepository.calculate_totals() verbatim (net of
-voided), counts pending-income-attribution member purchases immediately,
-survives ordinary logout/login, and correctly goes stale after End Shift.
+GET /dashboard/operator-sale resolves the on-duty operator the exact same
+way payment attribution does (get_on_duty_operator) and sums every
+completed payment credited to them since their running-sales window
+opened (operator_sale_windows.started_at, per operator). It is NOT gated
+on an open cashier shift and has NO calendar-day boundary.
+
+The window is per-operator and persistent: it opens on first sign-in and
+is kept across operator switches, so switching back in without signing
+out resumes the same total, and another operator signing in never
+touches it. It only resets when that operator deliberately signs out
+(/auth/logout?end_operator_session=true) or ends their shift. Net of
+voided payments; pending income attribution never affects it.
 """
 
 import os
 import sys
 import tempfile
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -46,6 +53,17 @@ def login(main_module, username: str, password: str) -> None:
     from server.schemas import LoginRequest
 
     main_module.login(LoginRequest(username=username, password=password), Response())
+
+
+def login_and_get_token(main_module, username: str, password: str) -> str:
+    from http.cookies import SimpleCookie
+
+    from server.schemas import LoginRequest
+
+    response = Response()
+    main_module.login(LoginRequest(username=username, password=password), response)
+    set_cookie = next(value.decode("latin-1") for name, value in response.raw_headers if name == b"set-cookie")
+    return SimpleCookie(set_cookie)["sg_session"].value
 
 
 def create_session_and_pay(main_module, session_id: str, pc_name: str, amount: Decimal, actor, payment_method: str = "cash"):
@@ -91,6 +109,8 @@ def test_no_on_duty_operator_reports_clean_zero(temp_directory: str) -> None:
 
 
 def test_on_duty_operator_no_open_shift_reports_zero(temp_directory: str) -> None:
+    # An open shift is NOT required. With an operator on duty but no
+    # payments yet, the running total is simply zero.
     main_module = create_env(Path(temp_directory) / "no-open-shift.sqlite3")
     lalaine = create_cashier(main_module, "lalaine.noshift")
     login(main_module, "lalaine.noshift", "lalaine.noshift-pass")
@@ -100,6 +120,20 @@ def test_on_duty_operator_no_open_shift_reports_zero(temp_directory: str) -> Non
     assert summary.operator_user_id == lalaine.user_id
     assert summary.operator_name == "lalaine.noshift"
     assert summary.operator_sale == Decimal("0.00")
+
+
+def test_single_payment_counts_without_any_open_shift(temp_directory: str) -> None:
+    # The whole point of the shift-independent model: sales show up on the
+    # card even though the operator never opened a cashier shift.
+    main_module = create_env(Path(temp_directory) / "no-shift-sale.sqlite3")
+    lalaine = create_cashier(main_module, "lalaine.noshiftsale")
+    login(main_module, "lalaine.noshiftsale", "lalaine.noshiftsale-pass")
+    create_session_and_pay(main_module, "session-noshift-1", "PC-NOSHIFT", Decimal("35.00"), lalaine)
+
+    summary = main_module.get_dashboard_operator_sale(None)
+    assert summary.has_open_shift is False
+    assert summary.operator_sale == Decimal("35.00")
+    assert summary.payment_count == 1
 
 
 def test_open_shift_no_sales_reports_zero(temp_directory: str) -> None:
@@ -213,17 +247,13 @@ def test_void_reduces_net_correctly(temp_directory: str) -> None:
     assert after.voided_payments == Decimal("40.00")
 
 
-def test_ordinary_logout_does_not_change_amount(temp_directory: str) -> None:
+def test_change_operator_handoff_keeps_the_running_total(temp_directory: str) -> None:
+    # A plain /auth/logout (the Change Operator hand-off) does NOT end the
+    # operator's running-sales window -- the total is waiting for them if
+    # they come back without signing out.
     main_module = create_env(Path(temp_directory) / "logout-persist.sqlite3")
     lalaine = create_cashier(main_module, "lalaine.logout")
-    from server.schemas import LoginRequest
-
-    login_response = Response()
-    main_module.login(LoginRequest(username="lalaine.logout", password="lalaine.logout-pass"), login_response)
-    from http.cookies import SimpleCookie
-
-    set_cookie = next(value.decode("latin-1") for name, value in login_response.raw_headers if name == b"set-cookie")
-    token = SimpleCookie(set_cookie)["sg_session"].value
+    token = login_and_get_token(main_module, "lalaine.logout", "lalaine.logout-pass")
 
     main_module.open_shift(main_module.ShiftOpenRequest(opening_cash=Decimal("0.00")), lalaine)
     create_session_and_pay(main_module, "session-logout-1", "PC-LOGOUT", Decimal("150.00"), lalaine)
@@ -231,25 +261,78 @@ def test_ordinary_logout_does_not_change_amount(temp_directory: str) -> None:
     before = main_module.get_dashboard_operator_sale(None)
     assert before.operator_sale == Decimal("150.00")
 
-    main_module.logout(Response(), token)
+    main_module.logout(Response(), token)  # end_operator_session defaults False
 
     after = main_module.get_dashboard_operator_sale(None)
-    assert after.operator_sale == Decimal("150.00"), "ordinary Sign Out must never change Operator's Sale"
+    assert after.operator_sale == Decimal("150.00"), "Change Operator hand-off must never change Operator's Sale"
     assert after.has_open_shift is True
 
 
-def test_login_again_returns_same_shift_same_amount(temp_directory: str) -> None:
+def test_switching_back_in_without_signing_out_keeps_the_total(temp_directory: str) -> None:
+    # Signing in again while the window is still open is a no-op on the
+    # anchor -- the running total resumes where it was, and later payments
+    # keep accumulating on top of it.
     main_module = create_env(Path(temp_directory) / "login-again.sqlite3")
     lalaine = create_cashier(main_module, "lalaine.again")
     login(main_module, "lalaine.again", "lalaine.again-pass")
-    opened = main_module.open_shift(main_module.ShiftOpenRequest(opening_cash=Decimal("0.00")), lalaine)
     create_session_and_pay(main_module, "session-again-1", "PC-AGAIN", Decimal("75.00"), lalaine)
+    assert main_module.get_dashboard_operator_sale(None).operator_sale == Decimal("75.00")
 
+    time.sleep(0.05)  # a strictly-later re-login timestamp must NOT move the anchor
     login(main_module, "lalaine.again", "lalaine.again-pass")
 
+    assert main_module.get_dashboard_operator_sale(None).operator_sale == Decimal("75.00")
+
+    create_session_and_pay(main_module, "session-again-2", "PC-AGAIN-2", Decimal("15.00"), lalaine)
+    assert main_module.get_dashboard_operator_sale(None).operator_sale == Decimal("90.00")
+
+
+def test_sign_out_ends_the_window_and_next_sign_in_starts_at_zero(temp_directory: str) -> None:
+    # A deliberate Sign Out (end_operator_session=true) removes the
+    # window, so the operator's next sign-in starts a fresh total.
+    main_module = create_env(Path(temp_directory) / "sign-out-reset.sqlite3")
+    lalaine = create_cashier(main_module, "lalaine.signout")
+    token = login_and_get_token(main_module, "lalaine.signout", "lalaine.signout-pass")
+    create_session_and_pay(main_module, "session-signout-1", "PC-SIGNOUT", Decimal("75.00"), lalaine)
+    assert main_module.get_dashboard_operator_sale(None).operator_sale == Decimal("75.00")
+
+    main_module.logout(Response(), token, end_operator_session=True)
+
+    time.sleep(0.05)
+    login(main_module, "lalaine.signout", "lalaine.signout-pass")
+    assert main_module.get_dashboard_operator_sale(None).operator_sale == Decimal("0.00")
+
+    create_session_and_pay(main_module, "session-signout-2", "PC-SIGNOUT-2", Decimal("15.00"), lalaine)
+    assert main_module.get_dashboard_operator_sale(None).operator_sale == Decimal("15.00")
+
+
+def test_running_total_has_no_calendar_day_reset(temp_directory: str) -> None:
+    # A payment recorded days ago (across midnights) still counts, as long
+    # as it is within the current on-duty stint.
+    from datetime import timedelta
+
+    from server.database import get_connection
+    from server.time_utils import current_utc_time
+
+    main_module = create_env(Path(temp_directory) / "no-midnight-reset.sqlite3")
+    lalaine = create_cashier(main_module, "lalaine.midnight")
+    login(main_module, "lalaine.midnight", "lalaine.midnight-pass")
+
+    now = current_utc_time()
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE operator_sale_windows SET started_at = ? WHERE operator_user_id = ?",
+            ((now - timedelta(days=3)).isoformat(), lalaine.user_id),
+        )
+    billing = create_session_and_pay(main_module, "session-midnight-1", "PC-MID", Decimal("120.00"), lalaine)
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE payments SET created_at = ? WHERE payment_id = ?",
+            ((now - timedelta(days=2)).isoformat(), billing.payments[0].payment_id),
+        )
+
     summary = main_module.get_dashboard_operator_sale(None)
-    assert summary.shift_id == opened.shift.shift_id
-    assert summary.operator_sale == Decimal("75.00")
+    assert summary.operator_sale == Decimal("120.00"), "the running total must not reset at midnight"
 
 
 def test_another_browser_user_does_not_change_whose_sale_is_shown(temp_directory: str) -> None:
@@ -324,14 +407,17 @@ def main() -> None:
     tests = [
         test_no_on_duty_operator_reports_clean_zero,
         test_on_duty_operator_no_open_shift_reports_zero,
+        test_single_payment_counts_without_any_open_shift,
         test_open_shift_no_sales_reports_zero,
         test_single_session_payment_appears,
         test_member_purchase_appears,
         test_pending_attribution_purchase_counts_immediately,
         test_mixed_payment_types_sum_correctly,
         test_void_reduces_net_correctly,
-        test_ordinary_logout_does_not_change_amount,
-        test_login_again_returns_same_shift_same_amount,
+        test_change_operator_handoff_keeps_the_running_total,
+        test_switching_back_in_without_signing_out_keeps_the_total,
+        test_sign_out_ends_the_window_and_next_sign_in_starts_at_zero,
+        test_running_total_has_no_calendar_day_reset,
         test_another_browser_user_does_not_change_whose_sale_is_shown,
         test_resolution_helper_is_shared_with_payment_attribution,
         test_end_shift_makes_operator_sale_unavailable,

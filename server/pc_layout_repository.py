@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import Any
 
+from fastapi import HTTPException
+
 from server.database import get_connection
 from server.schemas import IncomeGroupRecord, OnDutyOperatorRecord, PCLayoutRecord, PCLayoutUpdate, UserPublic
 from server.time_utils import current_utc_time
@@ -106,6 +108,52 @@ class PCLayoutRepository:
             raise RuntimeError("PC layout disappeared after save")
         return layout
 
+    def delete_layout(self, pc_name: str) -> None:
+        """Permanently remove a layout slot and its metadata row.
+
+        Refuses (409) when the slot has anything real on record -- a
+        currently-assigned station, any session ever, or any attributed
+        payment -- so only never-used auto-detected / test slots can be
+        hard-deleted. Everything else must use is_enabled = 0 (Hide Slot).
+        """
+        with get_connection() as connection:
+            if connection.execute(
+                "SELECT 1 FROM pc_layouts WHERE pc_name = ?", (pc_name,)
+            ).fetchone() is None:
+                raise HTTPException(
+                    status_code=404, detail=f"{pc_name} is not a configured slot."
+                )
+
+            if connection.execute(
+                "SELECT 1 FROM station_assignments WHERE pc_name = ? AND status = 'assigned'",
+                (pc_name,),
+            ).fetchone() is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{pc_name} still has a computer assigned to it. Unassign it "
+                        "under Station Assignment first, or use Hide Slot."
+                    ),
+                )
+
+            has_session = connection.execute(
+                "SELECT 1 FROM sessions WHERE pc_name = ? LIMIT 1", (pc_name,)
+            ).fetchone() is not None
+            has_payment = connection.execute(
+                "SELECT 1 FROM payments WHERE pc_name_snapshot = ? LIMIT 1", (pc_name,)
+            ).fetchone() is not None
+            if has_session or has_payment:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{pc_name} has session or payment history on record and can't "
+                        "be deleted. Use Hide Slot instead."
+                    ),
+                )
+
+            connection.execute("DELETE FROM pc_layouts WHERE pc_name = ?", (pc_name,))
+            connection.execute("DELETE FROM pc_metadata WHERE pc_name = ?", (pc_name,))
+
 
 class IncomeGroupRepository:
     """Read access to the shop's configured revenue-owner groups."""
@@ -181,6 +229,44 @@ class OperatorStateRepository:
                 """,
                 (operator_user_id, selected_by_user_id, now.isoformat()),
             )
+
+    def begin_sale_window(self, operator_user_id: str) -> None:
+        """Anchor this operator's running-sales total to 'now' -- but only
+        if they don't already have an open window. Coming on duty again
+        while a window is still open (e.g. after a Change Operator
+        round-trip) keeps the original start, so their total is never
+        reset by simply switching back in. Another operator signing in
+        never touches this operator's row. The window is removed only on
+        an explicit sign-out / End Shift, via clear_sale_window."""
+        now = current_utc_time()
+        with get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO operator_sale_windows (operator_user_id, started_at)
+                VALUES (?, ?)
+                ON CONFLICT(operator_user_id) DO NOTHING
+                """,
+                (operator_user_id, now.isoformat()),
+            )
+
+    def clear_sale_window(self, operator_user_id: str) -> None:
+        """Remove this operator's running-sales anchor so their next
+        sign-in starts a fresh window (running total back to zero)."""
+        with get_connection() as connection:
+            connection.execute(
+                "DELETE FROM operator_sale_windows WHERE operator_user_id = ?",
+                (operator_user_id,),
+            )
+
+    def get_sale_window_start(self, operator_user_id: str) -> datetime | None:
+        with get_connection() as connection:
+            row = connection.execute(
+                "SELECT started_at FROM operator_sale_windows WHERE operator_user_id = ?",
+                (operator_user_id,),
+            ).fetchone()
+        if row is None or row["started_at"] is None:
+            return None
+        return datetime.fromisoformat(row["started_at"])
 
     def clear_if_current(self, operator_user_id: str) -> bool:
         """Resets the singleton to "nobody on duty" (operator_user_id =

@@ -282,6 +282,48 @@ class ShiftRepository:
             }
         )
 
+    def calculate_operator_sale(
+        self, user_id: str, since: datetime | None
+    ) -> dict[str, Decimal | int]:
+        """Completed-payment totals credited to `user_id` (payments.
+        recorded_by_user_id), optionally only those recorded at/after
+        `since` -- the moment this operator came on duty. Deliberately
+        shift-independent and with no calendar-day boundary: the dashboard
+        Operator's Sale card is a running total for the operator's whole
+        on-duty session, so it does not reset at midnight, only when a
+        different on-duty selection sets a new `since`."""
+        clauses = ["recorded_by_user_id = ?"]
+        params: list[object] = [user_id]
+        if since is not None:
+            clauses.append("created_at >= ?")
+            params.append(since.isoformat())
+        where = " AND ".join(clauses)
+        with get_connection() as connection:
+            row = connection.execute(
+                f"""
+                SELECT
+                    COALESCE(SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END), 0) AS gross,
+                    COALESCE(SUM(CASE WHEN status = 'completed' AND payment_method = 'cash' THEN amount ELSE 0 END), 0) AS cash,
+                    COALESCE(SUM(CASE WHEN status = 'completed' AND payment_method = 'gcash' THEN amount ELSE 0 END), 0) AS gcash,
+                    COALESCE(SUM(CASE WHEN status = 'completed' AND payment_method = 'maya' THEN amount ELSE 0 END), 0) AS maya,
+                    COALESCE(SUM(CASE WHEN status = 'completed' AND payment_method = 'other' THEN amount ELSE 0 END), 0) AS other,
+                    COALESCE(SUM(CASE WHEN status = 'voided' THEN amount ELSE 0 END), 0) AS voided,
+                    COUNT(CASE WHEN status = 'completed' THEN 1 END) AS completed_count
+                FROM payments
+                WHERE {where}
+                """,
+                params,
+            ).fetchone()
+        return {
+            "gross": money(Decimal(str(row["gross"] or "0.00"))),
+            "cash": money(Decimal(str(row["cash"] or "0.00"))),
+            "gcash": money(Decimal(str(row["gcash"] or "0.00"))),
+            "maya": money(Decimal(str(row["maya"] or "0.00"))),
+            "other": money(Decimal(str(row["other"] or "0.00"))),
+            "voided": money(Decimal(str(row["voided"] or "0.00"))),
+            "count": int(row["completed_count"] or 0),
+        }
+
     def close_shift(
         self,
         shift_id: str,

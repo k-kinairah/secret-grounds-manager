@@ -9,11 +9,12 @@ check, NOT a username check. This covers:
   ``owner`` (e.g. Tyrone) -> 403; a cashier -> 403.
 * ``require_role("admin")`` is unchanged: protected Admin and Tyrone both
   allowed; cashier denied.
-* route wiring: every ``/system/*`` route plus ``GET /remote-commands`` and
-  ``POST /commands/test-ping`` depend on ``require_system_admin``;
-  ``GET /operator-activity`` and ``POST /pcs/{pc_name}/power/{command_type}``
-  still depend on ``require_role("admin")`` and NOT on
-  ``require_system_admin``.
+* route wiring: every ``/system/*`` route plus ``GET /remote-commands``,
+  ``POST /commands/test-ping``, and the PC power/wake/MAC routes
+  (``POST /pcs/{pc_name}/power/{command_type}``, ``POST /pcs/{pc_name}/wake``,
+  ``PUT /pcs/{pc_name}/mac``) depend on ``require_system_admin``;
+  ``GET /operator-activity`` still depends on ``require_role("admin")`` and
+  NOT on ``require_system_admin``.
 * ``is_protected`` flows through ``row_to_user`` and ``to_public_user`` so
   ``/auth/me`` can surface it.
 
@@ -46,13 +47,18 @@ SYSTEM_ADMIN_ENDPOINTS = [
     ("GET", "/system/clients"),
     ("GET", "/remote-commands"),
     ("POST", "/commands/test-ping"),
+    # PC power controls + the MAC editor that feeds Wake-on-LAN are locked
+    # to the protected Admin account (dashboard Power Controls / Advanced
+    # Details are hidden for everyone else).
+    ("POST", "/pcs/{pc_name}/power/{command_type}"),
+    ("POST", "/pcs/{pc_name}/wake"),
+    ("PUT", "/pcs/{pc_name}/mac"),
 ]
 
 # Routes that stay on the plain role gate -- must NOT pick up
 # require_system_admin.
 ROLE_ADMIN_ENDPOINTS = [
     ("GET", "/operator-activity"),
-    ("POST", "/pcs/{pc_name}/power/{command_type}"),
 ]
 
 

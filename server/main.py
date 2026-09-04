@@ -284,6 +284,10 @@ def issue_operator_session(user: object, response: Response, selected_by_user_id
         public_user.user_id,
         selected_by_user_id or public_user.user_id,
     )
+    # Start this operator's running-sales window if they don't already
+    # have one open. Kept across operator switches; cleared only on an
+    # explicit sign-out / End Shift.
+    operator_state_repository.begin_sale_window(public_user.user_id)
     with get_connection() as connection:
         connection.execute(
             """
@@ -506,8 +510,20 @@ def password_operator_login(
 def logout(
     response: Response,
     sg_session: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+    end_operator_session: bool = False,
 ) -> dict[str, str]:
+    """Revoke this browser's auth token. `end_operator_session=true` marks
+    a deliberate Sign Out (vs a Change Operator hand-off): it also ends the
+    operator's running-sales window and clears the on-duty slot if it still
+    points at them, so their next sign-in starts a fresh total. A plain
+    Change Operator leaves the previous operator's window intact -- their
+    total is waiting for them if they come back without signing out."""
     if sg_session:
+        if end_operator_session:
+            user_id = auth_session_repository.get_user_id_for_token(sg_session)
+            if user_id is not None:
+                operator_state_repository.clear_sale_window(user_id)
+                operator_state_repository.clear_if_current(user_id)
         auth_session_repository.revoke_token(sg_session)
     clear_auth_cookie(response)
     return {"message": "Logged out"}
@@ -713,6 +729,7 @@ def close_shift(
 
     try:
         operator_state_repository.clear_if_current(shift_owner_id)
+        operator_state_repository.clear_sale_window(shift_owner_id)
     except Exception:
         logger.exception(
             "End Shift: failed to clear on-duty operator state for operator %s after closing shift %s",
@@ -892,13 +909,63 @@ def quote_member_topup_promo(
     return member_repository.quote_member_topup_promo(member_id, request.product_id)
 
 
+def topup_real_seconds_for_session(
+    purchase: MemberPurchaseResponse, session: SessionRecord
+) -> int:
+    """Real play-seconds to add to `session` for a just-completed member
+    top-up. The base credit follows the product's balance type; any promo
+    bonus is always Standard balance. VIP balance is 1:1 on a VIP station
+    and unusable elsewhere; Standard balance is 1:1 on a Standard station
+    and 2:1 on a VIP station -- the same conversion add_member_time uses."""
+    is_vip_station = session.station_type == "vip"
+
+    def real_seconds(balance_type: str, credited: int) -> int:
+        if credited <= 0:
+            return 0
+        if balance_type == "vip":
+            return credited if is_vip_station else 0
+        return credited // 2 if is_vip_station else credited
+
+    return real_seconds(purchase.product.balance_type, purchase.base_seconds) + real_seconds(
+        "standard", purchase.bonus_seconds
+    )
+
+
 @app.post("/members/{member_id}/purchase", response_model=MemberPurchaseResponse)
-def purchase_member_time(
+async def purchase_member_time(
     member_id: str,
     request: MemberPurchaseRequest,
     current_user=Depends(require_role("cashier")),
 ) -> MemberPurchaseResponse:
-    return member_repository.purchase(member_id, request, current_user)
+    purchase = member_repository.purchase(member_id, request, current_user)
+
+    # Auto-apply the topped-up time to the member's live session, if any, so
+    # the cashier does not need a separate Add Time on the PC. Best-effort:
+    # the balance credit above has already committed, so any failure here
+    # (client offline, session just ended, credited balance type unusable on
+    # that station) must not fail the purchase -- Add Time stays available.
+    active = session_repository.get_active_member_session(member_id)
+    if active is not None and active.status in {"active", "grace_period"}:
+        add_seconds = topup_real_seconds_for_session(purchase, active)
+        if add_seconds > 0:
+            try:
+                await session_service.add_member_time(
+                    active.session_id,
+                    member_id,
+                    add_seconds,
+                    get_on_duty_actor_user_id(current_user),
+                )
+                purchase = purchase.model_copy(
+                    update={"applied_to_active_session_seconds": add_seconds}
+                )
+            except HTTPException as error:
+                logger.info(
+                    "Top-up auto-extend skipped for member %s session %s: %s",
+                    member_id,
+                    active.session_id,
+                    error.detail,
+                )
+    return purchase
 
 
 @app.post("/member-purchases/{payment_id}/refund", response_model=MemberPurchaseRefundResponse)
@@ -1874,7 +1941,7 @@ def get_sales_report(
     period: SalesPeriod = Query("today"),
     start_date: date | None = None,
     end_date: date | None = None,
-    _: object = Depends(require_role("admin")),
+    _: object = Depends(require_role("cashier")),
 ) -> SalesReport:
     return build_sales_report(period, start_date, end_date)
 
@@ -1884,7 +1951,7 @@ def export_sales_report(
     period: SalesPeriod = Query("today"),
     start_date: date | None = None,
     end_date: date | None = None,
-    _: object = Depends(require_role("admin")),
+    _: object = Depends(require_role("cashier")),
 ) -> Response:
     report = build_sales_report(period, start_date, end_date, recent_limit=10000)
     output = StringIO()
@@ -1937,45 +2004,49 @@ def get_dashboard_today_sales(_: object = Depends(require_role("cashier"))) -> D
 
 @app.get("/dashboard/operator-sale", response_model=OperatorSaleSummary)
 def get_dashboard_operator_sale(_: object = Depends(require_role("cashier"))) -> OperatorSaleSummary:
-    """Read-only projection: how much has the CURRENT on-duty operator
-    collected during their CURRENT open shift. Resolves the on-duty
-    operator through the exact same lookup payment attribution uses
-    (get_on_duty_operator) -- never the calling browser's own cookie
-    user -- so this can never disagree with what payments are actually
-    being credited to. Reuses ShiftRepository.calculate_totals() as-is;
-    no second sales calculation is introduced here."""
+    """Read-only projection: the CURRENT on-duty operator's running sales
+    total for their whole on-duty session. Resolves the operator through
+    the exact same lookup payment attribution uses (get_on_duty_operator)
+    -- never the calling browser's own cookie user -- then sums every
+    completed payment credited to them since they came on duty
+    (operator_state.selected_at).
+
+    Deliberately shift-independent and NOT reset at midnight: the figure
+    only returns to zero when a different on-duty selection takes effect
+    (the operator logs out / is switched), which sets a new `selected_at`.
+    has_open_shift is still reported for reference but no longer gates the
+    number -- an open shift is not required."""
     on_duty = get_on_duty_operator()
     if on_duty.operator is None:
         return OperatorSaleSummary(has_open_shift=False)
 
-    shift = shift_repository.get_open_shift_for_user(on_duty.operator.user_id)
-    if shift is None:
-        return OperatorSaleSummary(
-            has_open_shift=False,
-            operator_user_id=on_duty.operator.user_id,
-            operator_name=on_duty.operator.display_name,
-        )
-
-    totals = shift_repository.calculate_totals(shift)
-    # gross_session_sales is already the SUM of only status='completed'
-    # payments -- calculate_totals() computes voided_payments as a
-    # disjoint bucket (status='voided'), never a subset of
-    # gross_session_sales. A voided payment is therefore already excluded
-    # the moment it's voided; subtracting voided_payments again here
-    # would double-count it. gross_session_sales is already the correct
-    # net-of-void figure, exposed as-is.
+    # Per-operator "on-duty since" anchor: persists across operator
+    # switches and only resets when this operator signs out / ends their
+    # shift. Falls back to the legacy global selected_at for any operator
+    # who is on duty but predates the window table.
+    window_start = operator_state_repository.get_sale_window_start(
+        on_duty.operator.user_id
+    )
+    since = window_start if window_start is not None else on_duty.selected_at
+    totals = shift_repository.calculate_operator_sale(
+        on_duty.operator.user_id, since
+    )
+    open_shift = shift_repository.get_open_shift_for_user(on_duty.operator.user_id)
+    # gross is already SUM(status='completed') and voided is a disjoint
+    # bucket (status='voided'), so a voided payment is already excluded
+    # from gross the moment it is voided -- no second subtraction here.
     return OperatorSaleSummary(
-        has_open_shift=True,
+        has_open_shift=open_shift is not None,
         operator_user_id=on_duty.operator.user_id,
         operator_name=on_duty.operator.display_name,
-        shift_id=shift.shift_id,
-        operator_sale=totals.gross_session_sales,
-        cash_payments=totals.cash_payments,
-        gcash_payments=totals.gcash_payments,
-        maya_payments=totals.maya_payments,
-        other_payments=totals.other_payments,
-        voided_payments=totals.voided_payments,
-        payment_count=totals.payment_count,
+        shift_id=open_shift.shift_id if open_shift is not None else None,
+        operator_sale=totals["gross"],
+        cash_payments=totals["cash"],
+        gcash_payments=totals["gcash"],
+        maya_payments=totals["maya"],
+        other_payments=totals["other"],
+        voided_payments=totals["voided"],
+        payment_count=totals["count"],
     )
 
 
@@ -2804,7 +2875,7 @@ async def create_and_send_remote_command(
 def update_pc_mac_address(
     pc_name: str,
     request: PCMacAddressUpdate,
-    _: object = Depends(require_role("admin")),
+    _: object = Depends(require_system_admin),
 ) -> PCRecord:
     pc = get_registered_pc_or_404(pc_name)
     mac_address = pc_metadata_repository.set_mac_address(pc.pc_name, request.mac_address)
@@ -2832,7 +2903,7 @@ async def send_power_command(
     pc_name: str,
     command_type: str,
     request: PowerCommandRequest,
-    current_user: object = Depends(require_role("admin")),
+    current_user: object = Depends(require_system_admin),
 ) -> RemoteCommandResponse:
     if command_type not in POWER_COMMAND_TYPES:
         raise HTTPException(status_code=404, detail="Unsupported power command")
@@ -2902,9 +2973,11 @@ async def send_power_command(
 @app.post("/pcs/{pc_name}/wake", response_model=WakeCommandResponse)
 def wake_pc(
     pc_name: str,
-    current_user: object = Depends(require_role("cashier")),
+    current_user: object = Depends(require_system_admin),
 ) -> WakeCommandResponse:
-    require_remote_command_permission("wake_on_lan", current_user)
+    # Manual Wake PC lives in the Admin-only Power Controls section. The
+    # automatic wake on Start-Session for a powered-off PC is a separate
+    # path (send_prepared_wake) and stays available to operators.
     pc = get_known_pc_or_404(pc_name)
     if not pc.mac_address:
         raise HTTPException(status_code=409, detail="This PC does not have a saved MAC address")
@@ -2980,6 +3053,29 @@ def update_pc_layout(
                 layout.income_group_id,
             )
     return layout
+
+
+@app.delete("/pcs/{pc_name}/layout")
+def delete_pc_layout(
+    pc_name: str,
+    _: object = Depends(require_role("admin")),
+) -> dict[str, str]:
+    # Hard-delete an auto-detected / leftover layout slot. The repository
+    # refuses any slot with real history (assigned station, session, or
+    # payment); this route additionally protects a slot whose client is
+    # online right now -- that is a live station, not a leftover.
+    cleaned_pc_name = pc_name.strip()
+    registered = pc_registry.get(cleaned_pc_name)
+    if registered is not None and registered.status == "online":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{cleaned_pc_name} is online right now, so it is a live station, not a "
+                "leftover slot. Use Hide Slot if you want it off the layout."
+            ),
+        )
+    pc_layout_repository.delete_layout(cleaned_pc_name)
+    return {"pc_name": cleaned_pc_name, "detail": "removed"}
 
 
 def clean_station_mac_path_param(mac_address: str) -> str:
@@ -3082,6 +3178,7 @@ def set_on_duty_operator(
         operator.user_id,
         get_actor_user_id(current_user),
     )
+    operator_state_repository.begin_sale_window(operator.user_id)
     return operator_state_repository.get_current(user_repository.get_user)
 
 

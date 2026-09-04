@@ -40,8 +40,11 @@ CONVERTED_ENDPOINTS = [
     ("POST", "/admin/operators/{operator_id}/sign-out"),
     ("DELETE", "/admin/operators/{operator_id}"),
     ("GET", "/operator-activity"),
-    ("GET", "/sales/report"),
-    ("GET", "/sales/export.csv"),
+    # NOTE: /sales/report and /sales/export.csv were moved off
+    # require_role("admin") onto require_role("cashier") -- Sales is a
+    # read-only reporting view open to any operator. Their (now cashier)
+    # gating is covered by the frontend access-model checks in
+    # dashboard/src/tests/dashboard.test.ts.
 ]
 
 

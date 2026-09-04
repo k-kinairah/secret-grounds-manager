@@ -171,7 +171,7 @@ def main() -> None:
         )
         products = list_membership_products()
         product = next(item for item in products if item.product_id == "member-promo")
-        purchase_member_time(
+        asyncio.run(purchase_member_time(
             member.member_id,
             MemberPurchaseRequest(
                 product_id=product.product_id,
@@ -179,7 +179,7 @@ def main() -> None:
                 reference_number="MAYA-123",
             ),
             cashier,
-        )
+        ))
 
         report = get_sales_report("today", None, None, admin)
         expected_total = Decimal("75.00") + product.price

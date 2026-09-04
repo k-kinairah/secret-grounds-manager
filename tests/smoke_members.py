@@ -223,7 +223,7 @@ def main() -> None:
         )
         assert refund_member.time_balance_seconds == 0
         refund_purchase_key = "member-refund-smoke-key"
-        refundable_purchase = purchase_member_time(
+        refundable_purchase = asyncio.run(purchase_member_time(
             refund_member.member_id,
             MemberPurchaseRequest(
                 product_id=promo.product_id,
@@ -232,8 +232,8 @@ def main() -> None:
                 idempotency_key=refund_purchase_key,
             ),
             cashier_user,
-        )
-        duplicate_purchase = purchase_member_time(
+        ))
+        duplicate_purchase = asyncio.run(purchase_member_time(
             refund_member.member_id,
             MemberPurchaseRequest(
                 product_id=promo.product_id,
@@ -242,7 +242,7 @@ def main() -> None:
                 idempotency_key=refund_purchase_key,
             ),
             cashier_user,
-        )
+        ))
         assert duplicate_purchase.payment.payment_id == refundable_purchase.payment.payment_id
         assert duplicate_purchase.transaction.transaction_id == refundable_purchase.transaction.transaction_id
         assert duplicate_purchase.member.time_balance_seconds == refundable_purchase.member.time_balance_seconds
@@ -330,7 +330,7 @@ def main() -> None:
             ),
             admin_user,
         )
-        purchase_member_time(
+        asyncio.run(purchase_member_time(
             self_login_member.member_id,
             MemberPurchaseRequest(
                 product_id=promo.product_id,
@@ -338,7 +338,7 @@ def main() -> None:
                 reference_number="SELF-LOGIN-1",
             ),
             cashier_user,
-        )
+        ))
         with get_connection() as connection:
             before_payment_count = connection.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
         self_login = asyncio.run(
@@ -526,7 +526,7 @@ def main() -> None:
         expected_after_open = (6 * 60 * 60) - (39 * 60)
         assert ended_open.session.member_balance_after_seconds == expected_after_open
 
-        promo_purchase = purchase_member_time(
+        promo_purchase = asyncio.run(purchase_member_time(
             member.member_id,
             MemberPurchaseRequest(
                 product_id=promo.product_id,
@@ -534,7 +534,7 @@ def main() -> None:
                 reference_number="GC-1",
             ),
             cashier_user,
-        )
+        ))
         assert promo_purchase.member.time_balance_seconds == expected_after_open + (4 * 60 * 60)
 
         pc_registry.clear()

@@ -1917,6 +1917,20 @@ def initialize_database() -> None:
             )
             """
         )
+        # Per-operator "on-duty since" anchor for the dashboard Operator's
+        # Sale running total. Set once when an operator comes on duty (kept
+        # across operator switches so their total is not reset by merely
+        # switching back in) and removed only on an explicit sign-out or
+        # End Shift. One row per operator with a currently-open window.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS operator_sale_windows (
+                operator_user_id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                FOREIGN KEY (operator_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS operator_audit_events (

@@ -1222,14 +1222,17 @@ class CashierShiftDetail(BaseModel):
 
 
 class OperatorSaleSummary(BaseModel):
-    """Read-only projection for the main-dashboard Operator's Sale card
-    (not yet wired to the dashboard -- Stage 5 is API-only). Reflects the
-    CURRENT on-duty operator's CURRENT open shift, resolved the exact
-    same way payment attribution resolves it (server.main.
-    get_on_duty_operator). operator_sale is net of voided/refunded
-    payments; income-group attribution status never affects this number
-    -- a payment counts the moment cash/payment is received, pending or
-    not."""
+    """Read-only projection for the main-dashboard Operator's Sale card.
+    A running total of every completed payment credited to the CURRENT
+    on-duty operator since they came on duty (operator_state.selected_at),
+    resolved the exact same way payment attribution resolves it
+    (server.main.get_on_duty_operator). Shift-independent and with no
+    calendar-day boundary -- it only clears when a new on-duty selection
+    takes effect or nobody is on duty. has_open_shift/shift_id are still
+    reported for reference but do not gate operator_sale. operator_sale is
+    net of voided/refunded payments; income-group attribution status never
+    affects this number -- a payment counts the moment it is received,
+    pending or not."""
 
     has_open_shift: bool
     operator_user_id: str | None = None
@@ -1483,6 +1486,11 @@ class MemberPurchaseResponse(BaseModel):
     base_seconds: int = 0
     bonus_seconds: int = 0
     total_seconds_credited: int = 0
+    # Real play-seconds the top-up automatically added to the member's
+    # currently-running session (0 when they had no live session, the
+    # station could not use the credited balance type, or the client was
+    # offline). The balance credit above always happens regardless.
+    applied_to_active_session_seconds: int = 0
 
 
 class MemberPurchaseRefundRequest(BaseModel):
