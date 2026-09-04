@@ -18,6 +18,90 @@ if TYPE_CHECKING:
     from client.lock_screen import LockScreenController
 
 
+def _patch_pywebview_move_bug() -> None:
+    """Fix a crash in pywebview's own WinForms backend (edgechromium/
+    winforms.py, BrowserView.BrowserForm.move -- also resize()): they call
+    ctypes.windll.user32.SetWindowPos(..., cx=None, cy=None, ...) or
+    similar, relying on flags like SWP_NOSIZE to make Windows ignore some
+    of the position/size arguments -- but ctypes can't marshal a Python
+    None into the plain integer parameters SetWindowPos declares those as,
+    so calls into it can raise ctypes.ArgumentError: "argument 5: TypeError:
+    'NoneType' object cannot be interpreted as an integer". This isn't
+    limited to user drag gestures -- our own move_window_exact() calls
+    Window.move() too during ordinary window positioning, so the crash was
+    recurring during completely normal operation, repeatedly enough to
+    destabilize the whole process.
+
+    Two layers, applied together rather than relying on either alone:
+
+    1. Patch ctypes.windll.user32.SetWindowPos itself to coerce any None
+       positional argument to 0 before the real call -- this is the actual
+       Windows API entry point every caller eventually goes through
+       (pywebview's move(), resize(), or anything else, present or future,
+       that hits this same pattern), so it can't be bypassed by a call path
+       this function doesn't already know about.
+    2. Also reimplement BrowserForm.move() directly with 0 instead of None,
+       in case some code path holds an earlier-bound reference to the
+       now-patched ctypes function object rather than looking it up fresh
+       through windll.user32 each time.
+
+    Patched at runtime rather than editing the vendored dependency
+    directly, since a future `pip install`/venv rebuild would silently
+    discard a source edit there.
+    """
+    try:
+        original_set_window_pos = ctypes.windll.user32.SetWindowPos
+
+        def safe_set_window_pos(hwnd, hwnd_insert_after, x, y, cx, cy, flags):
+            return original_set_window_pos(
+                hwnd,
+                hwnd_insert_after,
+                0 if x is None else x,
+                0 if y is None else y,
+                0 if cx is None else cx,
+                0 if cy is None else cy,
+                flags,
+            )
+
+        ctypes.windll.user32.SetWindowPos = safe_set_window_pos
+    except Exception:
+        pass
+
+    try:
+        from webview.platforms import winforms
+    except Exception:
+        return
+
+    def fixed_move(self, x: int, y: int) -> None:
+        SWP_NOSIZE = 0x0001
+        SWP_NOZORDER = 0x0004
+        SWP_SHOWWINDOW = 0x0040
+        scale = self._scale
+        if scale != 1:
+            x_phys = int(x * scale)
+            y_phys = int(y * scale)
+        else:
+            x_phys = int(x)
+            y_phys = int(y)
+        ctypes.windll.user32.SetWindowPos(
+            self.Handle.ToInt32(),
+            None,
+            x_phys,
+            y_phys,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW,
+        )
+
+    try:
+        winforms.BrowserView.BrowserForm.move = fixed_move
+    except Exception:
+        pass
+
+
+_patch_pywebview_move_bug()
+
+
 MemberLoginAction = Callable[[str, str], str | None]
 
 
@@ -690,6 +774,19 @@ class SecretGroundsWebViewHost:
             background_color="#0B1220",
             text_select=False,
             hidden=not lock_initially_visible,
+            # pywebview defaults easy_drag to True, which wires up a global
+            # window-level mousedown/mousemove listener that repositions the
+            # native window by calling its move() bridge on every move. None
+            # of these windows are meant to be user-draggable -- they're all
+            # positioned programmatically (move_window_exact below) -- and a
+            # stray click-drag anywhere on one (easy to trigger by accident
+            # on a fullscreen/frameless window) can leave that listener
+            # active; some edge case in it eventually computes NaN
+            # coordinates, which crash the move() bridge call with a
+            # ctypes.ArgumentError repeatedly (observed in client-error.log
+            # as a tight loop of them). Explicitly disabling it removes the
+            # whole failure mode.
+            easy_drag=False,
         )
         _diagnostic("after create_window lock")
         self.windows = {"lock": lock_window}
@@ -716,6 +813,7 @@ class SecretGroundsWebViewHost:
             transparent=True,
             background_color="#000000",
             text_select=False,
+            easy_drag=False,  # see the lock window's create_window call for why
         )
         _diagnostic("after create_window overlay")
         pill_x, pill_y = (-32000, -32000)
@@ -736,6 +834,7 @@ class SecretGroundsWebViewHost:
             transparent=True,
             background_color="#101a29",
             text_select=False,
+            easy_drag=False,  # see the lock window's create_window call for why
         )
         _diagnostic("after create_window pill")
         # Remaining-time reminder HUD: a small frameless transparent window
@@ -759,6 +858,7 @@ class SecretGroundsWebViewHost:
             transparent=True,
             background_color="#000000",
             text_select=False,
+            easy_drag=False,  # see the lock window's create_window call for why
         )
         _diagnostic("after create_window hud")
         self.windows = {
@@ -1394,6 +1494,7 @@ def run_webview_customer_overlay_preview(view: str, right_offset: int = 16) -> N
         transparent=True,
         background_color="#000000",
         text_select=False,
+        easy_drag=False,  # see the lock window's create_window call for why
     )
     _diagnostic(f"after create_window overlay-preview view={view}")
 

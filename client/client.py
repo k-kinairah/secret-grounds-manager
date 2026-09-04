@@ -107,6 +107,13 @@ class SecretGroundsClient:
             logout_action=self.customer_logout_current_session,
             lock_pc_action=self.lock_current_session,
         )
+        # remote_controls is constructed before either GUI controller exists
+        # (it needs no `pc_name`-dependent state from them at construction
+        # time) -- wire the references in now so its message popups can be
+        # parented onto whichever of these already has a live Tk interpreter
+        # running, instead of creating a new one per message.
+        self.remote_controls.lock_screen = self.lock_screen
+        self.remote_controls.customer_overlay = self.customer_overlay
         self.lock_screen.start()
         # Runs on its own thread/socket, entirely separate from the command
         # WebSocket and heartbeat loops -- a screen-capture disconnect/

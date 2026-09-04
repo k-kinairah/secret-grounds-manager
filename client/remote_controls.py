@@ -4,12 +4,11 @@ import platform
 import os
 import subprocess
 import time
-from threading import Thread
+from threading import Event, Lock, Thread
 from typing import Any, Callable
 
 from client import theme
 from client.tk_runtime import create_tk_root, log_tk_startup_error
-from client.utils import get_logo_path
 
 
 PowerExecutor = Callable[[list[str]], None]
@@ -42,7 +41,24 @@ class RemoteControlHandler:
     def __init__(self, pc_name: str, power_executor: PowerExecutor = default_power_executor) -> None:
         self.pc_name = pc_name
         self.power_executor = power_executor
-        self._brand_logo_image = None
+        # Set by client.py once both controllers exist (this handler is
+        # constructed before either). Used so message popups can be parented
+        # onto whichever one of these already has a live, running Tk
+        # interpreter -- see show_message()/_get_active_gui_root().
+        self.lock_screen: Any = None
+        self.customer_overlay: Any = None
+        # Lazily-created, then permanently reused, dedicated Tk interpreter
+        # for message popups -- see _ensure_popup_root(). Needed because on
+        # a PC where the WebView2 UI (webview_ui.py) is the active customer
+        # UI, lock_screen/customer_overlay never start a Tk GUI at all, so
+        # there was nothing for popups to reuse and every single message
+        # was still spinning up (and tearing down) its own brand-new Tk
+        # interpreter -- the exact instability this whole reuse scheme was
+        # meant to eliminate, just not caught by the lock_screen/
+        # customer_overlay check alone.
+        self._popup_tk = None
+        self._popup_root = None
+        self._popup_root_lock = Lock()
 
     def handle_power_command(self, command_type: str, payload: dict[str, Any]) -> str:
         if platform.system().lower() != "windows":
@@ -90,39 +106,130 @@ class RemoteControlHandler:
         ):
             raise RuntimeError("invalid_duration")
 
+        self._present_message_window(message, severity, duration_seconds, require_acknowledgement, announcement)
+        print(f"Displayed remote {'announcement' if announcement else 'message'} from SECRET GROUNDS.")
+        return "message displayed"
+
+    def _get_active_gui_root(self):
+        """The Tk root of whichever of lock_screen/customer_overlay is
+        already alive and running its own mainloop, or None if neither has
+        started its GUI yet (very early in client startup)."""
+        for controller in (self.customer_overlay, self.lock_screen):
+            root = getattr(controller, "root", None) if controller is not None else None
+            if root is not None:
+                return root
+        return None
+
+    def _ensure_popup_root(self):
+        """Create this handler's own dedicated Tk interpreter the first
+        time it's needed, and reuse that same one (with its own thread
+        running mainloop() forever) for every message after that. Returns
+        (tk, root), or (None, None) if it could not be started."""
+        with self._popup_root_lock:
+            if self._popup_root is not None:
+                return self._popup_tk, self._popup_root
+
+            ready = Event()
+            holder: dict[str, Any] = {}
+
+            def run() -> None:
+                try:
+                    tk, root = create_tk_root()
+                except Exception as error:
+                    holder["error"] = error
+                    ready.set()
+                    return
+                # This root itself is never shown -- it only exists to own
+                # an interpreter/mainloop that popups attach to as
+                # Toplevels, exactly like lock_screen's/customer_overlay's
+                # own root would if either were running one.
+                root.withdraw()
+                holder["tk"] = tk
+                holder["root"] = root
+                ready.set()
+                root.mainloop()
+
+            Thread(target=run, daemon=True, name="secret-grounds-popup-gui").start()
+            if not ready.wait(timeout=5) or "root" not in holder:
+                log_tk_startup_error(
+                    "Dedicated popup GUI thread failed to start", holder.get("error", RuntimeError("timed out"))
+                )
+                return None, None
+
+            self._popup_tk = holder["tk"]
+            self._popup_root = holder["root"]
+            return self._popup_tk, self._popup_root
+
+    def _present_message_window(
+        self,
+        message: str,
+        severity: str,
+        duration_seconds: int | None,
+        require_acknowledgement: bool,
+        announcement: bool,
+    ) -> None:
+        # The popup is built as a Toplevel of some already-running Tk
+        # interpreter, scheduled via that root's own after(0, ...) -- the
+        # same cross-thread-safe pattern customer_overlay already uses for
+        # schedule_gui_refresh(). Previously this spun up a brand-new
+        # tk.Tk() interpreter on a brand-new thread for every single
+        # message; repeatedly creating and tearing down a whole second/
+        # third Tcl interpreter -- especially alongside the WebView2engine
+        # that's actually the primary customer UI on most PCs -- corrupts
+        # Tcl's internal state (Tcl_AsyncDelete: async handler deleted by
+        # the wrong thread) badly enough to eventually crash the process.
+        # Prefer reusing lock_screen's/customer_overlay's own root if
+        # either is running a Tk GUI (the Tk-fallback case); otherwise fall
+        # back to this handler's own dedicated, permanently-reused root
+        # (the WebView2-primary case, which is the normal one in
+        # production) -- either way, exactly one interpreter ever gets
+        # created for the whole lifetime of the process, not one per
+        # message.
+        parent_root = self._get_active_gui_root()
+        if parent_root is None:
+            _, parent_root = self._ensure_popup_root()
+
+        if parent_root is not None:
+            try:
+                parent_root.after(
+                    0,
+                    lambda: self._show_message_window(
+                        message, severity, duration_seconds, require_acknowledgement, announcement, parent=parent_root
+                    ),
+                )
+                return
+            except Exception as error:
+                log_tk_startup_error("Scheduling remote message on the existing GUI thread failed", error)
+
+        # Last-resort fallback if even the dedicated popup root couldn't be
+        # started -- better to show it standalone than drop it.
         Thread(
             target=self._show_message_window,
             args=(message, severity, duration_seconds, require_acknowledgement, announcement),
             daemon=True,
         ).start()
-        print(f"Displayed remote {'announcement' if announcement else 'message'} from SECRET GROUNDS.")
-        return "message displayed"
 
     def _build_brand_mark(self, tk, container, bg: str = theme.PANEL):
-        """Logo image if the packaged asset is available, else a text mark
-        -- same fallback pattern as the customer overlay's compact mark."""
-        logo_path = get_logo_path()
-        if logo_path is not None:
-            try:
-                image = tk.PhotoImage(file=str(logo_path))
-                target_height = 18
-                if image.height() > target_height:
-                    factor = max(1, round(image.height() / target_height))
-                    image = image.subsample(factor, factor)
-                self._brand_logo_image = image
-                return tk.Label(container, image=image, background=bg)
-            except Exception as error:
-                log_tk_startup_error("Remote message logo image failed to load", error)
-
-        return tk.Label(
-            container,
-            text="SG",
-            font=("Segoe UI", 8, "bold"),
-            foreground=theme.TEXT_ON_ACCENT,
-            background=theme.ACCENT_CYAN,
-            padx=4,
-            pady=2,
+        """A small vector diamond mark, drawn on a Canvas -- deliberately
+        NOT a loaded tk.PhotoImage. show_message() spins up a brand-new Tk
+        interpreter on a brand-new thread for every single popup, and a
+        PhotoImage loaded there was getting garbage-collected later from
+        whatever thread Python's GC happened to run on -- collecting a Tk
+        image tied to a different (often already-exited) interpreter
+        corrupts Tcl's internal async state process-wide, which was
+        destabilizing the customer overlay's own separate, long-running Tk
+        interpreter (its session timer) after a second broadcast message.
+        A vector draw has no image object to mistime, so the hazard is
+        gone entirely rather than just made less likely.
+        """
+        size = 18
+        canvas = tk.Canvas(container, width=size, height=size, highlightthickness=0, bd=0, background=bg)
+        mid = size / 2
+        canvas.create_polygon(
+            mid, 1, size - 1, mid, mid, size - 1, 1, mid,
+            outline="#00DEFF", fill="", width=1.6, joinstyle="round",
         )
+        return canvas
 
     def _build_pill_button(
         self, tk, container, bg: str, accent: str, text: str, command, width: int = 220, height: int = 46
@@ -231,13 +338,28 @@ class RemoteControlHandler:
         duration_seconds: int | None,
         require_acknowledgement: bool,
         announcement: bool,
+        parent=None,
     ) -> None:
-        try:
-            tk, root = create_tk_root()
-        except Exception as error:
-            log_tk_startup_error("Remote message GUI unavailable", error)
-            print(f"Message fallback: SECRET GROUNDS - {message}")
-            return
+        # `parent` is an existing, already-running Tk root (see
+        # _present_message_window) -- build this window as a Toplevel of it
+        # instead of a whole new interpreter. The standalone create_tk_root()
+        # path only runs in the rare fallback case (see call site).
+        if parent is not None:
+            try:
+                import tkinter as tk
+
+                root = tk.Toplevel(parent)
+            except Exception as error:
+                log_tk_startup_error("Remote message Toplevel creation failed", error)
+                print(f"Message fallback: SECRET GROUNDS - {message}")
+                return
+        else:
+            try:
+                tk, root = create_tk_root()
+            except Exception as error:
+                log_tk_startup_error("Remote message GUI unavailable", error)
+                print(f"Message fallback: SECRET GROUNDS - {message}")
+                return
 
         style = _SEVERITY_STYLES[severity]
         accent = style["accent"]
@@ -292,7 +414,6 @@ class RemoteControlHandler:
         title_row = tk.Frame(header, background=header_bg)
         title_row.pack(pady=(16, 0))
         self._bind_drag(root, title_row)
-        self._build_brand_mark(tk, title_row, bg=header_bg).pack(side="left")
         # Plain bold label -- GlowText's offset halo passes only blend into
         # a soft glow at large hero sizes; at this small a point size the
         # offsets just show up as separate misaligned copies of the text.
@@ -300,11 +421,27 @@ class RemoteControlHandler:
             title_row,
             text="SECRET GROUNDS",
             font=("Segoe UI", 12, "bold"),
-            foreground=brand_text_color,  # fixed cyan-blue, same as the dashboard nav's own wordmark -- brand identity, not tone-dependent (darkened for info, see above)
+            foreground=accent,
             background=header_bg,
-        ).pack(side="left", padx=(8, 0))
+        ).pack()
+
+        # Every root.after() scheduled below (the countdown ticks, the
+        # auto-dismiss timer) gets its id recorded here so dismiss() can
+        # cancel whatever's still pending -- on a manual Dismiss/Escape,
+        # both chains would otherwise still be scheduled when destroy()
+        # runs, leaving stale callbacks in Tcl's queue for an interpreter
+        # that no longer exists. That dangling state is what was corrupting
+        # the *other*, still-running Tk interpreter (the customer overlay's
+        # own window) after a second broadcast message closed early.
+        pending_after_ids: list[str] = []
 
         def dismiss(_event=None) -> None:
+            for after_id in pending_after_ids:
+                try:
+                    root.after_cancel(after_id)
+                except Exception:
+                    pass
+            pending_after_ids.clear()
             theme.fade_out(root, on_complete=root.destroy)
 
         if not require_acknowledgement:
@@ -386,10 +523,10 @@ class RemoteControlHandler:
                     fill.place_configure(relwidth=max(0.0, 1 - step / total_ticks))
                 except Exception:
                     return
-                root.after(200, lambda: tick(step + 1))
+                pending_after_ids.append(root.after(200, lambda: tick(step + 1)))
 
             tick()
-            root.after(duration_seconds * 1000, dismiss)
+            pending_after_ids.append(root.after(duration_seconds * 1000, dismiss))
 
         root.update_idletasks()
         height = root.winfo_reqheight()
@@ -411,4 +548,9 @@ class RemoteControlHandler:
         # has no per-pixel/backdrop-blur alpha to fake it with instead.
         theme.fade_in(root, target_alpha=0.96)
         theme.slide_in(root, x, y_start, y_end, width, height)
-        root.mainloop()
+        # Only the standalone fallback path owns its own interpreter and
+        # needs to pump it; a Toplevel is already serviced by its parent's
+        # mainloop, which is running on this exact thread right now (we got
+        # here via that root's own after(0, ...) callback).
+        if parent is None:
+            root.mainloop()
