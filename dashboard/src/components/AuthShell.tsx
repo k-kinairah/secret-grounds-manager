@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { closeShift, fetchClientSettings, fetchCurrentShift, fetchCurrentUser, logout, openShift } from "@/lib/api";
+import { closeShift, fetchClientSettings, fetchCurrentShift, fetchCurrentUser, fetchOperatorSale, logout, openShift } from "@/lib/api";
 import { formatDateTime, formatMoney } from "@/lib/time";
 import type { CashierShiftDetail, CurrentUser, UserRole } from "@/lib/types";
+import { ConfirmActionDialog } from "./ConfirmActionDialog";
 import { ToastProvider } from "./ToastProvider";
 
 const ROLE_RANK: Record<UserRole, number> = {
@@ -13,11 +14,13 @@ const ROLE_RANK: Record<UserRole, number> = {
   admin: 2,
   owner: 3
 };
+// Sales is deliberately NOT here -- it is a read-only reporting view open
+// to any operator (role >= cashier). Backend mirror: /sales/report and
+// /sales/export.csv use require_role("cashier").
 const ADMIN_ONLY_PATHS = [
   "/operator-activity",
   "/operators",
   "/promotions",
-  "/sales",
   "/settings",
   "/system",
   "/shifts",
@@ -58,6 +61,8 @@ export function AuthShell({ children }: { children: ReactNode }) {
   const [shiftMessage, setShiftMessage] = useState<string | null>(null);
   const [isClosingShift, setIsClosingShift] = useState(false);
   const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [signOutSale, setSignOutSale] = useState<string | null>(null);
   const adminMenuRef = useRef<HTMLDivElement | null>(null);
   const adminButtonRef = useRef<HTMLButtonElement | null>(null);
   const isLoginPage = pathname === "/login";
@@ -190,13 +195,33 @@ export function AuthShell({ children }: { children: ReactNode }) {
     };
   }, [isLoginPage, user]);
 
+  async function openSignOutConfirm() {
+    if (isLoggingOut) {
+      return;
+    }
+    // Snapshot the operator's running sales total before it resets -- the
+    // dashboard figure is windowed from operator_state.selected_at, which
+    // is bumped to "now" on the next login, so it returns to 0 for this
+    // operator once they sign back in (it is NOT restored per-operator).
+    setSignOutSale(null);
+    setConfirmSignOut(true);
+    try {
+      const summary = await fetchOperatorSale();
+      setSignOutSale(summary.operator_sale);
+    } catch {
+      setSignOutSale(null);
+    }
+  }
+
   async function handleLogout() {
     if (isLoggingOut) {
       return;
     }
     setIsLoggingOut(true);
     try {
-      await logout();
+      // Deliberate Sign Out: end this operator's running-sales window so
+      // their next sign-in starts back at zero.
+      await logout(true);
     } finally {
       setUser(null);
       setIsLoggingOut(false);
@@ -210,6 +235,9 @@ export function AuthShell({ children }: { children: ReactNode }) {
     }
     setIsLoggingOut(true);
     try {
+      // Hand-off, not a Sign Out: leave the previous operator's
+      // running-sales window intact so their total is waiting for them if
+      // they come back without signing out.
       await logout();
     } finally {
       setUser(null);
@@ -282,12 +310,10 @@ export function AuthShell({ children }: { children: ReactNode }) {
             <UsersNavIcon />
             Members
           </Link>
-          {isAdminOperator ? (
-            <Link className={pathname === "/sales" ? "appShell__linkActive" : ""} href="/sales">
-              <SalesNavIcon />
-              Sales
-            </Link>
-          ) : null}
+          <Link className={pathname === "/sales" ? "appShell__linkActive" : ""} href="/sales">
+            <SalesNavIcon />
+            Sales
+          </Link>
           {isAdminOperator ? (
             <div
               className="appShell__adminMenu"
@@ -347,7 +373,11 @@ export function AuthShell({ children }: { children: ReactNode }) {
                   Shift Open - {formatDateTime(shift.shift.opened_at)}
                 </span>
               ) : null}
-              <button disabled={isLoggingOut} onClick={handleLogout} type="button">
+              <button
+                disabled={isLoggingOut}
+                onClick={() => void openSignOutConfirm()}
+                type="button"
+              >
                 <LogOutActionIcon />
                 {isLoggingOut ? "Signing out..." : "Sign out"}
               </button>
@@ -407,6 +437,27 @@ export function AuthShell({ children }: { children: ReactNode }) {
           {children}
         </>
       )}
+      {confirmSignOut ? (
+        <ConfirmActionDialog
+          centered
+          confirmLabel={isLoggingOut ? "Signing out..." : "Sign Out"}
+          facts={
+            signOutSale !== null
+              ? [{ label: "Your sales", value: formatMoney(signOutSale) }]
+              : undefined
+          }
+          isLoading={isLoggingOut}
+          lede="Are you sure you want to sign out?"
+          note="You'll return to the login screen. This running total starts back at ₱0.00 when you sign in again."
+          onCancel={() => setConfirmSignOut(false)}
+          onConfirm={() => {
+            setConfirmSignOut(false);
+            void handleLogout();
+          }}
+          title="Sign out"
+          tone="info"
+        />
+      ) : null}
     </ToastProvider>
   );
 }

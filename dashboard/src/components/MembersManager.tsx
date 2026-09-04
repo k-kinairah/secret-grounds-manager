@@ -712,10 +712,14 @@ export function MembersManager() {
         memberPaymentMethod === "cash"
           ? `Change ${formatMoney(response.payment.change_given ?? "0.00")}`
           : `Ref ${response.payment.reference_number ?? "recorded"}`;
+      const appliedNow =
+        (response.applied_to_active_session_seconds ?? 0) > 0
+          ? `  ·  +${formatMemberBalance(response.applied_to_active_session_seconds ?? 0)} added to their active session`
+          : "";
       pushToast(
         isVipPurchase ? "VIP time added" : "Standard time added",
         "success",
-        `${who}  ·  ${added}  ·  ${paymentPart}  ·  ${balance}`
+        `${who}  ·  ${added}  ·  ${paymentPart}  ·  ${balance}${appliedNow}`
       );
       memberPurchaseKeyRef.current = createIdempotencyKey();
       setMemberPaymentValue("");

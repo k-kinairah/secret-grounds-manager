@@ -1001,6 +1001,9 @@ export interface MemberPurchaseResponse {
   product: MembershipProduct;
   payment: PaymentRecord;
   transaction: MemberTimeTransaction;
+  // Real play-seconds the top-up auto-applied to the member's live session
+  // (0 / absent when they had none or it could not be applied).
+  applied_to_active_session_seconds?: number;
 }
 
 export interface MemberPurchaseRefundResponse {

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import styles from "@/app/page.module.css";
+import { CloseButton } from "./CloseButton";
+import { FancySelect, type FancySelectOption } from "./FancySelect";
 import { fetchCalculatedTime, fetchMemberVipPreview, fetchMembers } from "@/lib/api";
 import { formatMoney, formatNaturalDuration, formatRateDuration, minutesToSeconds } from "@/lib/time";
 import type {
@@ -15,6 +17,11 @@ import type {
 } from "@/lib/types";
 
 const QUICK_STANDARD_AMOUNTS = ["5", "10", "15", "20", "30", "40", "50", "100"];
+
+const PAYMENT_METHOD_OPTIONS: FancySelectOption<PaymentMethod>[] = [
+  { value: "cash", label: "Cash" },
+  { value: "gcash", label: "GCash" }
+];
 
 function formatChipLabel(rate: RateProfile): string {
   const price = formatMoney(rate.price).replace(/\.00$/, "");
@@ -368,6 +375,7 @@ export function SessionDialog({
       >
         <header className={styles.sessionDialogHeader}>
           <h2>{title}</h2>
+          <CloseButton disabled={isLoading} label={`Close ${title}`} onClick={onCancel} />
         </header>
         <div className={styles.sessionDialogBody}>
         {pc.connection_status === "offline" ? (
@@ -580,18 +588,17 @@ export function SessionDialog({
 
         {activeTab !== "member" ? (
           <div className={styles.paymentBox}>
-            <label className={styles.field}>
-              Payment method
-              <select
-                onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}
-                value={paymentMethod}
-              >
-                <option value="cash">Cash</option>
-                <option value="gcash">GCash</option>
-              </select>
-            </label>
-            {paymentMethod === "cash" ? (
-              <>
+            <div className={styles.paymentRow}>
+              <div className={styles.field}>
+                <span>Payment method</span>
+                <FancySelect
+                  ariaLabel="Payment method"
+                  onChange={setPaymentMethod}
+                  options={PAYMENT_METHOD_OPTIONS}
+                  value={paymentMethod}
+                />
+              </div>
+              {paymentMethod === "cash" ? (
                 <label className={styles.field}>
                   Cash received
                   <input
@@ -602,22 +609,24 @@ export function SessionDialog({
                     value={cashReceived}
                   />
                 </label>
-                <div className={`${styles.changeSummary} ${styles[`changeSummary-${changeState.state}`]}`}>
-                  <span>Change</span>
-                  <strong>{changeState.label}</strong>
-                </div>
-              </>
-            ) : (
-              <label className={styles.field}>
-                Reference number
-                <input
-                  ref={referenceRef}
-                  onChange={(event) => setReferenceNumber(event.target.value)}
-                  placeholder="Required"
-                  value={referenceNumber}
-                />
-              </label>
-            )}
+              ) : (
+                <label className={styles.field}>
+                  Reference number
+                  <input
+                    ref={referenceRef}
+                    onChange={(event) => setReferenceNumber(event.target.value)}
+                    placeholder="Required"
+                    value={referenceNumber}
+                  />
+                </label>
+              )}
+            </div>
+            {paymentMethod === "cash" ? (
+              <div className={`${styles.changeSummary} ${styles[`changeSummary-${changeState.state}`]}`}>
+                <span>Change</span>
+                <strong>{changeState.label}</strong>
+              </div>
+            ) : null}
           </div>
         ) : null}
         </div>
@@ -625,9 +634,6 @@ export function SessionDialog({
         <footer className={styles.sessionDialogFooter}>
           {validationError ? <p className={styles.formError}>{validationError}</p> : null}
           <div className={styles.dialogActions}>
-            <button className={styles.secondaryButton} disabled={isLoading} onClick={onCancel}>
-              Cancel
-            </button>
             <button
               className={styles.primaryButton}
               disabled={

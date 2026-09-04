@@ -13,19 +13,18 @@ interface DashboardSummaryProps {
 }
 
 function operatorSaleCard(operatorSale: OperatorSaleSummary | null): { detail: string; value: string } {
-  // The amount always comes straight from the Stage 5 server-authoritative
-  // endpoint -- never recomputed here from raw payments/shift data.
+  // The amount always comes straight from the server-authoritative endpoint
+  // -- never recomputed here. It is the on-duty operator's running total for
+  // their whole on-duty session (no shift required, no midnight reset); it
+  // only clears when the operator logs out / is switched.
   if (operatorSale === null) {
-    return { detail: "Current shift", value: "--" };
+    return { detail: "On duty", value: "--" };
   }
-  if (!operatorSale.has_open_shift) {
-    return {
-      detail: operatorSale.operator_user_id === null ? "No operator on duty" : "No open shift",
-      value: formatMoney(null)
-    };
+  if (operatorSale.operator_user_id === null) {
+    return { detail: "No operator on duty", value: formatMoney(null) };
   }
   return {
-    detail: operatorSale.operator_name ? `${operatorSale.operator_name} · Current shift` : "Current shift",
+    detail: operatorSale.operator_name ? `${operatorSale.operator_name} · On duty` : "On duty",
     value: formatMoney(operatorSale.operator_sale)
   };
 }

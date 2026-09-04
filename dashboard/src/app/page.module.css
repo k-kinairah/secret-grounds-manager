@@ -247,15 +247,19 @@
 }
 
 .statusCardDashboard {
+  --card-accent: 34 211 238;
+  position: relative;
   background:
     linear-gradient(180deg, rgb(255 255 255 / 0.055), transparent 38%),
-    radial-gradient(circle at 96% 12%, rgb(34 211 238 / 0.09), transparent 34%),
+    radial-gradient(circle at 96% 12%, rgb(var(--card-accent) / 0.1), transparent 34%),
     linear-gradient(180deg, rgba(17, 27, 45, 0.94), rgba(8, 17, 31, 0.94));
-  border-color: rgba(56, 189, 248, 0.2);
-  border-radius: 10px;
+  border-color: rgb(var(--card-accent) / 0.24);
+  border-radius: 12px;
   box-shadow:
+    inset 0 2px 0 rgb(var(--card-accent) / 0.4),
     inset 0 1px 0 rgb(255 255 255 / 0.07),
-    0 15px 34px rgb(0 0 0 / 0.22);
+    0 15px 34px rgb(0 0 0 / 0.24),
+    0 0 20px rgb(var(--card-accent) / 0.06);
   gap: 13px;
   grid-template-columns: 46px minmax(0, 1fr);
   min-height: 92px;
@@ -263,20 +267,24 @@
 }
 
 .statusCardDashboard:hover {
-  border-color: rgba(34, 211, 238, 0.34);
+  border-color: rgb(var(--card-accent) / 0.5);
   box-shadow:
+    inset 0 2px 0 rgb(var(--card-accent) / 0.55),
     inset 0 1px 0 rgb(255 255 255 / 0.09),
-    0 18px 40px rgb(0 0 0 / 0.28),
-    0 0 22px rgb(34 211 238 / 0.07);
+    0 18px 40px rgb(0 0 0 / 0.3),
+    0 0 34px rgb(var(--card-accent) / 0.18);
 }
 
 .statusCardDashboard .statusCardIcon {
   background:
-    linear-gradient(180deg, rgb(125 211 252 / 0.14), rgb(14 165 233 / 0.08)),
+    linear-gradient(180deg, rgb(var(--card-accent) / 0.22), rgb(var(--card-accent) / 0.06)),
     rgb(8 17 31 / 0.66);
-  border-color: rgba(56, 189, 248, 0.26);
-  border-radius: 9px;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08);
+  border-color: rgb(var(--card-accent) / 0.34);
+  border-radius: 10px;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    0 0 16px rgb(var(--card-accent) / 0.3);
+  color: rgb(var(--card-accent));
   font-size: initial;
   font-weight: initial;
   height: 46px;
@@ -292,34 +300,23 @@
 .statusCardDashboard .statusCardValue {
   font-size: clamp(22px, 2vw, 30px);
   margin: 5px 0 4px;
+  text-shadow: 0 0 20px rgb(var(--card-accent) / 0.28);
 }
 
-.statusCardDashboard.statusCard_success .statusCardIcon {
-  background:
-    linear-gradient(180deg, rgb(134 239 172 / 0.16), rgb(34 197 94 / 0.08)),
-    rgb(8 17 31 / 0.66);
-  border-color: rgba(34, 197, 94, 0.3);
+.statusCardDashboard.statusCard_success {
+  --card-accent: 74 222 128;
 }
 
-.statusCardDashboard.statusCard_warning .statusCardIcon {
-  background:
-    linear-gradient(180deg, rgb(253 186 116 / 0.16), rgb(249 115 22 / 0.08)),
-    rgb(8 17 31 / 0.66);
-  border-color: rgba(251, 146, 60, 0.32);
+.statusCardDashboard.statusCard_warning {
+  --card-accent: 251 146 60;
 }
 
-.statusCardDashboard.statusCard_danger .statusCardIcon {
-  background:
-    linear-gradient(180deg, rgb(253 164 175 / 0.16), rgb(244 63 94 / 0.08)),
-    rgb(8 17 31 / 0.66);
-  border-color: rgba(244, 63, 94, 0.32);
+.statusCardDashboard.statusCard_danger {
+  --card-accent: 244 63 94;
 }
 
-.statusCardDashboard.statusCard_info .statusCardIcon {
-  background:
-    linear-gradient(180deg, rgb(147 197 253 / 0.16), rgb(59 130 246 / 0.08)),
-    rgb(8 17 31 / 0.66);
-  border-color: rgba(96, 165, 250, 0.32);
+.statusCardDashboard.statusCard_info {
+  --card-accent: 96 165 250;
 }
 
 .activityPanel {
@@ -721,6 +718,31 @@
   text-transform: uppercase;
 }
 
+/* Setup/Layout area groups flow side by side and size to their card count,
+   so single-station areas (e.g. MAMA + LALA) share a row instead of each
+   taking the full width. */
+.pcLayoutGroups {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.pcLayoutGroups > .pcLayoutGroup {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+@media (min-width: 901px) {
+  /* Only inside a setup area group -- the operational .monitorGrid (fixed
+     5 columns) is left untouched. --setup-cols is set per group in
+     DashboardClient (card count, capped at 5). */
+  .pcLayoutGroup .monitorGrid {
+    grid-template-columns: repeat(var(--setup-cols, 5), minmax(0, 264px));
+    justify-content: start;
+  }
+}
+
 /* Exactly 5 columns on desktop (PC-01..05 / 06..10 / 11..15) -- explicit
    count, not auto-fill, so the row layout is deterministic regardless of
    the left panel's exact width. Card size itself is still capped by
@@ -754,9 +776,9 @@
 
 .monitorTile:hover,
 .monitorTile:focus-visible {
-  filter: brightness(1.12);
+  filter: brightness(1.16) saturate(1.12);
   outline: none;
-  transform: translateY(-2px);
+  transform: translateY(-3px);
 }
 
 .monitorTile:focus-visible .monitorScreen {
@@ -767,15 +789,34 @@
     0 0 30px rgb(34 211 238 / 0.55);
 }
 
-/* Selection is a separate outer ring (outline), never a border/box-shadow
-   override -- those two properties are what carry each tile's operational
-   color (cyan/pink/red/gray), so overriding them here would hide whether a
-   selected PC is Available/In Use/Low Time/Offline. `outline` paints
-   outside the border box on its own layer and is immune to the
-   operational-state rules below overriding it. */
+/* Selection cue: the monitor "lifts and lights up" in a periwinkle accent
+   that sits outside the operational palette (cyan / pink / red / amber /
+   purple / gray). It's carried on `filter` (halo) + the ::before bezel
+   frame + a status pill -- never `border-color`/`box-shadow` on
+   .monitorScreen, since those carry each tile's operational colour. */
+.monitorTileSelected {
+  transform: translateY(-3px);
+  z-index: 1;
+}
 .monitorTileSelected .monitorScreen {
-  outline: 3px solid rgb(248 250 252 / 0.85);
-  outline-offset: 3px;
+  filter:
+    brightness(1.12)
+    drop-shadow(0 0 8px rgb(165 180 252 / 0.9))
+    drop-shadow(0 0 22px rgb(165 180 252 / 0.5));
+}
+.monitorTileSelected .monitorScreen::before {
+  border-color: #a5b4fc;
+  box-shadow:
+    inset 0 0 0 1px rgb(165 180 252 / 0.55),
+    0 0 14px rgb(165 180 252 / 0.4);
+}
+.monitorTileSelected .monitorStatusText {
+  display: inline-block;
+  border: 1px solid rgb(165 180 252 / 0.55);
+  border-radius: 999px;
+  background: rgb(165 180 252 / 0.16);
+  color: #e0e7ff;
+  padding: 3px 12px;
 }
 
 /* .monitorTile's own align-items: stretch does not truly center children
@@ -798,45 +839,86 @@
 
 .monitorScreen {
   align-items: center;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 16 / 10;
+  /* Curved-panel light model: the left/right edges catch light (they face
+     the viewer) while a soft shadow runs down the centre -- so the middle
+     reads as pushed back, the way a concave gaming monitor looks head-on. */
   background:
-    radial-gradient(circle at 50% 48%, rgb(34 211 238 / 0.06), transparent 56%),
-    linear-gradient(145deg, #151922, #080b12 58%, #05070c);
-  border: 1px solid rgb(34 211 238 / 0.8);
-  border-radius: 5px;
+    linear-gradient(90deg,
+      rgb(120 205 230 / 0.22) 0%,
+      rgb(120 205 230 / 0.05) 7%,
+      transparent 20%,
+      transparent 80%,
+      rgb(120 205 230 / 0.05) 93%,
+      rgb(120 205 230 / 0.22) 100%),
+    radial-gradient(46% 130% at 50% 50%, rgb(0 0 0 / 0.42), transparent 74%),
+    linear-gradient(180deg, rgb(0 0 0 / 0.28), transparent 22%, transparent 74%, rgb(0 0 0 / 0.32)),
+    radial-gradient(120% 70% at 50% 0%, rgb(255 255 255 / 0.05), transparent 55%),
+    linear-gradient(160deg, #1b212c, #0b0f17 55%, #05070c);
+  border: 1px solid rgb(34 211 238 / 0.82);
+  border-radius: 12px;
   box-shadow:
-    inset 0 0 22px rgb(255 255 255 / 0.04),
-    inset 0 0 40px rgb(34 211 238 / 0.05),
-    0 0 22px rgb(34 211 238 / 0.4);
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    inset 0 0 30px rgb(34 211 238 / 0.06),
+    0 14px 30px rgb(0 0 0 / 0.45),
+    0 0 24px rgb(34 211 238 / 0.4);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-height: 100px;
-  padding: 13px 10px;
+  min-height: 118px;
+  padding: 15px 18px;
   position: relative;
-  width: min(156px, 100%);
+  width: min(232px, 100%);
+}
+
+/* Inset dark frame = the monitor bezel, following the same bowed edge.
+   Immune to the per-state box-shadow overrides below (those only touch
+   border-color + box-shadow). */
+.monitorScreen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 3px solid #090d15;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.03);
+  pointer-events: none;
+}
+
+/* Glass: a diagonal sheen plus a gloss band brightening the two vertical
+   edges, reinforcing the recessed centre. */
+.monitorScreen::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: inherit;
+  background:
+    linear-gradient(115deg, rgb(255 255 255 / 0.08), transparent 34%),
+    linear-gradient(90deg, rgb(255 255 255 / 0.06), transparent 10%, transparent 90%, rgb(255 255 255 / 0.06));
+  pointer-events: none;
 }
 
 .monitorName {
   color: #22d3ee;
   display: block;
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 900;
+  letter-spacing: 0.01em;
   line-height: 1.1;
   position: relative;
   text-align: center;
-  text-shadow: 0 0 16px rgb(34 211 238 / 0.45);
+  text-shadow: 0 0 18px rgb(34 211 238 / 0.5);
   z-index: 1;
 }
 
 .monitorSubLabel {
-  color: #cbd5e1;
+  color: #dbe6f2;
   display: block;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 800;
+  letter-spacing: 0.02em;
   line-height: 1.2;
-  margin-top: 7px;
-  max-width: 116px;
+  margin-top: 8px;
+  max-width: 170px;
   overflow: hidden;
   position: relative;
   text-overflow: ellipsis;
@@ -889,30 +971,33 @@
 }
 
 .monitorStand {
-  border-left: 12px solid transparent;
-  border-right: 12px solid transparent;
-  border-top: 13px solid rgb(22 33 46);
+  border-left: 13px solid transparent;
+  border-right: 13px solid transparent;
+  border-top: 14px solid #16212e;
   filter: drop-shadow(0 0 7px rgb(34 211 238 / 0.22));
   height: 0;
-  width: 44px;
+  margin-top: 1px;
+  width: 46px;
 }
 
 .monitorBase {
   background:
-    radial-gradient(ellipse at center, rgb(34 211 238 / 0.22), transparent 64%),
-    linear-gradient(180deg, #1b2430, #0b1018);
-  border-radius: 999px 999px 4px 4px;
-  height: 10px;
-  width: 88px;
+    radial-gradient(ellipse at center, rgb(34 211 238 / 0.28), transparent 62%),
+    linear-gradient(180deg, #202b39, #0a0f17);
+  border: 1px solid rgb(34 211 238 / 0.16);
+  border-radius: 999px 999px 5px 5px;
+  box-shadow: 0 4px 10px rgb(0 0 0 / 0.4);
+  height: 9px;
+  width: 108px;
 }
 
 .monitorStatusText {
   color: #cbd5e1;
   font-size: 11px;
   font-weight: 900;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   line-height: 1;
-  margin-top: 8px;
+  margin-top: 10px;
   text-transform: uppercase;
 }
 
@@ -1004,7 +1089,6 @@
     0 0 24px rgb(168 85 247 / 0.3);
 }
 
-.emptyState,
 .loadingCard {
   align-items: center;
   background: var(--panel);
@@ -1018,13 +1102,125 @@
   padding: 24px;
 }
 
+/* Premium "no stations registered" state -- a lit console card rather
+   than a dashed placeholder box. */
+.emptyState {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 260px;
+  padding: 36px 24px;
+  border: 1px solid rgb(56 189 248 / 0.24);
+  border-radius: 16px;
+  color: var(--muted);
+  background:
+    radial-gradient(80% 70% at 50% 0%, rgb(34 211 238 / 0.12), transparent 62%),
+    linear-gradient(180deg, rgb(13 21 37 / 0.92), rgb(7 12 22 / 0.94));
+  box-shadow:
+    inset 0 2px 0 rgb(34 211 238 / 0.4),
+    inset 0 1px 0 rgb(255 255 255 / 0.04),
+    0 24px 60px rgb(0 0 0 / 0.4),
+    0 0 30px rgb(34 211 238 / 0.08);
+  animation: emptyStateBreathe 4.5s ease-in-out infinite;
+}
+.emptyState > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 380px;
+  text-align: center;
+}
+
+.emptyStateGlyph {
+  display: inline-flex;
+  width: 60px;
+  height: 47px;
+  margin-bottom: 4px;
+  color: #38e0f2;
+  filter: drop-shadow(0 0 12px rgb(34 211 238 / 0.5));
+  animation: emptyStateFloat 3.6s ease-in-out infinite;
+}
+.emptyStateGlyph svg {
+  width: 100%;
+  height: 100%;
+}
+.emptyStatePlusRing {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: emptyStatePing 2.4s ease-out infinite;
+}
+
 .emptyState h2 {
-  color: var(--text);
-  margin: 0 0 8px;
+  margin: 0;
+  color: #eefdff;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  text-shadow: 0 0 22px rgb(34 211 238 / 0.4);
 }
 
 .emptyState p {
-  margin: 0 0 16px;
+  margin: 0;
+  font-weight: 700;
+  line-height: 1.55;
+  color: #9fb4d1;
+}
+
+.emptyStateButton {
+  margin-top: 6px;
+  min-height: 46px;
+  padding-inline: 30px;
+  border: 1px solid rgb(125 240 255 / 0.6);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  color: #05121a;
+  background: linear-gradient(180deg, #4fe8f8, #12a7c9);
+  box-shadow:
+    0 12px 28px rgb(34 211 238 / 0.4),
+    0 0 0 1px rgb(125 240 255 / 0.4),
+    inset 0 1px 0 rgb(255 255 255 / 0.4);
+  transition: background 130ms ease, box-shadow 130ms ease, transform 110ms ease;
+}
+.emptyStateButton:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, #6bedfb, #16b6da);
+  box-shadow:
+    0 16px 34px rgb(34 211 238 / 0.5),
+    0 0 0 1px rgb(125 240 255 / 0.55),
+    inset 0 1px 0 rgb(255 255 255 / 0.5);
+}
+.emptyStateButton:active {
+  transform: translateY(0) scale(0.99);
+}
+
+@keyframes emptyStateBreathe {
+  0%, 100% { box-shadow: inset 0 2px 0 rgb(34 211 238 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.04), 0 24px 60px rgb(0 0 0 / 0.4), 0 0 24px rgb(34 211 238 / 0.06); }
+  50% { box-shadow: inset 0 2px 0 rgb(34 211 238 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.05), 0 24px 60px rgb(0 0 0 / 0.4), 0 0 44px rgb(34 211 238 / 0.16); }
+}
+@keyframes emptyStateFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+@keyframes emptyStatePing {
+  0% { transform: scale(0.8); opacity: 1; }
+  70%, 100% { transform: scale(1.5); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .emptyState,
+  .emptyStateGlyph,
+  .emptyStatePlusRing,
+  .emptyStateButton:hover,
+  .emptyStateButton:active {
+    animation: none;
+    transform: none;
+  }
 }
 
 .selectedPcRail {
@@ -1033,26 +1229,81 @@
 }
 
 .noSelectionPanel {
-  background:
-    linear-gradient(180deg, rgb(12 20 34 / 0.72), rgb(7 13 24 / 0.72));
-  border: 1px solid rgba(56, 189, 248, 0.14);
-  border-radius: var(--radius-card);
-  color: var(--muted);
-  display: grid;
-  gap: 8px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 11px;
   min-height: 148px;
-  padding: 18px;
+  padding: 22px 20px;
+  border: 1px solid rgb(56 189 248 / 0.24);
+  border-radius: 14px;
+  color: var(--muted);
   text-align: left;
+  background:
+    radial-gradient(130% 90% at 0% 0%, rgb(34 211 238 / 0.14), transparent 58%),
+    linear-gradient(180deg, rgb(13 21 37 / 0.9), rgb(7 12 22 / 0.92));
+  box-shadow:
+    inset 0 2px 0 rgb(34 211 238 / 0.4),
+    inset 0 1px 0 rgb(255 255 255 / 0.04),
+    0 18px 44px rgb(0 0 0 / 0.4),
+    0 0 26px rgb(34 211 238 / 0.08);
+  animation: noSelectionBreathe 4.5s ease-in-out infinite;
+}
+
+.noSelectionGlyph {
+  display: inline-flex;
+  width: 46px;
+  height: 46px;
+  color: #38e0f2;
+  filter: drop-shadow(0 0 10px rgb(34 211 238 / 0.5));
+  animation: noSelectionFloat 3.6s ease-in-out infinite;
+}
+.noSelectionGlyph svg {
+  width: 100%;
+  height: 100%;
+}
+.noSelectionPing {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: noSelectionPing 2.2s ease-out infinite;
 }
 
 .noSelectionPanel h2 {
-  color: var(--text);
-  font-size: 20px;
   margin: 0;
+  color: #eefdff;
+  font-size: 21px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  text-shadow: 0 0 20px rgb(34 211 238 / 0.4);
 }
 
 .noSelectionPanel p {
   margin: 0;
+  max-width: 40ch;
+  line-height: 1.5;
+  color: #9fb4d1;
+}
+
+@keyframes noSelectionBreathe {
+  0%, 100% { box-shadow: inset 0 2px 0 rgb(34 211 238 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.04), 0 18px 44px rgb(0 0 0 / 0.4), 0 0 22px rgb(34 211 238 / 0.06); }
+  50% { box-shadow: inset 0 2px 0 rgb(34 211 238 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.05), 0 18px 44px rgb(0 0 0 / 0.4), 0 0 40px rgb(34 211 238 / 0.16); }
+}
+@keyframes noSelectionFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@keyframes noSelectionPing {
+  0% { transform: scale(0.7); opacity: 1; }
+  70%, 100% { transform: scale(2.6); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .noSelectionPanel,
+  .noSelectionGlyph,
+  .noSelectionPing {
+    animation: none;
+  }
 }
 
 .loadingCard {
@@ -1154,6 +1405,20 @@
 
 .disabledSetupSlot {
   opacity: 0.58;
+}
+
+.unassignedLayoutGroup {
+  border-color: rgb(250 204 21 / 0.28);
+  border-style: dashed;
+  margin-top: 18px;
+}
+
+.unassignedLayoutNote {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: -6px 0 14px;
+  max-width: 68ch;
 }
 
 .installedStatus,
@@ -1856,6 +2121,35 @@
   color: #22d3ee;
   content: "/";
   margin-right: 8px;
+}
+
+/* PC name + state chip sit on one line; the chip wraps below only when the
+   name is too long. "Offline" appears here only when the station is not
+   reachable -- an online client is the unremarkable default and is not
+   labelled. */
+.pcControlTitleRow {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pcControlTitleRow h2 {
+  margin: 0;
+}
+
+.pcControlOffline {
+  align-items: center;
+  background: rgb(148 163 184 / 0.14);
+  border: 1px solid rgb(148 163 184 / 0.4);
+  border-radius: 999px;
+  color: #cbd5e1;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  padding: 4px 10px;
+  text-transform: uppercase;
 }
 
 .pcControlStatus {
@@ -2627,17 +2921,17 @@
   }
 
   .monitorGrid {
-    gap: 16px;
-    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+    gap: 18px;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   }
 
   .monitorTile {
-    min-height: 142px;
+    min-height: 150px;
   }
 
   .monitorScreen {
-    min-height: 96px;
-    width: 136px;
+    min-height: 112px;
+    width: min(210px, 100%);
   }
 
   .actions {
@@ -2879,11 +3173,6 @@
 
 .loadingCard {
   background: linear-gradient(90deg, #0d1424 0%, #14233a 48%, #0d1424 100%);
-}
-
-.emptyState {
-  background: rgba(8, 17, 31, 0.76);
-  border-color: rgba(56, 189, 248, 0.2);
 }
 
 .overlay {
@@ -4532,5 +4821,1536 @@
 @media (max-width: 520px) {
   .memberModalLayer {
     --member-modal-top: 208px;
+  }
+}
+
+/* ============================================================
+   Premium restyle of the PC details dock panel.
+   Scoped to .pcControlDock so shared button/field/row classes
+   used elsewhere (dialogs, Members, Sales) are untouched.
+   ============================================================ */
+
+.pcControlDock {
+  --tone: #22d3ee;
+  --tone-soft: rgb(34 211 238 / 0.14);
+  --tone-line: rgb(34 211 238 / 0.34);
+  background:
+    radial-gradient(120% 60% at 100% 0%, var(--tone-soft), transparent 60%),
+    linear-gradient(180deg, rgb(13 21 37 / 0.98), rgb(7 12 22 / 0.99));
+  border: 1px solid rgb(56 189 248 / 0.22);
+  border-radius: 14px;
+  /* Inset top layer = pinned tone accent bar. Unlike an absolutely-positioned
+     ::before, an inset shadow does not scroll away with the panel content. */
+  box-shadow:
+    inset 0 3px 0 0 var(--tone),
+    inset 0 1px 0 rgb(255 255 255 / 0.05),
+    0 30px 80px rgb(0 0 0 / 0.5),
+    0 0 40px rgb(34 211 238 / 0.06);
+  padding: 18px;
+}
+
+.pcControlDock[data-tone="available"]  { --tone: #22d3ee; --tone-soft: rgb(34 211 238 / 0.14); --tone-line: rgb(34 211 238 / 0.36); }
+.pcControlDock[data-tone="inuse"]      { --tone: #ec4899; --tone-soft: rgb(236 72 153 / 0.14); --tone-line: rgb(236 72 153 / 0.4); }
+.pcControlDock[data-tone="lowtime"]    { --tone: #ef4444; --tone-soft: rgb(239 68 68 / 0.16);  --tone-line: rgb(239 68 68 / 0.44); }
+.pcControlDock[data-tone="grace"]      { --tone: #fbbf24; --tone-soft: rgb(251 191 36 / 0.14); --tone-line: rgb(251 191 36 / 0.4); }
+.pcControlDock[data-tone="locked"]     { --tone: #a855f7; --tone-soft: rgb(168 85 247 / 0.14); --tone-line: rgb(168 85 247 / 0.42); }
+.pcControlDock[data-tone="settlement"] { --tone: #fb923c; --tone-soft: rgb(251 146 60 / 0.14); --tone-line: rgb(251 146 60 / 0.42); }
+.pcControlDock[data-tone="danger"]     { --tone: #f43f5e; --tone-soft: rgb(244 63 94 / 0.14);  --tone-line: rgb(244 63 94 / 0.44); }
+.pcControlDock[data-tone="offline"]    { --tone: #64748b; --tone-soft: rgb(100 116 139 / 0.14); --tone-line: rgb(100 116 139 / 0.4); }
+
+.pcControlDock .pcControlHeader {
+  align-items: flex-start;
+  border-bottom: 1px solid rgb(56 189 248 / 0.14);
+  gap: 14px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+}
+.pcControlDock .pcControlHeader h2 {
+  color: #f4fbff;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+/* Header close (X): circular glossy pill tinted to the panel's state tone,
+   with a quarter-turn spin on hover -- matching the dialog close buttons. */
+.pcControlHeader .iconButton {
+  flex-shrink: 0;
+  height: 38px;
+  width: 38px;
+  border-radius: 999px;
+  border-color: color-mix(in srgb, var(--tone, #22d3ee) 45%, transparent);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--tone, #22d3ee) 22%, transparent),
+      color-mix(in srgb, var(--tone, #22d3ee) 5%, transparent) 62%),
+    #0b1322;
+  color: color-mix(in srgb, var(--tone, #22d3ee) 55%, white);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.09),
+    0 4px 14px color-mix(in srgb, var(--tone, #22d3ee) 22%, transparent);
+}
+.pcControlHeader .iconButton:hover:not(:disabled),
+.pcControlHeader .iconButton:focus-visible {
+  border-color: color-mix(in srgb, var(--tone, #22d3ee) 85%, white);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--tone, #22d3ee) 40%, transparent),
+      color-mix(in srgb, var(--tone, #22d3ee) 12%, transparent) 62%),
+    #0b1322;
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    0 10px 26px color-mix(in srgb, var(--tone, #22d3ee) 42%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--tone, #22d3ee) 20%, transparent);
+  transform: translateY(-1px) scale(1.06) rotate(90deg);
+}
+.pcControlHeader .iconButton:active:not(:disabled) {
+  transform: translateY(0) scale(0.94) rotate(90deg);
+}
+.pcControlHeader .iconButtonSvg {
+  transition: transform 200ms ease;
+}
+.pcControlDock .pcControlTitleRow {
+  gap: 9px 10px;
+}
+.pcControlDock .pcControlMeta span + span::before { content: none; }
+.pcControlDock .pcControlStatePill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--tone-line);
+  background: var(--tone-soft);
+  color: var(--tone);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.pcControlDock .pcControlStateDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+}
+.pcControlDock .pcControlConn {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pcControlDock .pcControlHeader p {
+  color: #d5e3f2;
+  font-size: 13.5px;
+  font-weight: 700;
+  margin: 10px 0 0;
+}
+
+.pcControlDock .pcControlGrid { gap: 12px; }
+.pcControlDock .pcControlColumn { gap: 12px; }
+.pcControlDock .controlSection {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.028), transparent 40%), rgb(12 19 33 / 0.72);
+  border: 1px solid rgb(56 189 248 / 0.12);
+  border-radius: 11px;
+  padding: 14px 15px 15px;
+}
+.pcControlDock .controlSection h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #cfe6f5;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  margin: 0 0 11px;
+  text-transform: uppercase;
+}
+.pcControlDock .controlSection h3::before {
+  content: "";
+  width: 3px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--tone);
+  opacity: 0.85;
+}
+.pcControlDock .controlSection[aria-label="Session actions"],
+.pcControlDock .controlSection[aria-label="Messaging controls"] {
+  background: linear-gradient(180deg, rgb(20 30 49 / 0.9), rgb(11 18 31 / 0.92));
+  border-color: rgb(56 189 248 / 0.2);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+
+.pcControlDock .compactDetailList .detailRow {
+  border-bottom: 1px solid rgb(56 189 248 / 0.08);
+  padding: 10px 0;
+}
+.pcControlDock .compactDetailList .detailRow span:first-child {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.pcControlDock .compactDetailList .detailRow strong {
+  font-size: 14px;
+  font-weight: 800;
+  color: #eef7ff;
+  font-variant-numeric: tabular-nums;
+}
+.pcControlDock .controlSection[aria-label="Session summary"] .detailRow:last-child strong,
+.pcControlDock .controlSection[aria-label="Billing summary"] .detailRow:first-child strong {
+  font-size: 17px;
+  color: var(--tone);
+}
+
+.pcControlDock .primaryButton,
+.pcControlDock .secondaryButton,
+.pcControlDock .dangerButton {
+  min-height: 42px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  transition: background 150ms ease, border-color 150ms ease, box-shadow 150ms ease, transform 120ms ease, opacity 150ms ease;
+}
+.pcControlDock .primaryButton {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--tone) 88%, white 12%), color-mix(in srgb, var(--tone) 62%, black 38%));
+  color: #05121a;
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--tone) 34%, transparent), inset 0 1px 0 rgb(255 255 255 / 0.35);
+}
+.pcControlDock .primaryButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--tone) 44%, transparent), inset 0 1px 0 rgb(255 255 255 / 0.4);
+}
+.pcControlDock .secondaryButton {
+  background: linear-gradient(180deg, rgb(56 189 248 / 0.2), rgb(56 189 248 / 0.05));
+  border-color: rgb(56 189 248 / 0.45);
+  color: #cdeeff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    0 4px 14px rgb(56 189 248 / 0.12);
+}
+.pcControlDock .secondaryButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, rgb(56 189 248 / 0.34), rgb(56 189 248 / 0.12));
+  border-color: rgb(56 232 250 / 0.7);
+  color: #eafbff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    0 10px 24px rgb(56 189 248 / 0.28);
+}
+.pcControlDock .secondaryButton:active:not(:disabled) {
+  transform: translateY(0);
+}
+.pcControlDock .secondaryButton .buttonIcon {
+  color: #67e8f9;
+  filter: drop-shadow(0 0 5px rgb(34 211 238 / 0.6));
+}
+.pcControlDock .dangerButton {
+  background: linear-gradient(180deg, rgb(244 63 94 / 0.24), rgb(244 63 94 / 0.07));
+  border-color: rgb(244 63 94 / 0.5);
+  color: #ffd9e0;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    0 4px 14px rgb(244 63 94 / 0.14);
+}
+.pcControlDock .dangerButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, rgb(244 63 94 / 0.4), rgb(244 63 94 / 0.15));
+  border-color: rgb(251 113 133 / 0.75);
+  color: #ffe4e9;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    0 10px 24px rgb(244 63 94 / 0.32);
+}
+.pcControlDock .dangerButton:active:not(:disabled) {
+  transform: translateY(0);
+}
+.pcControlDock .dangerButton .buttonIcon {
+  color: #fb7185;
+  filter: drop-shadow(0 0 5px rgb(244 63 94 / 0.6));
+}
+.pcControlDock .primaryButton:disabled,
+.pcControlDock .secondaryButton:disabled,
+.pcControlDock .dangerButton:disabled {
+  background: rgb(148 163 184 / 0.06);
+  border-color: rgb(148 163 184 / 0.16);
+  color: rgb(148 163 184 / 0.55);
+  box-shadow: none;
+}
+.pcControlDock .modalActionGrid { gap: 8px; }
+
+/* Session Actions: one vertical stack. Full-width primary (Start / Clear
+   Customer Lock) on top, then a 2-up row for the remaining actions. A row
+   left holding a single button spans the full width instead of sitting
+   half-empty. */
+.pcControlDock .controlSection[aria-label="Session actions"] .sessionActionStack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pcControlDock .controlSection[aria-label="Session actions"] .sessionActionStack > .primaryButton {
+  width: 100%;
+  min-height: 46px;
+  font-size: 13.5px;
+}
+.pcControlDock .controlSection[aria-label="Session actions"] .sessionActionStack .modalActionGrid > :only-child {
+  grid-column: 1 / -1;
+}
+
+.pcControlDock .field {
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.pcControlDock .field:last-of-type { margin-bottom: 14px; }
+.pcControlDock .field > :first-child {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pcControlDock .field textarea,
+.pcControlDock .field select,
+.pcControlDock .field input {
+  background: #0a1120;
+  border: 1px solid rgb(56 189 248 / 0.16);
+  border-radius: 9px;
+  color: #e8f4ff;
+  padding: 10px 12px;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.35);
+}
+.pcControlDock .field textarea { min-height: 84px; resize: vertical; }
+.pcControlDock .field textarea::placeholder {
+  color: rgb(148 163 184 / 0.5);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.pcControlDock .field textarea:focus,
+.pcControlDock .field select:focus,
+.pcControlDock .field input:focus {
+  outline: none;
+  border-color: var(--tone-line);
+  box-shadow:
+    inset 0 1px 2px rgb(0 0 0 / 0.35),
+    0 0 0 3px color-mix(in srgb, var(--tone) 18%, transparent);
+}
+
+/* Severity picker: a bespoke listbox (SeveritySelect) replacing the native
+   <select>, so the open menu is fully themeable. */
+.severitySelect {
+  position: relative;
+}
+.severityTrigger {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgb(56 189 248 / 0.16);
+  border-radius: 9px;
+  background: #0a1120;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.35);
+  color: #e8f4ff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  transition: border-color 130ms ease, box-shadow 130ms ease;
+}
+.severityTrigger:hover:not(:disabled) {
+  border-color: rgb(56 189 248 / 0.34);
+}
+.severityTrigger:focus-visible {
+  outline: none;
+  border-color: var(--tone-line, rgb(34 211 238 / 0.5));
+  box-shadow:
+    inset 0 1px 2px rgb(0 0 0 / 0.35),
+    0 0 0 3px color-mix(in srgb, var(--tone, #22d3ee) 20%, transparent);
+}
+.severityTrigger:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.severityValue {
+  flex: 1;
+  text-align: left;
+}
+.severityCaret {
+  width: 12px;
+  height: 8px;
+  color: #7dd3fc;
+  transition: transform 150ms ease;
+}
+.severityCaret[data-open="true"] {
+  transform: rotate(180deg);
+}
+.severityDot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: #22d3ee;
+  box-shadow: 0 0 8px currentColor;
+  color: #22d3ee;
+}
+[data-sev="warning"] > .severityDot { background: #fbbf24; color: #fbbf24; }
+[data-sev="urgent"] > .severityDot { background: #f43f5e; color: #f43f5e; }
+
+.severityMenu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid rgb(56 189 248 / 0.28);
+  border-radius: 11px;
+  background: #0d1526;
+  box-shadow:
+    0 22px 48px rgb(0 0 0 / 0.55),
+    0 0 22px rgb(34 211 238 / 0.08),
+    inset 0 1px 0 rgb(255 255 255 / 0.04);
+  outline: none;
+  animation: severityMenuIn 130ms ease-out;
+}
+@keyframes severityMenuIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.severityOption {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  color: #dcebf7;
+}
+.severityOption[data-active="true"] {
+  background: rgb(56 189 248 / 0.14);
+}
+.severityOption[aria-selected="true"] {
+  box-shadow: inset 2px 0 0 var(--tone, #22d3ee);
+}
+.severityOptionLabel {
+  flex: 1;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.severityOption[aria-selected="true"] .severityOptionLabel {
+  font-weight: 850;
+  color: #f4fbff;
+}
+.severityOptionHint {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted, #94a3b8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .severityMenu { animation: none; }
+  .severityCaret { transition: none; }
+}
+
+.pcControlDock .panelText {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0 0 14px;
+}
+
+/* Messaging section: tighten the stack, drop a hairline under the inputs,
+   then center the send action so it reads as the section's commit button. */
+.pcControlDock .controlSection[aria-label="Messaging controls"] .field:last-of-type {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgb(56 189 248 / 0.12);
+}
+.pcControlDock .controlSection[aria-label="Messaging controls"] .primaryButton {
+  display: flex;
+  width: max-content;
+  min-width: 190px;
+  max-width: 100%;
+  margin-inline: auto;
+  padding-left: 24px;
+  padding-right: 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pcControlDock .primaryButton:hover:not(:disabled),
+  .pcControlDock .secondaryButton:hover:not(:disabled),
+  .pcControlDock .dangerButton:hover:not(:disabled),
+  .pcControlHeader .iconButton:hover:not(:disabled),
+  .pcControlHeader .iconButton:focus-visible,
+  .pcControlHeader .iconButton:active:not(:disabled) { transform: none; }
+}
+
+/* ============================================================
+   Premium restyle of the Start Session / Add Time dialog.
+   Scoped to .sessionDialogFrame so shared classes (.changeSummary,
+   .field, buttons) used by other dialogs are untouched.
+   ============================================================ */
+.sessionDialogFrame {
+  border: 1px solid rgb(34 211 238 / 0.42);
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 55% at 50% -6%, rgb(34 211 238 / 0.22), transparent 62%),
+    radial-gradient(90% 40% at 100% 100%, rgb(56 189 248 / 0.1), transparent 60%),
+    linear-gradient(180deg, rgb(14 24 41 / 0.99), rgb(7 12 22 / 0.99)),
+    var(--panel);
+  box-shadow:
+    0 40px 100px rgb(0 0 0 / 0.62),
+    0 0 60px rgb(34 211 238 / 0.16),
+    0 0 0 1px rgb(34 211 238 / 0.12),
+    inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+
+.sessionDialogFrame .sessionDialogHeader {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px 15px 22px;
+  border-bottom: 1px solid rgb(34 211 238 / 0.16);
+  background: linear-gradient(180deg, rgb(34 211 238 / 0.12), transparent);
+}
+.sessionDialogFrame .sessionDialogHeader .iconButton {
+  flex-shrink: 0;
+  height: 40px;
+  width: 40px;
+  border-radius: 999px;
+  border-color: rgb(56 232 250 / 0.42);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.18), rgb(34 211 238 / 0.04) 62%),
+    #0b1322;
+  color: #b7f2ff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    0 4px 14px rgb(34 211 238 / 0.16);
+}
+.sessionDialogFrame .sessionDialogHeader .iconButton:hover:not(:disabled),
+.sessionDialogFrame .sessionDialogHeader .iconButton:focus-visible {
+  border-color: rgb(120 240 255 / 0.9);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.34), rgb(34 211 238 / 0.1) 62%),
+    #0b1322;
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.18),
+    0 10px 26px rgb(34 211 238 / 0.4),
+    0 0 0 3px rgb(56 189 248 / 0.18);
+  transform: translateY(-1px) scale(1.06) rotate(90deg);
+}
+.sessionDialogFrame .sessionDialogHeader .iconButton:active:not(:disabled) {
+  transform: translateY(0) scale(0.94) rotate(90deg);
+}
+.sessionDialogFrame .sessionDialogHeader .iconButtonSvg {
+  transition: transform 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sessionDialogFrame .sessionDialogHeader .iconButton:hover:not(:disabled),
+  .sessionDialogFrame .sessionDialogHeader .iconButton:focus-visible,
+  .sessionDialogFrame .sessionDialogHeader .iconButton:active:not(:disabled) {
+    transform: none;
+  }
+}
+.sessionDialogFrame .sessionDialogHeader::after {
+  content: "";
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #38e0f2, rgb(56 189 248 / 0.2) 70%, transparent);
+}
+.sessionDialogFrame .sessionDialogHeader h2 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: #eefdff;
+  text-shadow: 0 0 22px rgb(34 211 238 / 0.45);
+}
+
+.sessionDialogFrame .sessionDialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px 22px 20px;
+  background: radial-gradient(80% 45% at 50% 40%, rgb(34 211 238 / 0.06), transparent 70%);
+}
+.sessionDialogFrame .tabList,
+.sessionDialogFrame .amountPanel,
+.sessionDialogFrame .standardAmountPanel,
+.sessionDialogFrame .paymentBox {
+  margin: 0;
+}
+
+/* Standard / Member segmented control -- a rounded pill track with a
+   glossy pill knob for the active side. */
+.sessionDialogFrame .tabList {
+  padding: 5px;
+  gap: 5px;
+  border: 1px solid rgb(56 189 248 / 0.2);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #070c16, #0b1322);
+  box-shadow:
+    inset 0 2px 6px rgb(0 0 0 / 0.55),
+    inset 0 0 0 1px rgb(255 255 255 / 0.02);
+}
+.sessionDialogFrame .tabButton {
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 850;
+  letter-spacing: 0.05em;
+  color: #8ea6c6;
+  transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease, transform 120ms ease;
+}
+.sessionDialogFrame .tabButton:hover:not(.tabActive) {
+  color: #dcecfb;
+  background: rgb(56 189 248 / 0.08);
+}
+.sessionDialogFrame .tabActive {
+  background: linear-gradient(180deg, #63ecfb, #16b5d8 55%, #0e9ac0);
+  border-color: rgb(190 248 255 / 0.85);
+  color: #04121a;
+  text-shadow: 0 1px 0 rgb(255 255 255 / 0.25);
+  box-shadow:
+    0 10px 22px rgb(34 211 238 / 0.42),
+    0 0 0 1px rgb(34 211 238 / 0.35),
+    inset 0 1px 0 rgb(255 255 255 / 0.6),
+    inset 0 -7px 14px rgb(4 18 26 / 0.18);
+}
+.sessionDialogFrame .tabActive:active {
+  transform: scale(0.985);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sessionDialogFrame .tabActive:active { transform: none; }
+}
+
+/* Uppercase micro-labels on the preview/summary cards. NOTE: the .field
+   labels here are bare text nodes (<label>Amount<input/></label>), so they
+   can't be targeted with `> :first-child` without hitting the control -- they
+   keep the base label styling. */
+.sessionDialogFrame .amountPreview span,
+.sessionDialogFrame .changeSummary span {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #8aa1bf;
+}
+.sessionDialogFrame .field {
+  gap: 7px;
+  margin-bottom: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9fb4d1;
+}
+
+/* Inputs + selects */
+.sessionDialogFrame .field input,
+.sessionDialogFrame .field select,
+.sessionDialogFrame .paymentBox select {
+  min-height: 44px;
+  padding: 11px 13px;
+  border: 1px solid rgb(56 189 248 / 0.18);
+  border-radius: 9px;
+  background: #0a1120;
+  color: #eef7ff;
+  font-size: 14px;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.35);
+}
+.sessionDialogFrame .field input:focus,
+.sessionDialogFrame .field select:focus,
+.sessionDialogFrame .paymentBox select:focus {
+  outline: none;
+  border-color: rgb(34 211 238 / 0.55);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.35), 0 0 0 3px rgb(34 211 238 / 0.16);
+}
+.sessionDialogFrame .field input::placeholder {
+  color: rgb(148 163 184 / 0.55);
+}
+
+/* Amount — the hero field */
+.sessionDialogFrame .standardAmountInputGroup .field input {
+  min-height: 54px;
+  padding: 12px 15px;
+  border-color: rgb(34 211 238 / 0.38);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.1), rgb(34 211 238 / 0.03)),
+    #0a1120;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.35), 0 0 22px rgb(34 211 238 / 0.1);
+  color: #7ff0ff;
+  font-size: 21px;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+.sessionDialogFrame .standardAmountInputGroup .field input:focus {
+  border-color: rgb(56 232 250 / 0.8);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.35), 0 0 0 3px rgb(34 211 238 / 0.22), 0 0 26px rgb(34 211 238 / 0.2);
+}
+.sessionDialogFrame .standardAmountInputGroup .field input::placeholder {
+  color: rgb(125 211 252 / 0.4);
+}
+
+/* Quick-amount chips: even 4×2 grid */
+.sessionDialogFrame .amountChipGrid {
+  gap: 8px;
+}
+.sessionDialogFrame .amountChip {
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid rgb(34 211 238 / 0.32);
+  background: linear-gradient(180deg, rgb(34 211 238 / 0.12), rgb(34 211 238 / 0.05));
+  color: #9fe9fb;
+  font-size: 13px;
+  font-weight: 850;
+  transition: background 120ms ease, border-color 120ms ease, transform 100ms ease, box-shadow 120ms ease;
+}
+.sessionDialogFrame .amountChip:hover {
+  background: linear-gradient(180deg, rgb(34 211 238 / 0.24), rgb(34 211 238 / 0.1));
+  border-color: rgb(56 232 250 / 0.6);
+  color: #d7f7ff;
+  transform: translateY(-1px);
+}
+.sessionDialogFrame .amountChipRow .amountChipSelected {
+  background: linear-gradient(180deg, #4fe8f8, #12a7c9);
+  border-color: rgb(125 240 255 / 0.8);
+  color: #05121a;
+  box-shadow: 0 8px 20px rgb(34 211 238 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.4);
+}
+.sessionDialogFrame .amountChipRow .amountChipSelected:hover {
+  transform: translateY(-1px);
+  color: #05121a;
+}
+
+/* Calculated time preview — the "result" moment: a lit cyan card */
+.sessionDialogFrame .amountPreview {
+  gap: 7px;
+  padding: 14px 16px;
+  border: 1px solid rgb(34 211 238 / 0.42);
+  border-radius: 11px;
+  background:
+    linear-gradient(135deg, rgb(34 211 238 / 0.2), rgb(56 189 248 / 0.06) 70%),
+    rgb(9 16 28 / 0.9);
+  box-shadow:
+    inset 3px 0 0 #38e0f2,
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 0 24px rgb(34 211 238 / 0.14);
+}
+.sessionDialogFrame .amountPreview span {
+  color: #7dd3fc;
+}
+.sessionDialogFrame .amountPreview strong {
+  font-size: 18px;
+  font-weight: 900;
+  color: #8ff3ff;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 18px rgb(34 211 238 / 0.4);
+}
+
+/* Payment box — titled sub-panel with a cyan top edge */
+.sessionDialogFrame .paymentBox {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 15px 16px 16px;
+  border: 1px solid rgb(34 211 238 / 0.24);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.08), transparent 42%),
+    rgb(12 19 33 / 0.8);
+  box-shadow: inset 0 2px 0 rgb(34 211 238 / 0.45);
+}
+.sessionDialogFrame .paymentBox .field {
+  margin-bottom: 0;
+}
+
+/* Payment method + cash/reference share one row. */
+.sessionDialogFrame .paymentRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 520px) {
+  .sessionDialogFrame .paymentRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Payment method — custom listbox (FancySelect); native <select> popups
+   are drawn by the OS and can't be themed. Pill styling to match the
+   Standard / Member segmented control. */
+.fancySelect {
+  position: relative;
+}
+.fancySelectTrigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 16px 10px 15px;
+  border: 1px solid rgb(56 232 250 / 0.42);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.16), rgb(34 211 238 / 0.04) 62%),
+    #0a1120;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.09),
+    inset 0 -6px 12px rgb(4 18 26 / 0.25),
+    0 4px 12px rgb(34 211 238 / 0.12);
+  color: #eef7ff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: border-color 130ms ease, box-shadow 130ms ease, background 130ms ease;
+}
+.fancySelectTrigger:hover:not(:disabled) {
+  border-color: rgb(120 240 255 / 0.75);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.26), rgb(34 211 238 / 0.08) 62%),
+    #0a1120;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.14),
+    0 6px 16px rgb(34 211 238 / 0.24);
+}
+.fancySelectTrigger:focus-visible {
+  outline: none;
+  border-color: rgb(120 240 255 / 0.9);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    0 0 0 3px rgb(34 211 238 / 0.22);
+}
+.fancySelectTrigger:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.fancySelectValue {
+  flex: 1;
+  text-align: left;
+}
+.fancySelectCaret {
+  width: 12px;
+  height: 8px;
+  color: #7dd3fc;
+  transition: transform 150ms ease;
+}
+.fancySelectCaret[data-open="true"] {
+  transform: rotate(180deg);
+}
+.fancySelectDot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  box-shadow: 0 0 8px currentColor;
+}
+.fancySelectMenu {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 5px;
+  list-style: none;
+  border: 1px solid rgb(34 211 238 / 0.42);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgb(20 33 52 / 0.98), rgb(10 17 30 / 0.98));
+  box-shadow:
+    0 24px 50px rgb(0 0 0 / 0.6),
+    0 0 28px rgb(34 211 238 / 0.14),
+    inset 0 1px 0 rgb(255 255 255 / 0.05);
+  outline: none;
+  animation: fancySelectMenuIn 130ms ease-out;
+}
+@keyframes fancySelectMenuIn {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fancySelectOption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 9px 15px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  color: #d7ecfa;
+}
+.fancySelectOption[data-active="true"] {
+  background: linear-gradient(180deg, rgb(34 211 238 / 0.16), rgb(34 211 238 / 0.06));
+  border-color: rgb(56 232 250 / 0.3);
+}
+.fancySelectOption[aria-selected="true"] {
+  background: linear-gradient(180deg, rgb(34 211 238 / 0.3), rgb(34 211 238 / 0.12));
+  border-color: rgb(120 240 255 / 0.55);
+}
+.fancySelectOptionLabel {
+  flex: 1;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+.fancySelectOption[aria-selected="true"] .fancySelectOptionLabel {
+  color: #8ff3ff;
+}
+.fancySelectHint {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #7f97b6;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fancySelectMenu { animation: none; }
+  .fancySelectCaret { transition: none; }
+}
+
+/* Cash received / member search / PIN — emphasized entry fields */
+.sessionDialogFrame .paymentBox input,
+.sessionDialogFrame .amountPanel .field input {
+  border-color: rgb(34 211 238 / 0.28);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.06), transparent 60%),
+    #0a1120;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sessionDialogFrame .changeSummary {
+  margin: 0;
+  border-radius: 10px;
+  border-color: rgb(34 211 238 / 0.28);
+}
+.sessionDialogFrame .changeSummary strong {
+  font-variant-numeric: tabular-nums;
+}
+.sessionDialogFrame .changeSummary-ready {
+  border-color: rgb(45 212 191 / 0.5);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.05),
+    0 0 26px rgb(45 212 191 / 0.16);
+}
+.sessionDialogFrame .changeSummary-ready strong {
+  text-shadow: 0 0 16px rgb(45 212 191 / 0.35);
+}
+
+/* Member tab */
+.sessionDialogFrame .memberResultList {
+  gap: 6px;
+  margin-top: 4px;
+}
+.sessionDialogFrame .memberResultItem {
+  padding: 11px 13px;
+  border: 1px solid rgb(56 189 248 / 0.16);
+  border-radius: 10px;
+  background: rgb(12 19 33 / 0.8);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.sessionDialogFrame .memberResultItem:hover {
+  background: rgb(34 211 238 / 0.08);
+  border-color: rgb(34 211 238 / 0.45);
+}
+.sessionDialogFrame .memberResultItem strong {
+  font-size: 13.5px;
+  color: #eef7ff;
+}
+.sessionDialogFrame .memberResultItem span {
+  color: #8aa1bf;
+}
+.sessionDialogFrame .memberCard {
+  gap: 12px;
+  padding: 15px 16px;
+  border: 1px solid rgb(56 189 248 / 0.22);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgb(20 30 49 / 0.9), rgb(11 18 31 / 0.92));
+}
+.sessionDialogFrame .memberCardHeader strong {
+  color: #f4fbff;
+}
+.sessionDialogFrame .memberCard .detailRow strong {
+  font-variant-numeric: tabular-nums;
+}
+.sessionDialogFrame .panelText {
+  color: #8aa1bf;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Footer actions */
+.sessionDialogFrame .sessionDialogFooter {
+  padding: 15px 22px;
+  border-top: 1px solid rgb(34 211 238 / 0.2);
+  background: linear-gradient(0deg, rgb(34 211 238 / 0.08), transparent);
+}
+.sessionDialogFrame .sessionDialogFooter .dialogActions {
+  justify-content: center;
+  gap: 10px;
+}
+.sessionDialogFrame .sessionDialogFooter .primaryButton {
+  min-width: 220px;
+  min-height: 46px;
+  padding-inline: 34px;
+  border-radius: 999px;
+  border-color: transparent;
+  font-weight: 850;
+  color: #05121a;
+  background: linear-gradient(180deg, #4fe8f8, #12a7c9);
+  box-shadow:
+    0 12px 28px rgb(34 211 238 / 0.45),
+    0 0 0 1px rgb(125 240 255 / 0.5),
+    inset 0 1px 0 rgb(255 255 255 / 0.45);
+  transition: background 130ms ease, box-shadow 130ms ease, transform 110ms ease;
+}
+.sessionDialogFrame .sessionDialogFooter .primaryButton:hover:not(:disabled) {
+  background: linear-gradient(180deg, #6bedfb, #16b6da);
+  box-shadow:
+    0 16px 34px rgb(34 211 238 / 0.55),
+    0 0 0 1px rgb(125 240 255 / 0.6),
+    inset 0 1px 0 rgb(255 255 255 / 0.5);
+  transform: translateY(-1px);
+}
+.sessionDialogFrame .sessionDialogFooter .primaryButton:disabled {
+  background: rgb(148 163 184 / 0.12);
+  color: rgb(148 163 184 / 0.5);
+  box-shadow: none;
+}
+.sessionDialogFrame .sessionDialogFooter .secondaryButton {
+  background: rgb(56 189 248 / 0.09);
+  border: 1px solid rgb(56 189 248 / 0.3);
+  color: #cdeeff;
+}
+.sessionDialogFrame .memberCard {
+  border-color: rgb(34 211 238 / 0.32);
+  box-shadow: inset 3px 0 0 #38e0f2, 0 0 20px rgb(34 211 238 / 0.1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sessionDialogFrame .amountChip:hover,
+  .sessionDialogFrame .sessionDialogFooter .primaryButton:hover:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* ============================================================
+   End Session / Resolve Session confirm dialog -- premium
+   rose-accented treatment (this is a destructive action).
+   ============================================================ */
+.endSessionDialog {
+  overflow: hidden;
+  max-width: 460px;
+  width: min(460px, calc(100vw - 24px));
+  padding: 0;
+  border: 1px solid rgb(244 63 94 / 0.4);
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 60% at 50% -6%, rgb(244 63 94 / 0.2), transparent 62%),
+    linear-gradient(180deg, rgb(24 16 22 / 0.99), rgb(9 7 12 / 0.99)),
+    var(--panel);
+  box-shadow:
+    0 40px 100px rgb(0 0 0 / 0.62),
+    0 0 56px rgb(244 63 94 / 0.16),
+    0 0 0 1px rgb(244 63 94 / 0.12),
+    inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+
+.endSessionHeader {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px 15px 22px;
+  border-bottom: 1px solid rgb(244 63 94 / 0.2);
+  background: linear-gradient(180deg, rgb(244 63 94 / 0.14), transparent);
+}
+.endSessionHeader::after {
+  content: "";
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #fb7185, rgb(244 63 94 / 0.2) 70%, transparent);
+}
+.endSessionHeader h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: #ffe4e9;
+  text-shadow: 0 0 22px rgb(244 63 94 / 0.4);
+}
+.endSessionHeader .iconButton {
+  flex-shrink: 0;
+  height: 40px;
+  width: 40px;
+  border-radius: 999px;
+  border-color: rgb(251 113 133 / 0.45);
+  background:
+    linear-gradient(180deg, rgb(244 63 94 / 0.22), rgb(244 63 94 / 0.05) 62%),
+    #170d13;
+  color: #ffc9d2;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    0 4px 14px rgb(244 63 94 / 0.18);
+}
+.endSessionHeader .iconButton:hover:not(:disabled),
+.endSessionHeader .iconButton:focus-visible {
+  border-color: rgb(253 164 175 / 0.9);
+  background:
+    linear-gradient(180deg, rgb(244 63 94 / 0.4), rgb(244 63 94 / 0.12) 62%),
+    #170d13;
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    0 10px 26px rgb(244 63 94 / 0.42),
+    0 0 0 3px rgb(244 63 94 / 0.18);
+  transform: translateY(-1px) scale(1.06) rotate(90deg);
+}
+.endSessionHeader .iconButton:active:not(:disabled) {
+  transform: translateY(0) scale(0.94) rotate(90deg);
+}
+.endSessionHeader .iconButtonSvg {
+  transition: transform 200ms ease;
+}
+
+.endSessionBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 22px 20px;
+  background: radial-gradient(80% 45% at 50% 30%, rgb(244 63 94 / 0.06), transparent 70%);
+}
+.endSessionLede {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.5;
+  color: #e7d3d8;
+}
+.endSessionLede strong {
+  color: #ffe4e9;
+  font-weight: 900;
+}
+
+.endSessionFacts {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border: 1px solid rgb(244 63 94 / 0.22);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgb(35 20 27 / 0.9), rgb(16 10 14 / 0.92));
+  box-shadow: inset 3px 0 0 #fb7185;
+  overflow: hidden;
+}
+.endSessionFacts > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 15px;
+}
+.endSessionFacts > div + div {
+  border-top: 1px solid rgb(244 63 94 / 0.14);
+}
+.endSessionFacts span {
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #c98f9b;
+}
+.endSessionFacts strong {
+  font-size: 15px;
+  font-weight: 850;
+  color: #ffe9ec;
+  font-variant-numeric: tabular-nums;
+}
+
+.endSessionNote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #b9a3a9;
+}
+
+.endSessionFooter {
+  display: flex;
+  justify-content: center;
+  padding: 15px 22px;
+  border-top: 1px solid rgb(244 63 94 / 0.2);
+  background: linear-gradient(0deg, rgb(244 63 94 / 0.08), transparent);
+}
+.endSessionFooter .dangerButton {
+  min-width: 220px;
+  min-height: 46px;
+  padding-inline: 34px;
+  border-radius: 999px;
+  border: 1px solid rgb(253 164 175 / 0.6);
+  font-weight: 850;
+  color: #2a0810;
+  background: linear-gradient(180deg, #fb7185, #e11d48);
+  box-shadow:
+    0 12px 28px rgb(244 63 94 / 0.45),
+    0 0 0 1px rgb(253 164 175 / 0.4),
+    inset 0 1px 0 rgb(255 255 255 / 0.4);
+  transition: background 130ms ease, box-shadow 130ms ease, transform 110ms ease;
+}
+.endSessionFooter .dangerButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, #fda4af, #f43f5e);
+  box-shadow:
+    0 16px 34px rgb(244 63 94 / 0.55),
+    0 0 0 1px rgb(253 164 175 / 0.55),
+    inset 0 1px 0 rgb(255 255 255 / 0.5);
+}
+.endSessionFooter .dangerButton:disabled {
+  background: rgb(148 163 184 / 0.12);
+  border-color: rgb(148 163 184 / 0.16);
+  color: rgb(148 163 184 / 0.5);
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .endSessionHeader .iconButton:hover:not(:disabled),
+  .endSessionHeader .iconButton:focus-visible,
+  .endSessionHeader .iconButton:active:not(:disabled),
+  .endSessionFooter .dangerButton:hover:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* ============================================================
+   ConfirmActionDialog -- reusable premium confirm dialog.
+   `data-tone` recolours the whole frame via custom properties.
+   ============================================================ */
+.confirmDialog {
+  --c-accent: 244 63 94;
+  --c-line: #fb7185;
+  --c-title: #ffe4e9;
+  --c-lede: #e7d3d8;
+  --c-strong: #ffe9ec;
+  --c-label: #c98f9b;
+  --c-note: #b9a3a9;
+  --c-btn-a: #fb7185;
+  --c-btn-b: #e11d48;
+  --c-btn-hi-a: #fda4af;
+  --c-btn-hi-b: #f43f5e;
+  --c-btn-text: #2a0810;
+  --c-bg-a: 24 16 22;
+  --c-bg-b: 9 7 12;
+  --c-fact-a: 35 20 27;
+  --c-fact-b: 16 10 14;
+  --c-icon-bg: 23 13 19;
+  --c-icon: #ffc9d2;
+
+  overflow: hidden;
+  max-width: 460px;
+  width: min(460px, calc(100vw - 24px));
+  padding: 0;
+  border: 1px solid rgb(var(--c-accent) / 0.4);
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 60% at 50% -6%, rgb(var(--c-accent) / 0.2), transparent 62%),
+    linear-gradient(180deg, rgb(var(--c-bg-a)), rgb(var(--c-bg-b))),
+    var(--panel);
+  box-shadow:
+    0 40px 100px rgb(0 0 0 / 0.62),
+    0 0 56px rgb(var(--c-accent) / 0.16),
+    0 0 0 1px rgb(var(--c-accent) / 0.12),
+    inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+
+.confirmDialog[data-tone="warning"] {
+  --c-accent: 251 191 36;
+  --c-line: #fcd34d;
+  --c-title: #fff4d6;
+  --c-lede: #e9ddc4;
+  --c-strong: #fff1cf;
+  --c-label: #cbaa6f;
+  --c-note: #bdae91;
+  --c-btn-a: #fcd34d;
+  --c-btn-b: #d97706;
+  --c-btn-hi-a: #fde68a;
+  --c-btn-hi-b: #f59e0b;
+  --c-btn-text: #2a1a03;
+  --c-bg-a: 26 21 12;
+  --c-bg-b: 12 9 5;
+  --c-fact-a: 35 28 15;
+  --c-fact-b: 16 13 8;
+  --c-icon-bg: 23 18 10;
+  --c-icon: #ffe6ac;
+}
+
+.confirmDialog[data-tone="locked"] {
+  --c-accent: 168 85 247;
+  --c-line: #c084fc;
+  --c-title: #f3e8ff;
+  --c-lede: #ddd0ea;
+  --c-strong: #f5ecff;
+  --c-label: #b394cf;
+  --c-note: #a892bd;
+  --c-btn-a: #c084fc;
+  --c-btn-b: #9333ea;
+  --c-btn-hi-a: #d8b4fe;
+  --c-btn-hi-b: #a855f7;
+  --c-btn-text: #1c0733;
+  --c-bg-a: 22 14 30;
+  --c-bg-b: 9 6 14;
+  --c-fact-a: 30 19 42;
+  --c-fact-b: 14 9 20;
+  --c-icon-bg: 20 12 28;
+  --c-icon: #ecd9ff;
+}
+
+.confirmDialog[data-tone="info"] {
+  --c-accent: 34 211 238;
+  --c-line: #38e0f2;
+  --c-title: #eefdff;
+  --c-lede: #d6e6ef;
+  --c-strong: #eafaff;
+  --c-label: #8aa1bf;
+  --c-note: #9fb2c6;
+  --c-btn-a: #4fe8f8;
+  --c-btn-b: #12a7c9;
+  --c-btn-hi-a: #6bedfb;
+  --c-btn-hi-b: #16b6da;
+  --c-btn-text: #05121a;
+  --c-bg-a: 14 24 41;
+  --c-bg-b: 7 12 22;
+  --c-fact-a: 20 30 49;
+  --c-fact-b: 11 18 31;
+  --c-icon-bg: 11 19 34;
+  --c-icon: #b7f2ff;
+}
+
+.confirmDialogHeader {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px 15px 22px;
+  border-bottom: 1px solid rgb(var(--c-accent) / 0.2);
+  background: linear-gradient(180deg, rgb(var(--c-accent) / 0.14), transparent);
+}
+.confirmDialogHeader::after {
+  content: "";
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--c-line), rgb(var(--c-accent) / 0.2) 70%, transparent);
+}
+.confirmDialogHeader h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: var(--c-title);
+  text-shadow: 0 0 22px rgb(var(--c-accent) / 0.4);
+}
+.confirmDialogHeader .iconButton {
+  flex-shrink: 0;
+  height: 40px;
+  width: 40px;
+  border-radius: 999px;
+  border-color: rgb(var(--c-accent) / 0.45);
+  background:
+    linear-gradient(180deg, rgb(var(--c-accent) / 0.22), rgb(var(--c-accent) / 0.05) 62%),
+    rgb(var(--c-icon-bg));
+  color: var(--c-icon);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    0 4px 14px rgb(var(--c-accent) / 0.18);
+}
+.confirmDialogHeader .iconButton:hover:not(:disabled),
+.confirmDialogHeader .iconButton:focus-visible {
+  border-color: rgb(var(--c-accent) / 0.9);
+  background:
+    linear-gradient(180deg, rgb(var(--c-accent) / 0.4), rgb(var(--c-accent) / 0.12) 62%),
+    rgb(var(--c-icon-bg));
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    0 10px 26px rgb(var(--c-accent) / 0.42),
+    0 0 0 3px rgb(var(--c-accent) / 0.18);
+  transform: translateY(-1px) scale(1.06) rotate(90deg);
+}
+.confirmDialogHeader .iconButton:active:not(:disabled) {
+  transform: translateY(0) scale(0.94) rotate(90deg);
+}
+.confirmDialogHeader .iconButtonSvg {
+  transition: transform 200ms ease;
+}
+
+.confirmDialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 22px 20px;
+  background: radial-gradient(80% 45% at 50% 30%, rgb(var(--c-accent) / 0.06), transparent 70%);
+}
+.confirmDialogLede {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.5;
+  color: var(--c-lede);
+}
+.confirmDialogLede strong {
+  color: var(--c-title);
+  font-weight: 900;
+}
+
+.confirmDialogFacts {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border: 1px solid rgb(var(--c-accent) / 0.22);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgb(var(--c-fact-a)), rgb(var(--c-fact-b)));
+  box-shadow: inset 3px 0 0 var(--c-line);
+  overflow: hidden;
+}
+.confirmDialogFacts > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 15px;
+}
+.confirmDialogFacts > div + div {
+  border-top: 1px solid rgb(var(--c-accent) / 0.14);
+}
+.confirmDialogFacts span {
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-label);
+}
+.confirmDialogFacts strong {
+  font-size: 15px;
+  font-weight: 850;
+  color: var(--c-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.confirmDialogNote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--c-note);
+}
+
+/* Centered variant: short yes/no prompt, big lede, no wasted space. */
+.confirmDialog[data-centered] {
+  max-width: 400px;
+  width: min(400px, calc(100vw - 24px));
+}
+.confirmDialog[data-centered] .confirmDialogBody {
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: 20px 24px 18px;
+}
+.confirmDialog[data-centered] .confirmDialogLede {
+  font-size: 20px;
+  font-weight: 850;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--c-title);
+  text-wrap: balance;
+}
+.confirmDialog[data-centered] .confirmDialogNote {
+  font-size: 12.5px;
+}
+.confirmDialog[data-centered] .confirmDialogFacts {
+  align-self: stretch;
+  text-align: left;
+}
+.confirmDialog[data-centered] .confirmDialogFooter {
+  padding: 14px 24px 16px;
+}
+
+.confirmDialogFooter {
+  display: flex;
+  justify-content: center;
+  padding: 15px 22px;
+  border-top: 1px solid rgb(var(--c-accent) / 0.2);
+  background: linear-gradient(0deg, rgb(var(--c-accent) / 0.08), transparent);
+}
+.confirmDialogConfirm {
+  min-width: 220px;
+  min-height: 46px;
+  padding-inline: 34px;
+  border: 1px solid rgb(var(--c-accent) / 0.6);
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  color: var(--c-btn-text);
+  background: linear-gradient(180deg, var(--c-btn-a), var(--c-btn-b));
+  box-shadow:
+    0 12px 28px rgb(var(--c-accent) / 0.45),
+    0 0 0 1px rgb(var(--c-accent) / 0.4),
+    inset 0 1px 0 rgb(255 255 255 / 0.4);
+  transition: background 130ms ease, box-shadow 130ms ease, transform 110ms ease;
+}
+.confirmDialogConfirm:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, var(--c-btn-hi-a), var(--c-btn-hi-b));
+  box-shadow:
+    0 16px 34px rgb(var(--c-accent) / 0.55),
+    0 0 0 1px rgb(var(--c-accent) / 0.55),
+    inset 0 1px 0 rgb(255 255 255 / 0.5);
+}
+.confirmDialogConfirm:active:not(:disabled) {
+  transform: translateY(0) scale(0.99);
+}
+.confirmDialogConfirm:disabled {
+  cursor: not-allowed;
+  background: rgb(148 163 184 / 0.12);
+  border-color: rgb(148 163 184 / 0.16);
+  color: rgb(148 163 184 / 0.5);
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .confirmDialogHeader .iconButton:hover:not(:disabled),
+  .confirmDialogHeader .iconButton:focus-visible,
+  .confirmDialogHeader .iconButton:active:not(:disabled),
+  .confirmDialogConfirm:hover:not(:disabled),
+  .confirmDialogConfirm:active:not(:disabled) {
+    transform: none;
   }
 }

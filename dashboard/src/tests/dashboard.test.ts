@@ -1651,8 +1651,9 @@ async function runAsyncAssertions() {
 
     // End Session dialog also uses the display name, same pattern.
     const endSessionDialogSource = readFileSync("src/components/EndSessionDialog.tsx", "utf8");
-    assert.match(endSessionDialogSource, /`End \$\{pc\.display_name \?\? pc\.pc_name\} session`/);
-    assert.match(endSessionDialogSource, /<strong>\{pc\.display_name \?\? pc\.pc_name\}<\/strong>\?/);
+    assert.match(endSessionDialogSource, /const pcName = pc\.display_name \?\? pc\.pc_name;/);
+    assert.match(endSessionDialogSource, /`End \$\{pcName\} session`/);
+    assert.match(endSessionDialogSource, /<strong>\{pcName\}<\/strong>\?/);
     assert.doesNotMatch(endSessionDialogSource, /`End \$\{pc\.pc_name\} session`/);
 
     // Member tab: one search field (no separate dropdown), inline results,
@@ -1787,7 +1788,7 @@ async function runAsyncAssertions() {
     // .monitorScreen rule), In Use is pink, Low Time is red with a
     // stronger glow than In Use's, Powered Off stays muted gray with no
     // bright glow -- never yellow for Low Time.
-    assert.match(dashboardCss, /border: 1px solid rgb\(34 211 238 \/ 0\.8\)/);
+    assert.match(dashboardCss, /\.monitorScreen \{[^}]*border: 1px solid rgb\(34 211 238 \/ 0\.8\d?\)/);
     const activeScreenCss = dashboardCss.slice(
       dashboardCss.indexOf(".monitorTileActive .monitorScreen {"),
       dashboardCss.indexOf(".monitorTileActive .monitorScreen {") + 200
@@ -1814,14 +1815,17 @@ async function runAsyncAssertions() {
     );
     assert.match(dashboardCss, /\.monitorTileOffline \{\s*opacity: 0\.68;/);
     assert.match(dashboardCss, /\.monitorTileOffline \.monitorScreen \{\s*border-color: rgb\(100 116 139/);
-    // Selection is an outer ring (outline), never a border/box-shadow
-    // override on .monitorScreen -- overriding those would hide whichever
-    // operational color (cyan/pink/red/gray) the tile is actually showing.
+    // Selection is a periwinkle halo carried on `filter` (plus the ::before
+    // bezel + status pill), never a border-color/box-shadow override on
+    // .monitorScreen -- overriding those would hide whichever operational
+    // color (cyan/pink/red/gray) the tile is actually showing. Periwinkle
+    // (#a5b4fc / rgb(165 180 252)) sits outside the operational palette.
     const selectedCss = dashboardCss.slice(
       dashboardCss.indexOf(".monitorTileSelected .monitorScreen {"),
-      dashboardCss.indexOf(".monitorTileSelected .monitorScreen {") + 200
+      dashboardCss.indexOf(".monitorTileSelected .monitorScreen {") + 220
     );
-    assert.match(selectedCss, /outline:/);
+    assert.match(selectedCss, /filter:/);
+    assert.match(selectedCss, /165 180 252/);
     assert.doesNotMatch(selectedCss, /border-color:/);
     assert.doesNotMatch(selectedCss, /box-shadow:/);
     assert.match(dashboardCss, /\.monitorGrid/);
@@ -1955,10 +1959,10 @@ async function runAsyncAssertions() {
     assert.match(pcDetailsSource, /Messaging/);
     assert.match(pcDetailsSource, /Power Controls/);
     assert.match(pcDetailsSource, /Advanced \/ Technical Details/);
-    // Section order: PC heading/status, Session, Billing, Session
-    // Actions, Messaging, Live Screen, then Power Controls -- Live
-    // Screen moved out from the very top (where it used to sit ahead of
-    // Session) to immediately between Messaging and Power Controls.
+    // Section order: PC heading/status, Session, Session Actions, Billing,
+    // Messaging, Live Screen, then Power Controls. Session Actions sits
+    // directly under Session (before Billing) so the primary controls are
+    // reachable without scrolling past the billing figures.
     const headingIndex = pcDetailsSource.indexOf("<h2>{pc.display_name");
     const sessionIndex = pcDetailsSource.indexOf('aria-label="Session summary"');
     const billingIndex = pcDetailsSource.indexOf('aria-label="Billing summary"');
@@ -1967,9 +1971,9 @@ async function runAsyncAssertions() {
     const liveScreenIndex = pcDetailsSource.indexOf('aria-label="Live screen"');
     const powerControlsIndex = pcDetailsSource.indexOf('aria-label="Power controls"');
     assert.ok(headingIndex < sessionIndex, "PC heading must come before Session");
-    assert.ok(sessionIndex < billingIndex, "Session must come before Billing");
-    assert.ok(billingIndex < sessionActionsIndex, "Billing must come before Session Actions");
-    assert.ok(sessionActionsIndex < messagingIndex, "Session Actions must come before Messaging");
+    assert.ok(sessionIndex < sessionActionsIndex, "Session must come before Session Actions");
+    assert.ok(sessionActionsIndex < billingIndex, "Session Actions must come before Billing");
+    assert.ok(billingIndex < messagingIndex, "Billing must come before Messaging");
     assert.ok(messagingIndex < liveScreenIndex, "Messaging must come before Live Screen");
     assert.ok(liveScreenIndex < powerControlsIndex, "Live Screen must come immediately before Power Controls");
 
@@ -2014,9 +2018,12 @@ async function runAsyncAssertions() {
     const messagingSectionBlock = pcDetailsSource.slice(messagingIndex, liveScreenIndex);
     assert.match(messagingSectionBlock, /<textarea/);
     assert.doesNotMatch(messagingSectionBlock, /Message title/);
-    // Severity selection is untouched -- still controls message styling.
+    // Severity selection is untouched functionally -- still controls
+    // message styling -- but the native <select> was replaced by the
+    // themeable SeveritySelect listbox (SEVERITY_OPTIONS holds the values).
     assert.match(messagingSectionBlock, /messageSeverity/);
-    assert.match(messagingSectionBlock, /option value="urgent"/);
+    assert.match(messagingSectionBlock, /SeveritySelect/);
+    assert.match(pcDetailsSource, /value: "urgent"/);
     assert.match(pcDetailsSource, /<Icon name="message" \/>[\s\S]*Send Message/);
     assert.match(pcDetailsSource, /<Icon name="power" \/>[\s\S]*Wake PC/);
     assert.match(pcDetailsSource, /<Icon name="moon" \/>[\s\S]*Sleep/);
@@ -2034,14 +2041,14 @@ async function runAsyncAssertions() {
     assert.match(pcDetailsSource, /M18\.4 6\.6a9 9 0 1 1-12\.8 0/);
     assert.match(pcDetailsSource, /M21 12\.8A8\.5 8\.5 0 1 1/);
     assert.match(pcDetailsSource, /M20 12a8 8 0 1 1-2\.35-5\.65L21 9/);
-    // clockPlus's old plus-mark paths ("M19 19l2 2" + "M21 17v4") were a
-    // diagonal line crossing a misaligned vertical one -- not a "+" at
-    // all. Fixed to a horizontal + vertical stroke sharing the same
-    // center (16, 17.5), a real plus badge on the clock face.
-    assert.match(pcDetailsSource, /cx="10" cy="12" r="7"/);
-    assert.match(pcDetailsSource, /M10 9v3l2 1\.5/);
-    assert.match(pcDetailsSource, /M16 15v5/);
-    assert.match(pcDetailsSource, /M13\.5 17\.5h5/);
+    // clockPlus: a clock (circle + hands) top-left with a real "+" badge
+    // clear of the dial at bottom-right (arms sharing center 18,18) -- the
+    // earlier version drew the plus straddling the circle's edge so the
+    // strokes crossed the dial outline.
+    assert.match(pcDetailsSource, /cx="9\.5" cy="9\.5" r="6\.25"/);
+    assert.match(pcDetailsSource, /M9\.5 6v3\.5l2\.5 1\.5/);
+    assert.match(pcDetailsSource, /M18 14\.75v6\.5/);
+    assert.match(pcDetailsSource, /M14\.75 18h6\.5/);
     assert.match(pcDetailsSource, /<Icon name="save" \/>[\s\S]*Save MAC/);
     assert.match(pcDetailsSource, /Wake-on-LAN is unavailable until a MAC address is saved/);
     assert.match(pcDetailsSource, /MAC address[\s\S]*<input[\s\S]*Save MAC/);
@@ -2148,7 +2155,7 @@ async function runAsyncAssertions() {
     // one always-rendered .selectedPcRail aside inside .dashboardWorkspace.
     assert.match(dashboardSource, /<aside className=\{styles\.selectedPcRail\}/);
     assert.match(dashboardSource, /<h2>Select a PC<\/h2>/);
-    assert.match(dashboardSource, /Choose a station to view session, billing, messaging, and power controls\./);
+    assert.match(dashboardSource, /Pick a station to view its session, billing, messaging, and power controls\./);
     assert.doesNotMatch(dashboardSource, /pcDrawerLayer/);
     assert.doesNotMatch(dashboardSource, /pcDrawerBackdrop/);
 
@@ -2356,6 +2363,15 @@ async function runAsyncAssertions() {
       "History should be the first Admin dropdown item"
     );
     assert.match(authShellSource, /className=\{pathname === "\/sales" \? "appShell__linkActive" : ""\}/);
+    // Sales is open to any operator (role >= cashier): not in ADMIN_ONLY_PATHS,
+    // and its nav link is unconditional (sibling of Dashboard/Members), not
+    // wrapped in an isAdminOperator gate.
+    assert.doesNotMatch(authShellSource, /ADMIN_ONLY_PATHS = \[[^\]]*"\/sales"[^\]]*\]/);
+    assert.match(
+      authShellSource,
+      /href="\/members">[\s\S]*?<\/Link>\s*<Link className=\{pathname === "\/sales"/,
+      "Sales nav link must be an unconditional sibling of Members"
+    );
     assert.match(authShellSource, /const isAdminNavPath = ADMIN_NAV_ITEMS\.some/);
     assert.match(authShellSource, /className=\{isAdminNavPath \? "appShell__linkActive" : ""\}/);
     assert.doesNotMatch(authShellSource, /const isAdminPath/);
@@ -2390,7 +2406,7 @@ async function runAsyncAssertions() {
     }
 
     const adminOnlyPaths = [
-      "/operator-activity", "/operators", "/promotions", "/sales",
+      "/operator-activity", "/operators", "/promotions",
       "/settings", "/system", "/shifts", "/remote-commands"
     ];
     const systemAdminPaths = ["/system", "/remote-commands"];
@@ -2605,7 +2621,7 @@ async function runAsyncAssertions() {
     assert.match(typesSourceP4, /export type UserRole =/); // UserRole kept
     assert.match(typesSourceP4, /interface OperatorCreateInput/); // Staff types kept
     assert.doesNotMatch(authShellSource, /"\/users"/); // dropped from ADMIN_ONLY_PATHS
-    for (const kept of ["/operators", "/settings", "/system", "/promotions", "/sales", "/operator-activity", "/remote-commands", "/shifts"]) {
+    for (const kept of ["/operators", "/settings", "/system", "/promotions", "/operator-activity", "/remote-commands", "/shifts"]) {
       assert.ok(authShellSource.includes(`"${kept}"`), `ADMIN_ONLY_PATHS still contains ${kept}`);
     }
 
@@ -2758,18 +2774,20 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(dashboardSummarySource, /label: "Today's Sales"/);
     assert.match(dashboardSummarySource, /OperatorSaleSummary/);
     // The card only ever formats/passes through fields the backend already
-    // computed (operator_sale, operator_name, has_open_shift,
-    // operator_user_id) -- it never sums payments or shift totals itself.
+    // computed (operator_sale, operator_name, operator_user_id) -- it never
+    // sums payments or shift totals itself. It is a per-operator running
+    // total for the whole on-duty session: no shift gate, no midnight reset.
     assert.match(dashboardSummarySource, /formatMoney\(operatorSale\.operator_sale\)/);
     assert.doesNotMatch(dashboardSummarySource, /\.payments\b/);
     assert.doesNotMatch(dashboardSummarySource, /\.totals\b/);
     assert.doesNotMatch(dashboardSummarySource, /reduce\(/);
     assert.match(dashboardSummarySource, /No operator on duty/);
-    assert.match(dashboardSummarySource, /No open shift/);
-    assert.match(dashboardSummarySource, /Current shift/);
+    // The card no longer depends on an open cashier shift.
+    assert.doesNotMatch(dashboardSummarySource, /No open shift/);
+    assert.doesNotMatch(dashboardSummarySource, /has_open_shift/);
+    assert.match(dashboardSummarySource, /· On duty/);
     assert.match(dashboardSummarySource, /operatorSale === null/);
     assert.match(dashboardSummarySource, /value: "--"/);
-    assert.match(dashboardSummarySource, /operatorSale\.has_open_shift/);
     assert.match(dashboardSummarySource, /operatorSale\.operator_user_id === null/);
     assert.match(dashboardSummarySource, /operatorSale\.operator_name/);
 

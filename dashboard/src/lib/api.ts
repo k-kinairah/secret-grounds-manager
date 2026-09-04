@@ -176,8 +176,15 @@ export async function passwordOperatorLogin(operatorId: string, password: string
   });
 }
 
-export async function logout(): Promise<void> {
-  await requestJson<{ message: string }>(`${getApiBaseUrl()}/auth/logout`, {
+/**
+ * @param endOperatorSession `true` for a deliberate Sign Out -- also ends
+ *   the operator's running-sales window so their next sign-in starts at
+ *   zero. Omit / `false` for a Change Operator hand-off, which keeps the
+ *   previous operator's total intact for when they return.
+ */
+export async function logout(endOperatorSession = false): Promise<void> {
+  const query = endOperatorSession ? "?end_operator_session=true" : "";
+  await requestJson<{ message: string }>(`${getApiBaseUrl()}/auth/logout${query}`, {
     method: "POST"
   });
 }
@@ -481,6 +488,15 @@ export async function updatePcLayout(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
+  });
+}
+
+// Hard-delete a leftover / auto-detected layout slot. The backend refuses
+// any slot that is online now or has an assigned station, session, or
+// payment history -- those must use updatePcLayout({ is_enabled: false }).
+export async function deletePcLayout(pcName: string): Promise<{ pc_name: string }> {
+  return requestJson<{ pc_name: string }>(`${getApiBaseUrl()}/pcs/${pcName}/layout`, {
+    method: "DELETE"
   });
 }
 

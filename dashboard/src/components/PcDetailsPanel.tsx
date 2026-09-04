@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import styles from "@/app/page.module.css";
 import {
   clearCustomerLock,
@@ -15,6 +16,7 @@ import { getPcActionAvailability } from "@/lib/pcStatus";
 import { formatDateTime, formatMoney, formatNaturalDuration, formatTimer } from "@/lib/time";
 import type { MessageSeverity, PcSummary, ScreenMonitorStatus, SessionBalanceSourceProjection, UserRole } from "@/lib/types";
 import { CloseButton } from "./CloseButton";
+import { ConfirmActionDialog } from "./ConfirmActionDialog";
 
 const MONITOR_STATE_LABEL: Record<MonitorTileVisualState, string> = {
   live: "Live",
@@ -35,12 +37,16 @@ type IconName =
   | "rotate"
   | "save"
   | "stop"
+  | "unlock"
   | "warning"
   | "x";
 
 interface PcDetailsPanelProps {
   pc: PcSummary;
   currentUserRole: UserRole | null;
+  /** Power Controls (Wake / Sleep / Restart / Shutdown) are reserved for
+      the protected Admin account only. */
+  currentUserIsProtected?: boolean;
   variant?: "modal" | "dock";
   onClose: () => void;
   onActionComplete: () => void;
@@ -73,10 +79,10 @@ function Icon({ name }: { name: IconName }) {
     ),
     clockPlus: (
       <>
-        <circle {...common} cx="10" cy="12" r="7" />
-        <path {...common} d="M10 9v3l2 1.5" />
-        <path {...common} d="M16 15v5" />
-        <path {...common} d="M13.5 17.5h5" />
+        <circle {...common} cx="9.5" cy="9.5" r="6.25" />
+        <path {...common} d="M9.5 6v3.5l2.5 1.5" />
+        <path {...common} d="M18 14.75v6.5" />
+        <path {...common} d="M14.75 18h6.5" />
       </>
     ),
     message: (
@@ -116,6 +122,13 @@ function Icon({ name }: { name: IconName }) {
       </>
     ),
     stop: <rect {...common} height="12" rx="2" width="12" x="6" y="6" />,
+    unlock: (
+      <>
+        <rect {...common} height="10" rx="2" width="14" x="5" y="11" />
+        <path {...common} d="M8 11V7a4 4 0 0 1 7.7-1.6" />
+        <path {...common} d="M12 15.5v2.5" />
+      </>
+    ),
     warning: (
       <>
         <path {...common} d="M12 3 22 20H2L12 3z" />
@@ -136,6 +149,157 @@ function Icon({ name }: { name: IconName }) {
       {paths[name]}
     </svg>
   );
+}
+
+const SEVERITY_OPTIONS: { value: MessageSeverity; label: string; hint: string }[] = [
+  { value: "info", label: "Info", hint: "General notice" },
+  { value: "warning", label: "Warning", hint: "Needs attention" },
+  { value: "urgent", label: "Urgent", hint: "Act now" }
+];
+
+function SeveritySelect({
+  value,
+  onChange,
+  disabled = false
+}: {
+  value: MessageSeverity;
+  onChange: (next: MessageSeverity) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(() =>
+    Math.max(0, SEVERITY_OPTIONS.findIndex((option) => option.value === value))
+  );
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const selected = SEVERITY_OPTIONS.find((option) => option.value === value) ?? SEVERITY_OPTIONS[0];
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setActiveIndex(Math.max(0, SEVERITY_OPTIONS.findIndex((option) => option.value === value)));
+
+    function onPointerDown(event: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [open, value]);
+
+  function commit(next: MessageSeverity) {
+    onChange(next);
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function onTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setOpen(true);
+    }
+  }
+
+  function onMenuKeyDown(event: ReactKeyboardEvent<HTMLUListElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => (index + 1) % SEVERITY_OPTIONS.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => (index - 1 + SEVERITY_OPTIONS.length) % SEVERITY_OPTIONS.length);
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      commit(SEVERITY_OPTIONS[activeIndex].value);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setActiveIndex(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setActiveIndex(SEVERITY_OPTIONS.length - 1);
+    }
+  }
+
+  return (
+    <div className={styles.severitySelect} ref={rootRef}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className={styles.severityTrigger}
+        data-sev={value}
+        disabled={disabled}
+        onClick={() => setOpen((prev) => !prev)}
+        onKeyDown={onTriggerKeyDown}
+        ref={triggerRef}
+        type="button"
+      >
+        <span className={styles.severityDot} aria-hidden="true" />
+        <span className={styles.severityValue}>{selected.label}</span>
+        <svg
+          aria-hidden="true"
+          className={styles.severityCaret}
+          data-open={open}
+          viewBox="0 0 12 8"
+        >
+          <path d="M1 1l5 5 5-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+        </svg>
+      </button>
+      {open ? (
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- listbox key handling per WAI-ARIA pattern
+        <ul
+          className={styles.severityMenu}
+          onKeyDown={onMenuKeyDown}
+          ref={(node) => node?.focus()}
+          role="listbox"
+          tabIndex={-1}
+        >
+          {SEVERITY_OPTIONS.map((option, index) => (
+            <li
+              aria-selected={option.value === value}
+              className={styles.severityOption}
+              data-active={index === activeIndex}
+              data-sev={option.value}
+              key={option.value}
+              onClick={() => commit(option.value)}
+              onMouseEnter={() => setActiveIndex(index)}
+              role="option"
+            >
+              <span className={styles.severityDot} aria-hidden="true" />
+              <span className={styles.severityOptionLabel}>{option.label}</span>
+              <span className={styles.severityOptionHint}>{option.hint}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function panelTone(pc: PcSummary): string {
+  if (pc.recovery_required || pc.power_state === "shutdown_failed") {
+    return "danger";
+  }
+  if (pc.session_status === "settlement_pending") {
+    return "settlement";
+  }
+  if (pc.session_status === "grace_period") {
+    return "grace";
+  }
+  if (pc.customer_locked) {
+    return "locked";
+  }
+  if (pc.session_status === "active") {
+    return pc.remaining_seconds !== null && pc.remaining_seconds <= 300 ? "lowtime" : "inuse";
+  }
+  if (pc.connection_status === "offline") {
+    return "offline";
+  }
+  return "available";
 }
 
 function statusLabel(pc: PcSummary): string {
@@ -172,6 +336,7 @@ function statusLabel(pc: PcSummary): string {
 export function PcDetailsPanel({
   pc,
   currentUserRole,
+  currentUserIsProtected = false,
   variant = "modal",
   onClose,
   onActionComplete,
@@ -191,7 +356,9 @@ export function PcDetailsPanel({
   const actions = getPcActionAvailability(pc);
   const monitorVisualState = getMonitorTileVisualState({ status: monitorStatus, hasFetchError: frameHasError });
   const showMonitorThumbnail = (monitorVisualState === "live" || monitorVisualState === "stale") && Boolean(frameUrl);
-  const canSeeTechnical = currentUserRole === "owner" || currentUserRole === "admin";
+  // Advanced / Technical Details (diagnostics + MAC address editor) is
+  // locked to the protected Admin account, same as Power Controls.
+  const canSeeTechnical = currentUserIsProtected === true;
   const customerLabel =
     pc.member_name_snapshot ?? pc.member_code_snapshot ?? (pc.active_session_id ? "Walk-in" : "No active customer");
   const [messageText, setMessageText] = useState("");
@@ -200,7 +367,10 @@ export function PcDetailsPanel({
   const [forceReason, setForceReason] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [isWorking, setIsWorking] = useState(false);
-  const canPowerControl = currentUserRole === "owner" || currentUserRole === "admin";
+  const [confirmClearLock, setConfirmClearLock] = useState(false);
+  // Power Controls are locked to the protected Admin account -- not a
+  // role check. Regular operators (including owners) never see this section.
+  const canPowerControl = currentUserIsProtected === true;
   const isActiveSession =
     pc.session_status === "active" || pc.session_status === "grace_period";
   const isOpenTime = pc.session_mode === "open_time";
@@ -347,6 +517,7 @@ export function PcDetailsPanel({
       aria-label={`${pc.pc_name} controls`}
       aria-modal={variant === "modal" ? "true" : undefined}
       className={variant === "dock" ? styles.pcControlDock : styles.pcControlModal}
+      data-tone={panelTone(pc)}
       ref={modalRef}
       role={variant === "modal" ? "dialog" : "region"}
       tabIndex={variant === "modal" ? -1 : undefined}
@@ -355,8 +526,46 @@ export function PcDetailsPanel({
     </section>
   );
 
+  const clearLockDialog = confirmClearLock && typeof document !== "undefined" ? createPortal(
+    <ConfirmActionDialog
+      confirmLabel={isWorking ? "Clearing..." : "Clear Lock"}
+      isLoading={isWorking}
+      lede={
+        <>
+          Release the customer hold on <strong>{pc.display_name ?? pc.pc_name}</strong> and
+          unlock the screen?
+        </>
+      }
+      note="Use this only when the member has asked for help or left the station. Their session and timer keep running — you're just removing the lock they set."
+      onCancel={() => setConfirmClearLock(false)}
+      onConfirm={() => {
+        if (!pc.active_session_id) {
+          setConfirmClearLock(false);
+          return;
+        }
+        void runPanelAction(
+          () => clearCustomerLock(pc.active_session_id as string),
+          "Customer lock cleared."
+        ).finally(() => setConfirmClearLock(false));
+      }}
+      facts={
+        pc.member_name_snapshot || pc.member_code_snapshot
+          ? [{ label: "Member", value: pc.member_name_snapshot ?? pc.member_code_snapshot }]
+          : undefined
+      }
+      title="Clear Customer Lock"
+      tone="locked"
+    />,
+    document.body
+  ) : null;
+
   if (variant === "dock") {
-    return panelContent;
+    return (
+      <>
+        {panelContent}
+        {clearLockDialog}
+      </>
+    );
   }
 
   return (
@@ -370,6 +579,7 @@ export function PcDetailsPanel({
       role="presentation"
     >
       {panelContent}
+      {clearLockDialog}
     </div>
   );
 
@@ -378,10 +588,17 @@ export function PcDetailsPanel({
       <>
         <header className={styles.pcControlHeader}>
           <div>
-            <h2>{pc.display_name ?? pc.pc_name}</h2>
-            <div className={styles.pcControlMeta}>
-              <span className={styles.pcControlStatus}>{pc.connection_status.toUpperCase()}</span>
-              <span>{statusLabel(pc).toUpperCase()}</span>
+            <div className={styles.pcControlTitleRow}>
+              <h2>{pc.display_name ?? pc.pc_name}</h2>
+              <span className={styles.pcControlStatePill}>
+                <span className={styles.pcControlStateDot} aria-hidden="true" />
+                {statusLabel(pc)}
+              </span>
+              {pc.connection_status !== "online" ? (
+                <span className={styles.pcControlOffline} title="This station is not reachable — it is powered off or has lost its connection.">
+                  Offline
+                </span>
+              ) : null}
             </div>
             <p>{customerLabel}</p>
           </div>
@@ -428,6 +645,105 @@ export function PcDetailsPanel({
                   </strong>
                 </div>
               </dl>
+            </section>
+
+            <section className={styles.controlSection} aria-label="Session actions">
+              <h3>Session Actions</h3>
+              {pc.customer_locked ? (
+                <p className={styles.helperWarning}>
+                  The member has locked this station; their session and timer continue
+                  running underneath.
+                </p>
+              ) : null}
+              <div className={styles.sessionActionStack}>
+                {pc.customer_locked ? (
+                  <button
+                    className={styles.primaryButton}
+                    disabled={!actions.canClearCustomerLock || isWorking}
+                    onClick={() => setConfirmClearLock(true)}
+                    type="button"
+                  >
+                    <Icon name="unlock" />
+                    Clear Customer Lock
+                  </button>
+                ) : null}
+
+                {actions.canStart ? (
+                  <button
+                    className={styles.primaryButton}
+                    onClick={() => onStart(pc)}
+                    type="button"
+                  >
+                    <Icon name={pc.connection_status === "offline" ? "power" : "play"} />
+                    {pc.connection_status === "offline" ? "Start & Wake" : "Start Session"}
+                  </button>
+                ) : null}
+
+                {pc.startup_status !== null ? (
+                  <div className={styles.modalActionGrid}>
+                    <button
+                      className={styles.secondaryButton}
+                      onClick={() => onRetryWake(pc)}
+                      type="button"
+                    >
+                      <Icon name="refresh" />
+                      Retry Wake
+                    </button>
+                    <button
+                      className={styles.dangerButton}
+                      onClick={() => onCancelPrepared(pc)}
+                      type="button"
+                    >
+                      <Icon name="stop" />
+                      Cancel Startup
+                    </button>
+                  </div>
+                ) : actions.canAddTime || actions.canEnd || isSettlementPending || isOpenTime || pc.recovery_required ? (
+                  <div className={styles.modalActionGrid}>
+                    {actions.canAddTime && !isOpenTime ? (
+                      <button
+                        className={styles.secondaryButton}
+                        disabled={isWorking}
+                        onClick={() => onAddTime(pc)}
+                        type="button"
+                      >
+                        <Icon name="clockPlus" />
+                        Add Time
+                      </button>
+                    ) : null}
+                    {/* Prepaid/member sessions are paid up front and topped up via Add Time,
+                        so no mid-session Payment button. This only surfaces the legacy
+                        settlement path for any lingering Open Time session. */}
+                    {isSettlementPending || isOpenTime ? (
+                      <button
+                        className={styles.secondaryButton}
+                        disabled={pc.recovery_required || (!actions.canAddTime && !actions.canCollectPayment)}
+                        onClick={() => (isOpenTime && !isSettlementPending ? onEnd(pc) : onPayment(pc))}
+                        type="button"
+                      >
+                        <Icon name="card" />
+                        {isSettlementPending ? "Collect Payment" : "End & Settle"}
+                      </button>
+                    ) : null}
+                    {actions.canEnd || pc.recovery_required ? (
+                      <button
+                        className={styles.dangerButton}
+                        disabled={!actions.canEnd || (pc.recovery_required && !canResolve)}
+                        onClick={() => (pc.recovery_required ? onResolve(pc) : onEnd(pc))}
+                        title={pc.recovery_required && !canResolve ? "Owner/admin permission is required." : undefined}
+                        type="button"
+                      >
+                        <Icon name={pc.recovery_required ? "warning" : "stop"} />
+                        {pc.recovery_required
+                          ? canResolve
+                            ? "Resolve Session"
+                            : "Needs Admin"
+                          : "End Session"}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             </section>
 
             {isVipMemberSession ? (
@@ -502,102 +818,6 @@ export function PcDetailsPanel({
                 </div>
               </dl>
             </section>
-
-            <section className={styles.controlSection} aria-label="Session actions">
-              <h3>Session Actions</h3>
-              {pc.customer_locked ? (
-                <p className={styles.helperWarning}>
-                  The member has locked this station; their session and timer continue
-                  running underneath.
-                </p>
-              ) : null}
-              <div className={styles.modalActionGrid}>
-                {pc.customer_locked ? (
-                  <button
-                    className={styles.secondaryButton}
-                    disabled={!actions.canClearCustomerLock || isWorking}
-                    onClick={() =>
-                      pc.active_session_id
-                        ? void runPanelAction(
-                            () => clearCustomerLock(pc.active_session_id as string),
-                            "Customer lock cleared."
-                          )
-                        : undefined
-                    }
-                    type="button"
-                  >
-                    <Icon name="stop" />
-                    Clear Customer Lock
-                  </button>
-                ) : null}
-                <button
-                  className={styles.primaryButton}
-                  disabled={!actions.canStart}
-                  onClick={() => onStart(pc)}
-                  title={!actions.canStart ? "Start is available only when this PC is idle." : undefined}
-                  type="button"
-                >
-                  <Icon name={pc.connection_status === "offline" ? "power" : "play"} />
-                  {pc.connection_status === "offline" ? "Start & Wake" : "Start Session"}
-                </button>
-                {pc.startup_status !== null ? (
-                  <>
-                    <button
-                      className={styles.secondaryButton}
-                      onClick={() => onRetryWake(pc)}
-                      type="button"
-                    >
-                      <Icon name="refresh" />
-                      Retry Wake
-                    </button>
-                    <button
-                      className={styles.dangerButton}
-                      onClick={() => onCancelPrepared(pc)}
-                      type="button"
-                    >
-                      <Icon name="stop" />
-                      Cancel Startup
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      className={styles.secondaryButton}
-                      disabled={!actions.canAddTime || isOpenTime}
-                      onClick={() => onAddTime(pc)}
-                      title={isOpenTime ? "Open Time sessions do not use Add Time." : undefined}
-                      type="button"
-                    >
-                      <Icon name="clockPlus" />
-                      Add Time
-                    </button>
-                    <button
-                      className={styles.secondaryButton}
-                      disabled={pc.recovery_required || (!actions.canAddTime && !actions.canCollectPayment)}
-                      onClick={() => (isOpenTime && !isSettlementPending ? onEnd(pc) : onPayment(pc))}
-                      type="button"
-                    >
-                      <Icon name="card" />
-                      {isSettlementPending ? "Collect Payment" : isOpenTime ? "End & Settle" : "Payment"}
-                    </button>
-                    <button
-                      className={styles.dangerButton}
-                      disabled={!actions.canEnd || (pc.recovery_required && !canResolve)}
-                      onClick={() => (pc.recovery_required ? onResolve(pc) : onEnd(pc))}
-                      title={pc.recovery_required && !canResolve ? "Owner/admin permission is required." : undefined}
-                      type="button"
-                    >
-                      <Icon name={pc.recovery_required ? "warning" : "stop"} />
-                      {pc.recovery_required
-                        ? canResolve
-                          ? "Resolve Session"
-                          : "Needs Admin"
-                        : "End Session"}
-                    </button>
-                  </>
-                )}
-              </div>
-            </section>
           </div>
 
           <div className={styles.pcControlColumn}>
@@ -613,17 +833,14 @@ export function PcDetailsPanel({
                   value={messageText}
                 />
               </label>
-              <label className={styles.field}>
-                Severity
-                <select
-                  onChange={(event) => setMessageSeverity(event.target.value as MessageSeverity)}
+              <div className={styles.field}>
+                <span>Severity</span>
+                <SeveritySelect
+                  disabled={isWorking}
+                  onChange={setMessageSeverity}
                   value={messageSeverity}
-                >
-                  <option value="info">Info</option>
-                  <option value="warning">Warning</option>
-                  <option value="urgent">Urgent</option>
-                </select>
-              </label>
+                />
+              </div>
               <button
                 className={styles.primaryButton}
                 disabled={isWorking || pc.connection_status === "offline"}
