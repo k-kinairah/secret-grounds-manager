@@ -133,6 +133,28 @@ def fade_out(root, duration_ms: int = 120, steps: int = 8, on_complete=None) -> 
     _step()
 
 
+def slide_in(root, x: int, y_start: int, y_end: int, width: int, height: int, duration_ms: int = 220, steps: int = 14) -> None:
+    """Animate a window's y position from y_start to y_end -- the vertical
+    counterpart to fade_in, for a "drop/pop in" entrance (e.g. a
+    notification-style popup landing from just above its resting spot)
+    instead of a plain fade in place. Ease-out cubic: fast start, gentle
+    settle, which reads as a "pop" rather than a linear slide.
+    """
+    step_delay = max(1, duration_ms // steps)
+
+    def _step(i: int = 1) -> None:
+        eased = 1 - (1 - i / steps) ** 3
+        y = round(y_start + (y_end - y_start) * eased)
+        try:
+            root.geometry(f"{width}x{height}+{x}+{y}")
+        except Exception:
+            return
+        if i < steps:
+            root.after(step_delay, lambda: _step(i + 1))
+
+    _step()
+
+
 def draw_vertical_gradient(
     canvas, width: int, height: int, top_color: str, bottom_color: str, y_offset: int = 0
 ) -> None:
@@ -170,6 +192,31 @@ def draw_horizontal_gradient(canvas, x1: int, y1: int, x2: int, y2: int, left_co
         color = f"#{r:02x}{g:02x}{b:02x}"
         x = x1 + step
         canvas.create_line(x, y1, x, y2, fill=color)
+
+
+def blend(color_a: str, color_b: str, amount: float) -> str:
+    """Mix two hex colors -- amount 0 keeps color_a, 1 gives color_b, values
+    between interpolate. Tk fills/outlines take one flat color, so this is
+    the pure-Tk stand-in for the dashboard's `rgb(accent / 0.4)`-style
+    translucent borders: mix the accent toward the surface color it sits on
+    instead of laying down a real alpha-blended one.
+    """
+    a = color_a.lstrip("#")
+    b = color_b.lstrip("#")
+    ar, ag, ab = (int(a[i : i + 2], 16) for i in (0, 2, 4))
+    br, bg, bb = (int(b[i : i + 2], 16) for i in (0, 2, 4))
+    r = round(ar + (br - ar) * amount)
+    g = round(ag + (bg - ag) * amount)
+    b_ = round(ab + (bb - ab) * amount)
+    return f"#{r:02x}{g:02x}{b_:02x}"
+
+
+def lighten(hex_color: str, amount: float) -> str:
+    """Blend a hex color toward white by `amount` (0-1) -- lets a two-stop
+    gradient (GradientButton, etc.) be derived from a single accent color
+    instead of hand-picking a second stop for every accent it's used with.
+    """
+    return blend(hex_color, "#ffffff", amount)
 
 
 def draw_soft_glow(canvas, center_x: int, center_y: int, max_radius: int, color: str) -> None:
@@ -303,6 +350,7 @@ class GlowText:
         glow_color: str = ACCENT_CYAN,
         halo_color: str = ACCENT_PRIMARY,
         bg: str = BG_DEEP,
+        pad: int = 46,
     ) -> None:
         self._tk = tk
         self._font = font
@@ -311,6 +359,7 @@ class GlowText:
         self._halo_color = halo_color
         self._bg = bg
         self._text = text
+        self._pad = pad
         self.canvas = tk.Canvas(parent, highlightthickness=0, bd=0, bg=bg)
         self._redraw()
 
@@ -320,7 +369,7 @@ class GlowText:
         probe = canvas.create_text(0, 0, text=self._text, font=self._font, anchor="nw")
         bbox = canvas.bbox(probe)
         canvas.delete(probe)
-        pad = 46
+        pad = self._pad
         width = (bbox[2] - bbox[0]) + pad * 2
         height = (bbox[3] - bbox[1]) + pad * 2
         canvas.configure(width=width, height=height)
@@ -343,6 +392,54 @@ class GlowText:
         # before the crisp centered draw, thickening every stroke slightly
         # beyond what the font's own "bold" flag gives.
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            canvas.create_text(cx + dx, cy + dy, text=self._text, font=self._font, fill=self._fill, anchor="center")
+        canvas.create_text(cx, cy, text=self._text, font=self._font, fill=self._fill, anchor="center")
+
+    def configure(self, text: str | None = None, **_ignored) -> None:
+        if text is not None and text != self._text:
+            self._text = text
+            self._redraw()
+
+    def cget(self, key: str):
+        if key == "text":
+            return self._text
+        raise KeyError(key)
+
+    def pack(self, **kwargs):
+        self.canvas.pack(**kwargs)
+        return self
+
+
+class BoldText:
+    """GlowText's faux-bold stamped-offset pass, without the stippled glow
+    halo underneath it -- a stipple pattern reads fine as ambient light
+    behind a large hero headline, but at small (label-sized) text it just
+    reads as blurry/soft. This is for small brand/eyebrow text that needs
+    to look genuinely thicker than Tk's own "bold" flag renders it, while
+    staying crisp. Same cget/configure/pack surface as GlowText.
+    """
+
+    def __init__(self, parent, tk, text: str, font, fill: str, bg: str) -> None:
+        self._tk = tk
+        self._font = font
+        self._fill = fill
+        self._bg = bg
+        self._text = text
+        self.canvas = tk.Canvas(parent, highlightthickness=0, bd=0, bg=bg)
+        self._redraw()
+
+    def _redraw(self) -> None:
+        canvas = self.canvas
+        canvas.delete("all")
+        probe = canvas.create_text(0, 0, text=self._text, font=self._font, anchor="nw")
+        bbox = canvas.bbox(probe)
+        canvas.delete(probe)
+        pad = 2
+        width = (bbox[2] - bbox[0]) + pad * 2
+        height = (bbox[3] - bbox[1]) + pad * 2
+        canvas.configure(width=width, height=height)
+        cx, cy = width / 2, height / 2
+        for dx, dy in ((-0.6, 0), (0.6, 0), (0, -0.6), (0, 0.6)):
             canvas.create_text(cx + dx, cy + dy, text=self._text, font=self._font, fill=self._fill, anchor="center")
         canvas.create_text(cx, cy, text=self._text, font=self._font, fill=self._fill, anchor="center")
 
@@ -395,7 +492,10 @@ def draw_rounded_rect(canvas, x1: float, y1: float, x2: float, y2: float, radius
 # icon set, not emoji. No image assets or icon-font dependency needed.
 
 _ICON_NAMES = frozenset(
-    {"user", "lock", "eye", "clock", "computer", "logout", "chevron-down", "chevron-right", "dots", "gear"}
+    {
+        "user", "lock", "eye", "clock", "computer", "logout", "chevron-down", "chevron-right", "dots", "gear",
+        "close", "info", "warning", "urgent",
+    }
 )
 
 
@@ -460,6 +560,35 @@ def draw_icon(canvas, name: str, cx: float, cy: float, size: float, color: str, 
             x2 = cx + math.cos(angle) * r * 0.85
             y2 = cy + math.sin(angle) * r * 0.85
             canvas.create_line(x1, y1, x2, y2, fill=color, width=width)
+    elif name == "close":
+        offset = r * 0.55
+        canvas.create_line(
+            cx - offset, cy - offset, cx + offset, cy + offset, fill=color, width=width, capstyle="round"
+        )
+        canvas.create_line(
+            cx - offset, cy + offset, cx + offset, cy - offset, fill=color, width=width, capstyle="round"
+        )
+    elif name == "info":
+        canvas.create_oval(cx - r * 0.82, cy - r * 0.82, cx + r * 0.82, cy + r * 0.82, outline=color, width=width)
+        canvas.create_oval(cx - 1.4, cy - r * 0.42, cx + 1.4, cy - r * 0.42 + 2.8, fill=color, outline="")
+        canvas.create_line(cx, cy - r * 0.05, cx, cy + r * 0.45, fill=color, width=width, capstyle="round")
+    elif name == "warning":
+        canvas.create_polygon(
+            cx, cy - r * 0.85, cx + r * 0.82, cy + r * 0.6, cx - r * 0.82, cy + r * 0.6,
+            outline=color, fill="", width=width, joinstyle="round",
+        )
+        canvas.create_line(cx, cy - r * 0.25, cx, cy + r * 0.15, fill=color, width=width, capstyle="round")
+        canvas.create_oval(cx - 1.4, cy + r * 0.35, cx + 1.4, cy + r * 0.35 + 2.8, fill=color, outline="")
+    elif name == "urgent":
+        # A second, tighter ring around the same exclamation reads as more
+        # alarming than the plain "info" circle without needing a filled
+        # (alpha-blend-dependent) fill Tk can't do.
+        canvas.create_oval(cx - r * 0.85, cy - r * 0.85, cx + r * 0.85, cy + r * 0.85, outline=color, width=width)
+        canvas.create_oval(
+            cx - r * 0.66, cy - r * 0.66, cx + r * 0.66, cy + r * 0.66, outline=color, width=max(1.0, width * 0.7)
+        )
+        canvas.create_line(cx, cy - r * 0.32, cx, cy + r * 0.12, fill=color, width=width, capstyle="round")
+        canvas.create_oval(cx - 1.5, cy + r * 0.32, cx + 1.5, cy + r * 0.32 + 3, fill=color, outline="")
     else:
         raise ValueError(f"Unknown icon name: {name!r}")
 
