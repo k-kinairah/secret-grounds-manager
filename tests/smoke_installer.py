@@ -54,6 +54,55 @@ def test_installer_client_validation_is_present() -> None:
     assert "offline preparation" in source.lower()
 
 
+def test_installer_supports_fixed_and_diskless_customer_modes() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    # Second-step mode selection under the Customer Computer role.
+    assert "Customer Computer Setup" in source
+    assert "Fixed Station" in source
+    assert "Diskless / Automatic" in source
+    assert "ClientModePage" in source
+    assert "ClientDisklessPage" in source
+    assert "SelectedClientMode" in source
+
+    # Fixed Station keeps the full existing validation, unchanged.
+    assert (
+        "ValidateClientOnline(ClientPage.Values[2], ClientPage.Values[3], ClientPage.Values[0])"
+        in source
+    )
+
+    # Diskless config write path: no Station ID, and the -Diskless switch is
+    # threaded through to configure-client.ps1.
+    assert "GetDisklessSwitchArg" in source
+    assert "-Diskless" in source
+    assert "ValidateServerReachableAndVersioned" in source
+    # ...but no station-availability check for diskless (pc_name is blank).
+    diskless_opts_block = source[
+        source.index("if SelectedClientMode = 'diskless' then begin") :
+        source.index("Result := ValidateClientOnline(ClientPage.Values[2]")
+    ]
+    assert "client-registration/check" not in diskless_opts_block
+
+    # Image-prep completion message, and no client launch on the master image.
+    assert "Diskless image ready" in source
+    assert "Do not assign a Station ID to this image." in source
+    run_block = source[
+        source.index("procedure RunClientPostInstall")
+        : source.index("procedure CurStepChanged")
+    ]
+    assert "if SelectedClientMode = 'diskless' then begin" in run_block
+    assert "mbInformation" in run_block
+    # The offline-prep guard the existing launch path relies on is untouched.
+    assert "if not (IsClientOnline or IsClientPreserve) then Exit;" in run_block
+
+
+def test_configure_client_supports_diskless_switch() -> None:
+    source = read("scripts/configure-client.ps1")
+    assert "[switch]$Diskless" in source
+    assert "if (-not $Diskless)" in source
+    # Fixed-station requirements still enforced when -Diskless is absent.
+    assert 'Assert-ClientValue (![string]::IsNullOrWhiteSpace($StationId)) "Station ID is required."' in source
+
+
 def test_installer_detects_and_preserves_existing_client_config() -> None:
     source = read("installer/SecretGroundsSetup.iss")
     assert "DetectExistingClientConfig" in source
@@ -545,6 +594,8 @@ def main() -> None:
         test_installer_separates_cashier_and_client_payloads,
         test_installer_preserves_cashier_data_by_default,
         test_installer_client_validation_is_present,
+        test_installer_supports_fixed_and_diskless_customer_modes,
+        test_configure_client_supports_diskless_switch,
         test_installer_detects_and_preserves_existing_client_config,
         test_installer_aborts_on_invalid_existing_client_config,
         test_installer_does_not_expand_app_before_it_is_initialized,

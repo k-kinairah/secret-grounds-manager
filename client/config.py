@@ -232,7 +232,14 @@ def validate_client_config(payload: Any, config_path: Path, require_pc_name: boo
         raise ClientConfigError("Station ID may contain only letters, numbers, dash, and underscore.")
 
     raw_display_name = payload.get("display_name")
-    if raw_display_name is None:
+    if raw_display_name is None or (
+        isinstance(raw_display_name, str) and not raw_display_name.strip() and not pc_name
+    ):
+        # Absent, or blank in generic/automatic mode: mirror pc_name, which
+        # is itself blank when the station identity is resolved later from
+        # this PC's wired NIC MAC. A blank display_name alongside an
+        # explicit pc_name is still rejected below (fixed-station configs
+        # must name themselves).
         display_name = pc_name
     else:
         if not isinstance(raw_display_name, str) or not raw_display_name.strip():
@@ -303,9 +310,12 @@ AUTOMATIC_SHUTDOWN_ON_EXPIRATION = read_bool_config(
 )
 EXPIRATION_SOUND_ENABLED = read_bool_config("SECRET_GROUNDS_EXPIRATION_SOUND_ENABLED", True)
 
-# PC screen monitoring (prototype, client/screen_capture.py). Defaults to
-# disabled so existing clients are unaffected until explicitly opted in.
-ENABLE_SCREEN_MONITORING = read_bool_config("ENABLE_SCREEN_MONITORING", False)
+# PC screen monitoring (client/screen_capture.py). On by default to match
+# the server (server.settings.SCREEN_MONITORING_ENABLED also defaults on),
+# so the dashboard Live Screen preview works out of the box after install.
+# Set ENABLE_SCREEN_MONITORING=0 (or false/no/off) in the environment to
+# turn it back off for a specific PC.
+ENABLE_SCREEN_MONITORING = read_bool_config("ENABLE_SCREEN_MONITORING", True)
 SCREEN_CAPTURE_INTERVAL_SECONDS = int(os.getenv("SCREEN_CAPTURE_INTERVAL_SECONDS", "3"))
 SCREEN_CAPTURE_MAX_WIDTH = int(os.getenv("SCREEN_CAPTURE_MAX_WIDTH", "480"))
 SCREEN_CAPTURE_MAX_HEIGHT = int(os.getenv("SCREEN_CAPTURE_MAX_HEIGHT", "270"))

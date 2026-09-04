@@ -76,7 +76,7 @@ def main() -> None:
             for product in list_membership_products()
             if product.product_type == "member_topup"
         )
-        purchase_member_time(
+        asyncio.run(purchase_member_time(
             member.member_id,
             MemberPurchaseRequest(
                 product_id=promo.product_id,
@@ -84,7 +84,7 @@ def main() -> None:
                 reference_number="LOCK-TOPUP-1",
             ),
             cashier_user,
-        )
+        ))
 
         pc_registry.clear()
         register_pc(PCRegistration(pc_name="PC-LOCK", ip_address="127.0.0.1"))

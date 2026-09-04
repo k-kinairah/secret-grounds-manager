@@ -30,20 +30,20 @@ function ConvertTo-SgClientConfigObject {
         throw "Server port must be between 1 and 65535."
     }
 
-    $pcName = [string]$Payload.pc_name
-    if ([string]::IsNullOrWhiteSpace($pcName)) {
-        throw "Station ID is required."
-    }
-    $pcName = $pcName.Trim()
-    if (-not (Test-SgStationIdFormat $pcName)) {
+    # A blank pc_name is the automatic/diskless-mode sentinel: the station
+    # identity is resolved at runtime from the wired NIC MAC via
+    # /stations/resolve, so it is intentionally absent here. A non-blank
+    # pc_name still has to be well-formed.
+    $pcName = ([string]$Payload.pc_name).Trim()
+    if ($pcName -and -not (Test-SgStationIdFormat $pcName)) {
         throw "Station ID may contain only letters, numbers, dash, and underscore."
     }
 
-    $displayName = [string]$Payload.display_name
-    if ([string]::IsNullOrWhiteSpace($displayName)) {
-        throw "Display name is required."
+    # display_name likewise falls back to blank in automatic mode.
+    $displayName = ([string]$Payload.display_name).Trim()
+    if ($displayName) {
+        $displayName = ($displayName.Split([char[]]" `t`r`n", [System.StringSplitOptions]::RemoveEmptyEntries) -join " ")
     }
-    $displayName = ($displayName.Trim().Split([char[]]" `t`r`n", [System.StringSplitOptions]::RemoveEmptyEntries) -join " ")
 
     $autoConnect = $true
     if ($Payload.PSObject.Properties.Name -contains "auto_connect") {

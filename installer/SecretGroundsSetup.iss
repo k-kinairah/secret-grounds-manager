@@ -90,8 +90,8 @@ Name: "{group}\Configure Secret Grounds Client"; Filename: "powershell.exe"; Par
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"" -Mode Preserve -ClientConfigPath ""{app}\client\config.json"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Preserving existing client configuration..."; Check: IsClientPreserve
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"" -Mode {code:GetConfigMode} -ServerHost ""{code:GetClientServerHost}"" -ServerPort {code:GetClientServerPort} -StationId ""{code:GetClientStationId}"" -DisplayName ""{code:GetClientDisplayName}"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Saving validated client configuration..."; Check: IsClientOnline
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"" -Mode {code:GetConfigMode} -ServerHost ""{code:GetClientServerHost}"" -ServerPort {code:GetClientServerPort} -StationId ""{code:GetClientStationId}"" -DisplayName ""{code:GetClientDisplayName}"" -AllowOffline"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Saving offline client configuration..."; Check: IsClientOffline
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"" -Mode {code:GetConfigMode} -ServerHost ""{code:GetClientServerHost}"" -ServerPort {code:GetClientServerPort} -StationId ""{code:GetClientStationId}"" -DisplayName ""{code:GetClientDisplayName}""{code:GetDisklessSwitchArg}"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Saving validated client configuration..."; Check: IsClientOnline
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"" -Mode {code:GetConfigMode} -ServerHost ""{code:GetClientServerHost}"" -ServerPort {code:GetClientServerPort} -StationId ""{code:GetClientStationId}"" -DisplayName ""{code:GetClientDisplayName}"" -AllowOffline{code:GetDisklessSwitchArg}"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Saving offline client configuration..."; Check: IsClientOffline
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\install-client-autostart.ps1"""; WorkingDir: "{app}"; Flags: runhidden waituntilterminated; StatusMsg: "Installing client autostart..."; Check: ShouldInstallClientAutostart
 Filename: "http://127.0.0.1:3001"; Description: "Open Secret Grounds Dashboard"; Flags: postinstall shellexec skipifsilent; Check: CashierServicesAreHealthy
 
@@ -108,10 +108,13 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Win
 [Code]
 var
   RolePage: TInputOptionWizardPage;
+  ClientModePage: TInputOptionWizardPage;
   ClientPage: TInputQueryWizardPage;
+  ClientDisklessPage: TInputQueryWizardPage;
   ClientOptionsPage: TInputOptionWizardPage;
   CashierOptionsPage: TInputOptionWizardPage;
   SelectedRole: String;
+  SelectedClientMode: String;
   RetainShopData: Boolean;
   ExistingConfigStatus: String;
   ExistingServerHost: String;
@@ -134,6 +137,11 @@ end;
 function IsClient: Boolean;
 begin
   Result := SelectedRole = 'client';
+end;
+
+function IsDisklessClient: Boolean;
+begin
+  Result := (SelectedRole = 'client') and (SelectedClientMode = 'diskless');
 end;
 
 function IsClientPreserve: Boolean;
@@ -163,22 +171,45 @@ end;
 
 function GetClientServerHost(Value: String): String;
 begin
-  Result := ClientPage.Values[2];
+  if IsDisklessClient then
+    Result := ClientDisklessPage.Values[0]
+  else
+    Result := ClientPage.Values[2];
 end;
 
 function GetClientServerPort(Value: String): String;
 begin
-  Result := ClientPage.Values[3];
+  if IsDisklessClient then
+    Result := ClientDisklessPage.Values[1]
+  else
+    Result := ClientPage.Values[3];
 end;
 
 function GetClientStationId(Value: String): String;
 begin
-  Result := ClientPage.Values[0];
+  // A diskless master image stores no Station ID -- configure-client.ps1 is
+  // called with -Diskless and writes "pc_name": "" so every cloned PC
+  // resolves its own identity from its wired NIC MAC.
+  if IsDisklessClient then
+    Result := ''
+  else
+    Result := ClientPage.Values[0];
 end;
 
 function GetClientDisplayName(Value: String): String;
 begin
-  Result := ClientPage.Values[1];
+  if IsDisklessClient then
+    Result := ''
+  else
+    Result := ClientPage.Values[1];
+end;
+
+function GetDisklessSwitchArg(Value: String): String;
+begin
+  if IsDisklessClient then
+    Result := ' -Diskless'
+  else
+    Result := '';
 end;
 
 function JsonValue(Source: String; Name: String): String;
@@ -206,6 +237,34 @@ begin
   StringChangeEx(Source, ' ', '', True);
   Pattern := '"' + Name + '":true';
   Result := Pos(Pattern, Lowercase(Source)) > 0;
+end;
+
+function ValidateServerReachableAndVersioned(ServerHost: String; ServerPort: String): Boolean;
+var
+  Http: Variant;
+  HealthUrl: String;
+  Version: String;
+begin
+  Result := False;
+  HealthUrl := 'http://' + ServerHost + ':' + ServerPort + '/healthz';
+  try
+    Http := CreateOleObject('WinHttp.WinHttpRequest.5.1');
+    Http.Open('GET', HealthUrl, False);
+    Http.SetTimeouts(3000, 3000, 3000, 5000);
+    Http.Send('');
+    if Http.Status <> 200 then begin
+      MsgBox('Secret Grounds server returned HTTP ' + IntToStr(Http.Status) + ' from /healthz.', mbError, MB_OK);
+      Exit;
+    end;
+    Version := JsonValue(Http.ResponseText, 'version');
+    if Version <> '{#AppVersion}' then begin
+      MsgBox('Version mismatch. Server is ' + Version + '; installer is {#AppVersion}.', mbError, MB_OK);
+      Exit;
+    end;
+    Result := True;
+  except
+    MsgBox('Could not reach ' + HealthUrl + '. Check the cashier address, port, and Private-network firewall rule, or select offline preparation.', mbError, MB_OK);
+  end;
 end;
 
 function ValidateClientOnline(ServerHost: String; ServerPort: String; StationId: String): Boolean;
@@ -389,6 +448,14 @@ begin
       SelectedRole := 'cashier';
   end;
 
+  // An existing "Ok" client config with no Station ID is an already-prepared
+  // diskless master image; otherwise default to a fixed, individually
+  // installed station.
+  if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') then
+    SelectedClientMode := 'diskless'
+  else
+    SelectedClientMode := 'fixed';
+
   if ExistingConfigStatus = 'Invalid' then begin
     if ExistingConfigBackupPath <> '' then
       MsgBox('An existing Secret Grounds client configuration was found at ' + PreviousInstallLocation + '\client\config.json' +
@@ -421,8 +488,27 @@ begin
   RolePage.Values[0] := ExistingConfigStatus <> 'Ok';
   RolePage.Values[1] := ExistingConfigStatus = 'Ok';
 
-  CashierOptionsPage := CreateInputOptionPage(
+  // Wizard pages are built as a single deterministic chain, each anchored to
+  // the ID of the page immediately before it: RolePage -> ClientModePage ->
+  // CashierOptionsPage -> ClientPage -> ClientDisklessPage -> ClientOptionsPage.
+  // Do NOT anchor several pages to the same AfterID -- CreateInput*Page inserts
+  // at index(AfterID)+1, so shared anchors stack in reverse creation order and
+  // would push ClientModePage to the end of the wizard.
+  ClientModePage := CreateInputOptionPage(
     RolePage.ID,
+    'Customer Computer Setup',
+    'Choose how this customer installation is identified.',
+    'A Fixed Station stores a permanent Station ID. A Diskless / Automatic image stores no Station ID -- each gaming PC cloned from it is assigned from the dashboard on first boot.',
+    True,
+    False
+  );
+  ClientModePage.Add('Fixed Station - a normal, individually installed gaming PC with a permanent Station ID.');
+  ClientModePage.Add('Diskless / Automatic - prepare a shared/master image; every cloned PC is assigned automatically.');
+  ClientModePage.Values[0] := SelectedClientMode <> 'diskless';
+  ClientModePage.Values[1] := SelectedClientMode = 'diskless';
+
+  CashierOptionsPage := CreateInputOptionPage(
+    ClientModePage.ID,
     'Cashier Computer Options',
     'Choose startup options.',
     'Secret Grounds can start automatically so the shop opens without extra steps.',
@@ -434,14 +520,14 @@ begin
 
   if ExistingConfigStatus = 'Ok' then
     ClientPage := CreateInputQueryPage(
-      RolePage.ID,
+      CashierOptionsPage.ID,
       'Customer Client Setup',
       'Existing configuration detected for station ''' + ExistingStationId + '''.',
       'These values were read from the currently installed configuration and will be kept unless you change them.'
     )
   else
     ClientPage := CreateInputQueryPage(
-      RolePage.ID,
+      CashierOptionsPage.ID,
       'Customer Client Setup',
       'Enter the station and cashier connection details.',
       'Validation runs before installation unless offline preparation is selected.'
@@ -462,8 +548,32 @@ begin
     ClientPage.Values[3] := '18001';
   end;
 
+  if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') then
+    ClientDisklessPage := CreateInputQueryPage(
+      ClientPage.ID,
+      'Diskless / Automatic Image Setup',
+      'Existing diskless image configuration detected.',
+      'These values were read from the currently installed configuration and will be kept unless you change them. No Station ID is stored.'
+    )
+  else
+    ClientDisklessPage := CreateInputQueryPage(
+      ClientPage.ID,
+      'Diskless / Automatic Image Setup',
+      'Enter the cashier connection details for this master image.',
+      'No Station ID is stored. Every gaming PC cloned from this image is assigned automatically from the dashboard on first boot.'
+    );
+  ClientDisklessPage.Add('Cashier server IP or hostname:', False);
+  ClientDisklessPage.Add('Server port:', False);
+  if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') then begin
+    ClientDisklessPage.Values[0] := ExistingServerHost;
+    ClientDisklessPage.Values[1] := ExistingServerPort;
+  end else begin
+    ClientDisklessPage.Values[0] := 'cashier-server';
+    ClientDisklessPage.Values[1] := '18001';
+  end;
+
   ClientOptionsPage := CreateInputOptionPage(
-    ClientPage.ID,
+    ClientDisklessPage.ID,
     'Customer Client Options',
     'Choose startup and validation options.',
     'Offline preparation saves config without contacting the cashier.',
@@ -479,8 +589,12 @@ end;
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
-  if (PageID = ClientPage.ID) or (PageID = ClientOptionsPage.ID) then
+  if (PageID = ClientModePage.ID) or (PageID = ClientOptionsPage.ID) then
     Result := SelectedRole <> 'client';
+  if PageID = ClientPage.ID then
+    Result := (SelectedRole <> 'client') or (SelectedClientMode <> 'fixed');
+  if PageID = ClientDisklessPage.ID then
+    Result := (SelectedRole <> 'client') or (SelectedClientMode <> 'diskless');
   if PageID = CashierOptionsPage.ID then
     Result := SelectedRole <> 'cashier';
 end;
@@ -495,6 +609,28 @@ begin
       SelectedRole := 'cashier'
     else
       SelectedRole := 'client';
+  end;
+
+  if CurPageID = ClientModePage.ID then begin
+    if ClientModePage.Values[1] then
+      SelectedClientMode := 'diskless'
+    else
+      SelectedClientMode := 'fixed';
+  end;
+
+  if CurPageID = ClientDisklessPage.ID then begin
+    if Trim(ClientDisklessPage.Values[0]) = '' then begin MsgBox('Cashier server address is required.', mbError, MB_OK); Result := False; Exit; end;
+    Port := StrToIntDef(ClientDisklessPage.Values[1], 0);
+    if (Port < 1) or (Port > 65535) then begin MsgBox('Server port must be between 1 and 65535.', mbError, MB_OK); Result := False; Exit; end;
+
+    if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') and
+       (ClientDisklessPage.Values[0] = ExistingServerHost) and
+       (ClientDisklessPage.Values[1] = ExistingServerPort) then
+      ConfigModeValue := 'Preserve'
+    else if ExistingConfigStatus = 'Ok' then
+      ConfigModeValue := 'Update'
+    else
+      ConfigModeValue := 'Fresh';
   end;
 
   if CurPageID = ClientPage.ID then begin
@@ -523,6 +659,18 @@ begin
       Result := True;
       Exit;
     end;
+
+    if SelectedClientMode = 'diskless' then begin
+      Port := StrToIntDef(ClientDisklessPage.Values[1], 0);
+      if Port = 8000 then begin MsgBox('Production clients must not target development port 8000.', mbError, MB_OK); Result := False; Exit; end;
+      if ClientOptionsPage.Values[1] then begin
+        Result := MsgBox('Offline preparation skips the cashier server reachability check. The diskless image will still be assigned automatically once the gaming PCs can reach the cashier. Continue?', mbConfirmation, MB_YESNO) = IDYES;
+        Exit;
+      end;
+      Result := ValidateServerReachableAndVersioned(ClientDisklessPage.Values[0], ClientDisklessPage.Values[1]);
+      Exit;
+    end;
+
     Port := StrToIntDef(ClientPage.Values[3], 0);
     if Port = 8000 then begin MsgBox('Production clients must not target development port 8000.', mbError, MB_OK); Result := False; Exit; end;
     if ClientOptionsPage.Values[1] then begin
@@ -638,6 +786,21 @@ end;
 procedure RunClientPostInstall;
 begin
   if SelectedRole <> 'client' then Exit;
+
+  if SelectedClientMode = 'diskless' then begin
+    // This is a master image, not a live station. Auto-start is already
+    // registered by the checkbox-gated [Run] entry (so every cloned PC
+    // launches the client on boot), but the client must not run here --
+    // each clone resolves its own identity from its wired NIC MAC on first
+    // boot and is assigned from the dashboard.
+    MsgBox('Diskless image ready' + #13#10#13#10 +
+      'This computer has been configured for automatic station assignment. ' +
+      'You can now capture/clone this installation to the gaming PCs. ' +
+      'Do not assign a Station ID to this image.',
+      mbInformation, MB_OK);
+    Exit;
+  end;
+
   // Offline preparation deliberately saves config without contacting the
   // cashier -- starting the client now would immediately try to connect,
   // defeating the entire point of preparing a station offline.

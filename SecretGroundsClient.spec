@@ -11,6 +11,10 @@ hiddenimports += collect_submodules('webview')
 hiddenimports += collect_submodules('webview.platforms')
 hiddenimports += collect_submodules('pythonnet')
 hiddenimports += collect_submodules('clr_loader')
+# Screen monitoring (client/screen_capture.py) lazily imports these, and
+# mss selects its platform backend via importlib at runtime, which
+# PyInstaller's static analysis misses -- name mss.windows explicitly.
+hiddenimports += ['mss', 'mss.windows', 'PIL', 'PIL.Image', 'PIL.JpegImagePlugin']
 
 python_root = Path(sys.base_prefix)
 

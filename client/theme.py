@@ -823,6 +823,15 @@ class IconField:
     def get_value(self) -> str:
         return "" if self._showing_placeholder else self.entry.get()
 
+    def reset(self) -> None:
+        """Clear any typed value and return to the unfocused placeholder
+        state -- get_value() becomes "" and the placeholder text shows
+        unmasked, exactly as on a freshly built field."""
+        self.entry.delete(0, "end")
+        self.entry.configure(fg=TEXT_MUTED, show="")
+        self.entry.insert(0, self._placeholder)
+        self._showing_placeholder = True
+
     def set_masked(self, masked: bool) -> None:
         if not self._showing_placeholder:
             self.entry.configure(show=(self._real_show or "*") if masked else "")

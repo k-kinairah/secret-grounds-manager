@@ -10,7 +10,10 @@ param(
     [Alias("ConfigPath")]
     [string]$ClientConfigPath = "",
     [string]$ExpectedVersion = "",
-    [switch]$AllowOffline
+    [switch]$AllowOffline,
+    # Diskless / automatic master-image config: no Station ID is stored;
+    # each cloned PC resolves its own identity from its wired NIC MAC.
+    [switch]$Diskless
 )
 
 . "$PSScriptRoot\secret-grounds-common.ps1"
@@ -53,11 +56,22 @@ try {
     $StationId = $StationId.Trim()
     $DisplayName = ($DisplayName.Trim().Split([char[]]" `t`r`n", [System.StringSplitOptions]::RemoveEmptyEntries) -join " ")
 
+    if ($Diskless) {
+        # The generated config is a diskless master image: pc_name and
+        # display_name are intentionally blank so the packaged client falls
+        # into its existing automatic/MAC station-resolution flow on every
+        # cloned PC.
+        $StationId = ""
+        $DisplayName = ""
+    }
+
     Assert-ClientValue (![string]::IsNullOrWhiteSpace($ServerHost)) "Server host is required."
     Assert-ClientValue ($ServerPort -ge 1 -and $ServerPort -le 65535) "Server port must be between 1 and 65535."
-    Assert-ClientValue (![string]::IsNullOrWhiteSpace($StationId)) "Station ID is required."
-    Assert-ClientValue ($StationId -match '^[A-Za-z0-9_-]+$') "Station ID may contain only letters, numbers, dash, and underscore."
-    Assert-ClientValue (![string]::IsNullOrWhiteSpace($DisplayName)) "Display name is required."
+    if (-not $Diskless) {
+        Assert-ClientValue (![string]::IsNullOrWhiteSpace($StationId)) "Station ID is required."
+        Assert-ClientValue ($StationId -match '^[A-Za-z0-9_-]+$') "Station ID may contain only letters, numbers, dash, and underscore."
+        Assert-ClientValue (![string]::IsNullOrWhiteSpace($DisplayName)) "Display name is required."
+    }
 
     if (-not $PSBoundParameters.ContainsKey("ReconnectIntervalSeconds") -and $existingStatus.Status -eq "Ok") {
         $ReconnectIntervalSeconds = $existingStatus.Config.reconnect_interval_seconds
@@ -105,22 +119,26 @@ try {
         $expected = if ($ExpectedVersion) { $ExpectedVersion } else { Get-SgVersion }
         Assert-ClientValue ($payload.version -eq $expected) "Secret Grounds version mismatch. Server is $($payload.version); client package expects $expected."
 
-        $macAddress = ""
-        try {
-            $macAddress = (& "$Script:SecretGroundsRoot\.venv\Scripts\python.exe" -c "from client.utils import get_local_mac_address; print(get_local_mac_address() or '')").Trim()
-        } catch {}
+        if (-not $Diskless) {
+            $macAddress = ""
+            try {
+                $macAddress = (& "$Script:SecretGroundsRoot\.venv\Scripts\python.exe" -c "from client.utils import get_local_mac_address; print(get_local_mac_address() or '')").Trim()
+            } catch {}
 
-        $checkUrl = "$baseUrl/client-registration/check?pc_name=$([uri]::EscapeDataString($StationId))"
-        if ($macAddress) {
-            $checkUrl += "&mac_address=$([uri]::EscapeDataString($macAddress))"
+            $checkUrl = "$baseUrl/client-registration/check?pc_name=$([uri]::EscapeDataString($StationId))"
+            if ($macAddress) {
+                $checkUrl += "&mac_address=$([uri]::EscapeDataString($macAddress))"
+            }
+            try {
+                $availability = Invoke-WebRequest -Uri $checkUrl -UseBasicParsing -TimeoutSec $RequestTimeoutSeconds
+                $availabilityPayload = $availability.Content | ConvertFrom-Json
+                Assert-ClientValue ([bool]$availabilityPayload.available) ([string]$availabilityPayload.detail)
+            } catch {
+                throw "Station ID validation failed for '$StationId'. $($_.Exception.Message)"
+            }
         }
-        try {
-            $availability = Invoke-WebRequest -Uri $checkUrl -UseBasicParsing -TimeoutSec $RequestTimeoutSeconds
-            $availabilityPayload = $availability.Content | ConvertFrom-Json
-            Assert-ClientValue ([bool]$availabilityPayload.available) ([string]$availabilityPayload.detail)
-        } catch {
-            throw "Station ID validation failed for '$StationId'. $($_.Exception.Message)"
-        }
+    } elseif ($Diskless) {
+        Write-SgLine "Offline diskless image configuration was allowed. Cloned PCs will connect once they can reach the cashier server." "WARN" $logPath
     } else {
         Write-SgLine "Offline client configuration was allowed. This station will not connect until the cashier server is reachable." "WARN" $logPath
     }
@@ -132,7 +150,8 @@ try {
 
     Write-SgClientConfigAtomic -ConfigPath $resolvedConfigPath -Config $newConfig
 
-    Write-SgLine "Client config saved at $resolvedConfigPath for station '$StationId' ($DisplayName) targeting $baseUrl." "INFO" $logPath
+    $stationLabel = if ($Diskless) { "automatic (diskless image)" } else { "$StationId ($DisplayName)" }
+    Write-SgLine "Client config saved at $resolvedConfigPath for station '$stationLabel' targeting $baseUrl." "INFO" $logPath
     exit 0
 } catch {
     Write-SgLine "Client configuration update failed: $($_.Exception.Message)" "ERROR" $logPath

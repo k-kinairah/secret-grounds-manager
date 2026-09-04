@@ -143,6 +143,7 @@ class LockScreenController:
 
     def show_locked(self, reason: str | None = None) -> None:
         with self.state_lock:
+            previous_mode = self.state.mode
             self.state.is_locked = True
             self.state.dev_escape_active = False
             self.state.mode = "available"
@@ -159,6 +160,8 @@ class LockScreenController:
         self._notify_presentation()
 
         if self.enable_gui:
+            if previous_mode != "available":
+                self._schedule(self._reset_credential_fields)
             self._schedule(self._show_window)
 
     def show_member_locked(self, member_display_name: str) -> None:
@@ -168,6 +171,7 @@ class LockScreenController:
         difference is which content renders inside that already-locked
         window. The active session and its timer are untouched by this."""
         with self.state_lock:
+            previous_mode = self.state.mode
             self.state.is_locked = True
             self.state.dev_escape_active = False
             self.state.mode = "member_locked"
@@ -183,6 +187,8 @@ class LockScreenController:
         self._notify_presentation()
 
         if self.enable_gui:
+            if previous_mode != "member_locked":
+                self._schedule(self._reset_credential_fields)
             self._schedule(self._show_window)
 
     def show_expiration_grace(self, remaining_seconds: int, final_warning: bool = False) -> None:
@@ -1125,6 +1131,21 @@ class LockScreenController:
         self._update_login_state()
         self._notify_presentation()
 
+    def _reset_credential_fields(self) -> None:
+        """Wipe any lingering username/PIN text and turn the reveal toggle
+        back off, so returning to a locked screen never shows the previous
+        member's PIN already filled in -- masked, or in plain text if they
+        had tapped the eye. Runs only on a real transition into the
+        available / member-locked screen, never on a plain re-render, so it
+        cannot clear a PIN the customer is mid-way through typing."""
+        for field in (self._username_field, self._pin_field, self._unlock_pin_field):
+            if field is not None:
+                field.reset()
+        self.pin_visible = False
+        for toggle in (self.pin_toggle_button, self.unlock_pin_toggle_button):
+            if toggle is not None:
+                toggle.set_color(theme.TEXT_MUTED)
+
     def _toggle_pin_visibility(self) -> None:
         # Shared by the login card's PIN field and the member-locked
         # screen's unlock PIN field -- only one of the two cards is ever
@@ -1190,11 +1211,15 @@ def run_lock_screen_gui_smoke(timeout_seconds: float = 6.0) -> None:
         login_release.wait(timeout=2)
         return "That username or PIN did not match. Please try again."
 
+    def unlock_action(_pin: str) -> str:
+        return "Incorrect PIN. Please try again."
+
     controller = LockScreenController(
         "TEST-PC-01",
         enable_gui=True,
         enable_dev_escape=True,
         member_login_action=login_action,
+        session_unlock_action=unlock_action,
     )
     print(
         "WARNING: Development lock-screen escape is enabled. "
@@ -1364,6 +1389,34 @@ def run_lock_screen_gui_smoke(timeout_seconds: float = 6.0) -> None:
                         raise AssertionError(
                             f"Login message label did not render the error: got {displayed!r}."
                         )
+                # The typed username/PIN are still in the fields, and the
+                # customer has tapped the eye to reveal the PIN.
+                if controller._pin_field.get_value() != "1234":
+                    raise AssertionError("Setup for the relock check is wrong: PIN was already cleared.")
+                controller._toggle_pin_visibility()
+                if controller.pin_entry.cget("show") != "":
+                    raise AssertionError("Could not reveal the PIN for the relock check.")
+                # Transitioning back to a locked screen (member Lock PC, or
+                # idle) must wipe every credential field and turn the reveal
+                # toggle back off -- the reported bug was the previous PIN
+                # sitting there, in plain text.
+                controller.show_member_locked("Someone Else")
+                controller.root.after(250, verify_credential_reset_on_relock)
+            except Exception as error:
+                errors.append(str(error))
+                finish_smoke()
+
+        def verify_credential_reset_on_relock() -> None:
+            try:
+                if controller._unlock_pin_field.get_value() != "":
+                    raise AssertionError(
+                        "Member-locked screen showed a pre-filled PIN: "
+                        f"{controller._unlock_pin_field.get_value()!r}."
+                    )
+                if controller._pin_field.get_value() != "" or controller._username_field.get_value() != "":
+                    raise AssertionError("Login-card credentials were carried over into the relock.")
+                if controller.pin_visible is not False:
+                    raise AssertionError("Reveal toggle stayed on after returning to a locked screen.")
                 finish_smoke()
             except Exception as error:
                 errors.append(str(error))

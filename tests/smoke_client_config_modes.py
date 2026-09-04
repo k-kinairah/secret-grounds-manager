@@ -78,6 +78,67 @@ def test_fresh_config_creation(temp_directory: str) -> None:
     assert not backups_dir(config_path).exists()
 
 
+def test_diskless_config_creation_stores_no_station_id(temp_directory: str) -> None:
+    config_path = Path(temp_directory) / "config.json"
+    result = run_configure(
+        temp_directory,
+        config_path,
+        "Fresh",
+        ServerHost="192.168.1.50",
+        ServerPort="18001",
+        Diskless=True,
+        AllowOffline=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert config_path.exists()
+    saved = read_config(config_path)
+    assert saved["pc_name"] == ""
+    assert saved["display_name"] == ""
+    assert saved["server_host"] == "192.168.1.50"
+    assert saved["server_port"] == 18001
+    assert saved["auto_connect"] is True
+    assert saved["reconnect_interval_seconds"] == 5
+    assert saved["request_timeout_seconds"] == 5
+    assert not backups_dir(config_path).exists()
+
+
+def test_fixed_station_still_requires_station_id_without_diskless(temp_directory: str) -> None:
+    # The diskless relaxation must not leak into the normal Fixed Station
+    # path: a Fresh write with no Station ID still fails and writes nothing.
+    config_path = Path(temp_directory) / "config.json"
+    result = run_configure(
+        temp_directory,
+        config_path,
+        "Fresh",
+        ServerHost="192.168.1.50",
+        ServerPort="18001",
+        DisplayName="Front Row 01",
+        AllowOffline=True,
+    )
+    assert result.returncode != 0
+    assert not config_path.exists()
+
+
+def test_read_status_accepts_diskless_config_as_ok(temp_directory: str) -> None:
+    config_path = Path(temp_directory) / "config.json"
+    write_config(
+        config_path,
+        {
+            "server_host": "192.168.1.50",
+            "server_port": 18001,
+            "pc_name": "",
+            "display_name": "",
+            "auto_connect": True,
+            "reconnect_interval_seconds": 5,
+            "request_timeout_seconds": 5,
+        },
+    )
+    status = run_read_status(temp_directory, config_path)
+    fields = parse_status_lines(status.stdout)
+    assert fields.get("STATUS") == "Ok"
+    assert fields.get("PC_NAME", "") == ""
+
+
 def test_upgrade_preserves_existing_identity(temp_directory: str) -> None:
     config_path = Path(temp_directory) / "config.json"
     original = {
@@ -309,6 +370,9 @@ def test_read_status_reports_ok_notfound_invalid(temp_directory: str) -> None:
 def main() -> None:
     tests = [
         test_fresh_config_creation,
+        test_diskless_config_creation_stores_no_station_id,
+        test_fixed_station_still_requires_station_id_without_diskless,
+        test_read_status_accepts_diskless_config_as_ok,
         test_upgrade_preserves_existing_identity,
         test_unattended_preserve_needs_no_interactive_params,
         test_explicit_update_changes_requested_fields,

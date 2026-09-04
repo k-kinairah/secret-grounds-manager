@@ -284,6 +284,30 @@ def test_generic_config_with_blank_pc_name_is_accepted(temp_directory: str) -> N
     assert config.pc_name == ""
 
 
+def test_generic_config_with_blank_display_name_is_accepted(temp_directory: str) -> None:
+    # The diskless installer writes the full 7-key schema with both pc_name
+    # and display_name blank; loading must accept a present-but-empty
+    # display_name the same as an absent one (fall back to the blank pc_name).
+    config_path = Path(temp_directory) / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server_host": "192.168.0.109",
+                "server_port": 18001,
+                "pc_name": "",
+                "display_name": "",
+                "auto_connect": True,
+                "reconnect_interval_seconds": 5,
+                "request_timeout_seconds": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_client_config(config_path)
+    assert config.pc_name == ""
+    assert config.display_name == ""
+
+
 def test_explicit_pc_name_config_still_loads_and_validates_format(temp_directory: str) -> None:
     config_path = Path(temp_directory) / "config.json"
     config_path.write_text(
@@ -547,6 +571,7 @@ def main() -> None:
     temp_dir_tests = [
         test_generic_config_with_no_pc_name_key_is_accepted,
         test_generic_config_with_blank_pc_name_is_accepted,
+        test_generic_config_with_blank_display_name_is_accepted,
         test_explicit_pc_name_config_still_loads_and_validates_format,
         test_explicit_legacy_pc_name_resolution_short_circuits_without_network,
     ]

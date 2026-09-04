@@ -60,10 +60,19 @@ The task starts in the Secret Grounds folder, uses the production startup script
 
 ## Customer PC Installation
 
+The installer's **Customer Computer** role has two modes (second wizard step, "Customer Computer Setup"):
+
+- **Fixed Station** - a normal, individually installed gaming PC. The wizard asks for Station ID, display name, cashier IP, and port, validates the server (`/healthz` version + `/client-registration/check`), and writes `config.json` with that `pc_name`.
+- **Diskless / Automatic** - preparing a shared/master image. The wizard asks only for cashier IP and port, does **not** ask for a Station ID, and writes `config.json` with `"pc_name": ""`. Each PC cloned from the image resolves its own identity from its wired NIC MAC via `/stations/resolve` on first boot and is assigned from the dashboard (Setup/Layout -> Station Assignment). The installer configures client auto-start on the image but does not launch the client; capture/clone the image afterward. Offline preparation is still available when the cashier is unreachable.
+
+Neither mode requires hand-editing `config.json`.
+
+### Manual (portable folder, no installer)
+
 1. Copy the client folder and shared deployment scripts, or copy the full portable folder if that is how the shop is staged.
 2. Copy `client/config.example.json` to `client/config.json`.
 3. Set `server_host` to the cashier/server LAN IPv4 address.
-4. Set a unique `pc_name` for that PC. Do not leave every machine as `PC-01`.
+4. Set a unique `pc_name` for that PC (fixed station), or leave `pc_name` blank / omit it for a diskless master image.
 5. Set `server_port` to the configured backend port.
 6. Test in a safe single-PC setup with `SECRET_GROUNDS_TEST_MODE=true` only when needed and start with `scripts\start-client.ps1 -AllowTestMode`.
 7. For production, keep test mode off and run `scripts\start-client.ps1`.
