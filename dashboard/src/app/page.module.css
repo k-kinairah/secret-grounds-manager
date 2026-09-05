@@ -3976,6 +3976,45 @@
 
 .memberPopoutHeader .iconButton {
   margin-left: auto;
+  flex-shrink: 0;
+  height: 40px;
+  width: 40px;
+  border-radius: 999px;
+  border-color: rgb(56 232 250 / 0.42);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.18), rgb(34 211 238 / 0.04) 62%),
+    #0b1322;
+  color: #b7f2ff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    0 4px 14px rgb(34 211 238 / 0.16);
+}
+.memberPopoutHeader .iconButton:hover:not(:disabled),
+.memberPopoutHeader .iconButton:focus-visible {
+  border-color: rgb(120 240 255 / 0.9);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.34), rgb(34 211 238 / 0.1) 62%),
+    #0b1322;
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.18),
+    0 10px 26px rgb(34 211 238 / 0.4),
+    0 0 0 3px rgb(56 189 248 / 0.18);
+  transform: translateY(-1px) scale(1.06) rotate(90deg);
+}
+.memberPopoutHeader .iconButton:active:not(:disabled) {
+  transform: translateY(0) scale(0.94) rotate(90deg);
+}
+.memberPopoutHeader .iconButtonSvg {
+  transition: transform 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memberPopoutHeader .iconButton:hover:not(:disabled),
+  .memberPopoutHeader .iconButton:focus-visible,
+  .memberPopoutHeader .iconButton:active:not(:disabled) {
+    transform: none;
+  }
 }
 
 .memberDetailTabs {
@@ -4133,6 +4172,48 @@
   margin-bottom: 22px;
 }
 
+.createMemberHeader .iconButton {
+  flex-shrink: 0;
+  height: 40px;
+  width: 40px;
+  border-radius: 999px;
+  border-color: rgb(56 232 250 / 0.42);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.18), rgb(34 211 238 / 0.04) 62%),
+    #0b1322;
+  color: #b7f2ff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    0 4px 14px rgb(34 211 238 / 0.16);
+}
+.createMemberHeader .iconButton:hover:not(:disabled),
+.createMemberHeader .iconButton:focus-visible {
+  border-color: rgb(120 240 255 / 0.9);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.34), rgb(34 211 238 / 0.1) 62%),
+    #0b1322;
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.18),
+    0 10px 26px rgb(34 211 238 / 0.4),
+    0 0 0 3px rgb(56 189 248 / 0.18);
+  transform: translateY(-1px) scale(1.06) rotate(90deg);
+}
+.createMemberHeader .iconButton:active:not(:disabled) {
+  transform: translateY(0) scale(0.94) rotate(90deg);
+}
+.createMemberHeader .iconButtonSvg {
+  transition: transform 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .createMemberHeader .iconButton:hover:not(:disabled),
+  .createMemberHeader .iconButton:focus-visible,
+  .createMemberHeader .iconButton:active:not(:disabled) {
+    transform: none;
+  }
+}
+
 .createMemberIcon {
   align-items: center;
   background: linear-gradient(135deg, rgb(6 182 212 / 0.3), rgb(37 99 235 / 0.3));
@@ -4244,9 +4325,15 @@
 
 .createFeeCard {
   align-items: center;
-  background: linear-gradient(135deg, rgb(14 165 233 / 0.17), rgb(37 99 235 / 0.1));
-  border: 1px solid rgb(56 189 248 / 0.32);
+  background:
+    linear-gradient(135deg, rgb(34 211 238 / 0.2), rgb(56 189 248 / 0.06) 70%),
+    rgb(9 16 28 / 0.9);
+  border: 1px solid rgb(34 211 238 / 0.42);
   border-radius: 12px;
+  box-shadow:
+    inset 3px 0 0 #38e0f2,
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 0 24px rgb(34 211 238 / 0.14);
   display: flex;
   gap: 12px;
   justify-content: space-between;
@@ -4269,11 +4356,12 @@
 }
 
 .createFeeAmount {
-  color: #67e8f9;
+  color: #8ff3ff;
   font-size: 20px;
   font-weight: 900;
+  font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
-  text-shadow: 0 0 18px rgb(34 211 238 / 0.3);
+  text-shadow: 0 0 18px rgb(34 211 238 / 0.45);
   white-space: nowrap;
 }
 
@@ -4503,16 +4591,22 @@
 
 .memberBalancePreview {
   align-items: center;
-  background: rgba(14, 165, 233, 0.1);
-  border: 1px solid rgba(56, 189, 248, 0.22);
-  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgb(34 211 238 / 0.2), rgb(56 189 248 / 0.06) 70%),
+    rgb(9 16 28 / 0.9);
+  border: 1px solid rgb(34 211 238 / 0.42);
+  border-radius: 11px;
+  box-shadow:
+    inset 3px 0 0 #38e0f2,
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 0 24px rgb(34 211 238 / 0.14);
   display: flex;
   justify-content: space-between;
   padding: 13px 14px;
 }
 
 .memberBalancePreview span {
-  color: var(--muted);
+  color: #7dd3fc;
   font-size: 12px;
   font-weight: 900;
   letter-spacing: 0.06em;
@@ -4520,7 +4614,9 @@
 }
 
 .memberBalancePreview strong {
-  color: var(--text);
+  color: #8ff3ff;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 18px rgb(34 211 238 / 0.4);
 }
 
 .memberTabActions {
