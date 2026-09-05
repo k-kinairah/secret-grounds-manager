@@ -515,7 +515,7 @@ begin
     False,
     False
   );
-  CashierOptionsPage.Add('Start Secret Grounds automatically when this computer signs in.');
+  CashierOptionsPage.Add('Start Secret Grounds automatically when this computer starts.');
   CashierOptionsPage.Values[0] := (not ExistingCashierConfigFound) or ExistingCashierAutostartEnabled;
 
   if ExistingConfigStatus = 'Ok' then

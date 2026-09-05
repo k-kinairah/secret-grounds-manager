@@ -23,7 +23,12 @@ if (!$DisableAutostart) {
     if ($UseStartupFolderFallback) {
         & "$PSScriptRoot\install-startup-folder-shortcuts.ps1" -Role Cashier
     } else {
-        & "$PSScriptRoot\install-cashier-autostart.ps1"
+        # -AtStartup, not the script's default -AtLogOn: a cashier/server PC
+        # must start the backend the moment Windows boots, not wait for
+        # someone to physically sign in first -- a PC left on overnight or
+        # rebooted by Windows Update should already be serving customer PCs
+        # before anyone arrives to log in.
+        & "$PSScriptRoot\install-cashier-autostart.ps1" -AtStartup
     }
     Write-SgLine "Cashier/server role configured with autostart enabled. Client autostart is not installed by default." "INFO" (Get-SgEnv "SECRET_GROUNDS_SERVER_LOG" ".\logs\server.log")
 } else {

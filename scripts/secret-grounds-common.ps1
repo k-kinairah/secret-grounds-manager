@@ -411,7 +411,13 @@ function Test-SgStartedProcess {
 
     try {
         $startedAt = [datetime]$Record.StartedAt
-        if ($process.StartTime -ge $startedAt.AddSeconds(-2)) {
+        # A legitimately-tracked process's StartTime is essentially the
+        # moment it was recorded -- a tight window, not an open-ended
+        # "at or after" check. Without the upper bound, a PID recycled by
+        # Windows hours or days later for a completely unrelated process
+        # (e.g. a Windows service restarting) would falsely match and get
+        # torn down by Stop-SgStartedProcess's taskkill.
+        if ($process.StartTime -ge $startedAt.AddSeconds(-2) -and $process.StartTime -le $startedAt.AddSeconds(5)) {
             return $true
         }
     } catch {}
