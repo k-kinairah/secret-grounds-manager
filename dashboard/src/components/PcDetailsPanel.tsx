@@ -781,37 +781,61 @@ export function PcDetailsPanel({
               <section className={styles.controlSection} aria-label="VIP balance status">
                 <h3>VIP Balance Status</h3>
                 {balanceSource ? (
-                  <>
-                    <p
-                      className={
-                        balanceSource.balance_source === "standard"
-                          ? styles.vipSourceStatusStandard
-                          : styles.vipSourceStatusVip
-                      }
-                    >
-                      {balanceSource.balance_source === "standard" ? "Using Standard Time" : "Using VIP Time"}
-                    </p>
-                    {balanceSource.balance_source === "standard" ? (
-                      <p className={styles.panelText}>
-                        Standard time is being used at the VIP conversion rate.
+                  balanceSource.is_vip_station ? (
+                    <>
+                      <p
+                        className={
+                          balanceSource.balance_source === "standard"
+                            ? styles.vipSourceStatusStandard
+                            : styles.vipSourceStatusVip
+                        }
+                      >
+                        {balanceSource.balance_source === "standard" ? "Using Standard Time" : "Using VIP Time"}
                       </p>
-                    ) : null}
-                    <dl className={styles.compactDetailList}>
-                      <div className={styles.detailRow}>
-                        <span>Reserved for this session · VIP</span>
-                        <strong>{formatNaturalDuration(balanceSource.vip_reserved_seconds)}</strong>
-                      </div>
-                      {balanceSource.standard_reserved_seconds > 0 ? (
-                        <div className={styles.detailRow}>
-                          <span>Reserved for this session · Standard</span>
-                          <strong>
-                            {formatNaturalDuration(balanceSource.standard_reserved_seconds)} (
-                            {formatNaturalDuration(balanceSource.standard_reserved_vip_equivalent_seconds)} VIP play)
-                          </strong>
-                        </div>
+                      {balanceSource.balance_source === "standard" ? (
+                        <p className={styles.panelText}>
+                          Standard time is being used at the VIP conversion rate.
+                        </p>
                       ) : null}
-                    </dl>
-                  </>
+                      <dl className={styles.compactDetailList}>
+                        <div className={styles.detailRow}>
+                          <span>Reserved for this session · VIP</span>
+                          <strong>{formatNaturalDuration(balanceSource.vip_reserved_seconds)}</strong>
+                        </div>
+                        {balanceSource.standard_reserved_seconds > 0 ? (
+                          <div className={styles.detailRow}>
+                            <span>Reserved for this session · Standard</span>
+                            <strong>
+                              {formatNaturalDuration(balanceSource.standard_reserved_seconds)} (
+                              {formatNaturalDuration(balanceSource.standard_reserved_vip_equivalent_seconds)} VIP play)
+                            </strong>
+                          </div>
+                        ) : null}
+                      </dl>
+                    </>
+                  ) : (
+                    // The PC is VIP now, but this session started while it was
+                    // Standard -- its rate is locked to Standard 1:1 for its
+                    // whole life. Show that plainly, with no VIP-rate framing
+                    // and no "VIP play" equivalent (neither applies here).
+                    <>
+                      <p className={styles.vipSourceStatusStandard}>Running at Standard rate</p>
+                      <p className={styles.panelText}>
+                        This session started before this PC became VIP, so it keeps the Standard
+                        1:1 rate. VIP pricing applies to the next session started here.
+                      </p>
+                      {balanceSource.standard_reserved_seconds > 0 ? (
+                        <dl className={styles.compactDetailList}>
+                          <div className={styles.detailRow}>
+                            <span>Reserved for this session · Standard</span>
+                            <strong>
+                              {formatNaturalDuration(balanceSource.standard_reserved_seconds)}
+                            </strong>
+                          </div>
+                        </dl>
+                      ) : null}
+                    </>
+                  )
                 ) : (
                   <p className={styles.panelText}>Loading balance status...</p>
                 )}
