@@ -174,15 +174,14 @@ begin
   if IsDisklessClient then
     Result := ClientDisklessPage.Values[0]
   else
-    Result := ClientPage.Values[2];
+    Result := ClientPage.Values[1];
 end;
 
 function GetClientServerPort(Value: String): String;
 begin
-  if IsDisklessClient then
-    Result := ClientDisklessPage.Values[1]
-  else
-    Result := ClientPage.Values[3];
+  // The cashier backend always listens on 18001 -- the installer no
+  // longer asks for it.
+  Result := '18001';
 end;
 
 function GetClientStationId(Value: String): String;
@@ -198,10 +197,12 @@ end;
 
 function GetClientDisplayName(Value: String): String;
 begin
+  // No separate display-name field anymore -- the Station ID is the
+  // display name.
   if IsDisklessClient then
     Result := ''
   else
-    Result := ClientPage.Values[1];
+    Result := ClientPage.Values[0];
 end;
 
 function GetDisklessSwitchArg(Value: String): String;
@@ -533,19 +534,13 @@ begin
       'Validation runs before installation unless offline preparation is selected.'
     );
   ClientPage.Add('Station ID:', False);
-  ClientPage.Add('Display name:', False);
   ClientPage.Add('Cashier server IP or hostname:', False);
-  ClientPage.Add('Server port:', False);
   if ExistingConfigStatus = 'Ok' then begin
     ClientPage.Values[0] := ExistingStationId;
-    ClientPage.Values[1] := ExistingDisplayName;
-    ClientPage.Values[2] := ExistingServerHost;
-    ClientPage.Values[3] := ExistingServerPort;
+    ClientPage.Values[1] := ExistingServerHost;
   end else begin
     ClientPage.Values[0] := 'PC-01';
-    ClientPage.Values[1] := 'Front Row 01';
-    ClientPage.Values[2] := 'cashier-server';
-    ClientPage.Values[3] := '18001';
+    ClientPage.Values[1] := 'cashier-server';
   end;
 
   if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') then
@@ -563,14 +558,10 @@ begin
       'No Station ID is stored. Every gaming PC cloned from this image is assigned automatically from the dashboard on first boot.'
     );
   ClientDisklessPage.Add('Cashier server IP or hostname:', False);
-  ClientDisklessPage.Add('Server port:', False);
-  if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') then begin
-    ClientDisklessPage.Values[0] := ExistingServerHost;
-    ClientDisklessPage.Values[1] := ExistingServerPort;
-  end else begin
+  if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') then
+    ClientDisklessPage.Values[0] := ExistingServerHost
+  else
     ClientDisklessPage.Values[0] := 'cashier-server';
-    ClientDisklessPage.Values[1] := '18001';
-  end;
 
   ClientOptionsPage := CreateInputOptionPage(
     ClientDisklessPage.ID,
@@ -600,8 +591,6 @@ begin
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
-var
-  Port: Integer;
 begin
   Result := True;
   if CurPageID = RolePage.ID then begin
@@ -620,12 +609,9 @@ begin
 
   if CurPageID = ClientDisklessPage.ID then begin
     if Trim(ClientDisklessPage.Values[0]) = '' then begin MsgBox('Cashier server address is required.', mbError, MB_OK); Result := False; Exit; end;
-    Port := StrToIntDef(ClientDisklessPage.Values[1], 0);
-    if (Port < 1) or (Port > 65535) then begin MsgBox('Server port must be between 1 and 65535.', mbError, MB_OK); Result := False; Exit; end;
 
     if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') and
-       (ClientDisklessPage.Values[0] = ExistingServerHost) and
-       (ClientDisklessPage.Values[1] = ExistingServerPort) then
+       (ClientDisklessPage.Values[0] = ExistingServerHost) then
       ConfigModeValue := 'Preserve'
     else if ExistingConfigStatus = 'Ok' then
       ConfigModeValue := 'Update'
@@ -637,16 +623,11 @@ begin
     if Trim(ClientPage.Values[0]) = '' then begin MsgBox('Station ID is required.', mbError, MB_OK); Result := False; Exit; end;
     if Pos(' ', ClientPage.Values[0]) > 0 then begin MsgBox('Station ID may not contain spaces.', mbError, MB_OK); Result := False; Exit; end;
     if CompareText(ClientPage.Values[0], 'CHANGE-ME') = 0 then begin MsgBox('Station ID must be unique for this PC.', mbError, MB_OK); Result := False; Exit; end;
-    if Trim(ClientPage.Values[1]) = '' then begin MsgBox('Display name is required.', mbError, MB_OK); Result := False; Exit; end;
-    if Trim(ClientPage.Values[2]) = '' then begin MsgBox('Cashier server address is required.', mbError, MB_OK); Result := False; Exit; end;
-    Port := StrToIntDef(ClientPage.Values[3], 0);
-    if (Port < 1) or (Port > 65535) then begin MsgBox('Server port must be between 1 and 65535.', mbError, MB_OK); Result := False; Exit; end;
+    if Trim(ClientPage.Values[1]) = '' then begin MsgBox('Cashier server address is required.', mbError, MB_OK); Result := False; Exit; end;
 
     if ExistingConfigStatus = 'Ok' then begin
       if (ClientPage.Values[0] = ExistingStationId) and
-         (ClientPage.Values[1] = ExistingDisplayName) and
-         (ClientPage.Values[2] = ExistingServerHost) and
-         (ClientPage.Values[3] = ExistingServerPort) then
+         (ClientPage.Values[1] = ExistingServerHost) then
         ConfigModeValue := 'Preserve'
       else
         ConfigModeValue := 'Update';
@@ -661,23 +642,19 @@ begin
     end;
 
     if SelectedClientMode = 'diskless' then begin
-      Port := StrToIntDef(ClientDisklessPage.Values[1], 0);
-      if Port = 8000 then begin MsgBox('Production clients must not target development port 8000.', mbError, MB_OK); Result := False; Exit; end;
       if ClientOptionsPage.Values[1] then begin
         Result := MsgBox('Offline preparation skips the cashier server reachability check. The diskless image will still be assigned automatically once the gaming PCs can reach the cashier. Continue?', mbConfirmation, MB_YESNO) = IDYES;
         Exit;
       end;
-      Result := ValidateServerReachableAndVersioned(ClientDisklessPage.Values[0], ClientDisklessPage.Values[1]);
+      Result := ValidateServerReachableAndVersioned(ClientDisklessPage.Values[0], '18001');
       Exit;
     end;
 
-    Port := StrToIntDef(ClientPage.Values[3], 0);
-    if Port = 8000 then begin MsgBox('Production clients must not target development port 8000.', mbError, MB_OK); Result := False; Exit; end;
     if ClientOptionsPage.Values[1] then begin
       Result := MsgBox('Offline preparation skips server reachability and station availability checks. The client will not connect until configured correctly. Continue?', mbConfirmation, MB_YESNO) = IDYES;
       Exit;
     end;
-    Result := ValidateClientOnline(ClientPage.Values[2], ClientPage.Values[3], ClientPage.Values[0]);
+    Result := ValidateClientOnline(ClientPage.Values[1], '18001', ClientPage.Values[0]);
   end;
 end;
 
