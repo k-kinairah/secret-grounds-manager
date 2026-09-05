@@ -308,6 +308,17 @@ AUTOMATIC_SHUTDOWN_ON_EXPIRATION = read_bool_config(
     "SECRET_GROUNDS_AUTOMATIC_SHUTDOWN_ON_EXPIRATION",
     not TEST_MODE,
 )
+# When a member taps "Log Out", the PC counts down this many seconds on a
+# shutdown-grace screen, then powers off automatically (gated by
+# AUTOMATIC_SHUTDOWN_ON_LOGOUT). Set the seconds to 0 to skip the grace and
+# just lock, as before.
+LOGOUT_SHUTDOWN_GRACE_SECONDS = int(
+    os.getenv("SECRET_GROUNDS_LOGOUT_SHUTDOWN_GRACE_SECONDS", "60")
+)
+AUTOMATIC_SHUTDOWN_ON_LOGOUT = read_bool_config(
+    "SECRET_GROUNDS_AUTOMATIC_SHUTDOWN_ON_LOGOUT",
+    not TEST_MODE,
+)
 EXPIRATION_SOUND_ENABLED = read_bool_config("SECRET_GROUNDS_EXPIRATION_SOUND_ENABLED", True)
 
 # PC screen monitoring (client/screen_capture.py). On by default to match

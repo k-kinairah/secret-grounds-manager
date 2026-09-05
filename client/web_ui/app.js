@@ -56,11 +56,19 @@ function emitAction(action, payload = {}) {
 
 window.SecretGroundsUI = {
   setState(nextState) {
-    // Reset the unlock PIN draft only on a genuine transition into the
-    // member-locked screen (e.g. a fresh lock, or reconnect restoring it) --
-    // not on every incidental push while already showing it (a WebSocket
-    // reconnect blip mid-typing must not wipe what the member just typed).
-    if (nextState.mode === "member_locked" && currentState.mode !== "member_locked") {
+    // Wipe both credential drafts on a genuine transition INTO any lock
+    // screen (fresh lock, expiration/logout grace, shutdown, member Lock
+    // PC) -- a new person sitting down, or the same one after a logout,
+    // must never see the previous occupant's typed username/PIN. Gated on
+    // an actual mode change so a WebSocket reconnect blip mid-typing while
+    // already on the same screen can't clobber what was just typed.
+    const LOCK_RESET_MODES = new Set([
+      "available", "member_locked", "grace", "shutting_down", "shutdown_failed"
+    ]);
+    if (LOCK_RESET_MODES.has(nextState.mode) && nextState.mode !== currentState.mode) {
+      lockDraft.username = "";
+      lockDraft.pin = "";
+      lockDraft.pinVisible = false;
       unlockDraft.pin = "";
       unlockDraft.pinVisible = false;
     }
@@ -235,36 +243,42 @@ function lockVolumetricRays() {
     </svg>`;
 }
 
-function lockFlowStreaks() {
-  const pathA = "M -190,120 C 120,145 205,420 430,555 C 650,685 850,610 1045,500 C 1240,390 1400,475 1535,645 C 1690,840 1880,870 2110,875";
-  const pathB = "M 1390,175 C 1510,300 1475,430 1360,520";
+function lockAuroraRibbon() {
+  // One low, gentle wave well below the logo/card, plus a fainter wisp up
+  // and to the right for balance. Pure layered blur -- no crisp core
+  // stroke, so it reads as a glow, not a line.
+  // A single travelling filament with a real crest -- no long flat run
+  // (that read as a slab). Thin strokes + tight halo so it glows like a
+  // light ribbon rather than a band.
+  const ribbon = "M -180,736 C 300,810 520,530 940,582 C 1320,630 1560,830 2100,676";
+  const wisp = "M 1240,330 C 1470,386 1560,500 1470,618";
   return `
-    <svg class="lock-flow" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+    <svg class="lock-aurora" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
       <defs>
-        <linearGradient id="streakA" x1="-220" y1="150" x2="980" y2="500" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stop-color="#22D3EE" stop-opacity="0.78"/>
-          <stop offset="18%" stop-color="#1AC9FF" stop-opacity="0.98"/>
-          <stop offset="48%" stop-color="#168BFF" stop-opacity="0.55"/>
-          <stop offset="100%" stop-color="#0A55CE" stop-opacity="0.12"/>
-        </linearGradient>
-        <linearGradient id="streakB" x1="2140" y1="940" x2="1000" y2="370" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stop-color="#168BFF" stop-opacity="0.15"/>
-          <stop offset="45%" stop-color="#22D3EE" stop-opacity="0.5"/>
+        <linearGradient id="auroraFade" x1="0" y1="0" x2="1920" y2="0" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#22D3EE" stop-opacity="0"/>
+          <stop offset="24%" stop-color="#2EDBF5" stop-opacity="0.9"/>
+          <stop offset="44%" stop-color="#8FF1FF" stop-opacity="1"/>
+          <stop offset="52%" stop-color="#DFFCFF" stop-opacity="1"/>
+          <stop offset="60%" stop-color="#8FF1FF" stop-opacity="1"/>
+          <stop offset="78%" stop-color="#22D3EE" stop-opacity="0.7"/>
           <stop offset="100%" stop-color="#1266D8" stop-opacity="0"/>
         </linearGradient>
-        <filter id="streakGlow" x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation="18"/>
-        </filter>
-        <filter id="streakCore" x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation="2.2"/>
-        </filter>
+        <linearGradient id="auroraWisp" x1="1210" y1="330" x2="1500" y2="630" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#7DECFF" stop-opacity="0"/>
+          <stop offset="50%" stop-color="#22D3EE" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="#1266D8" stop-opacity="0"/>
+        </linearGradient>
+        <filter id="auroraHalo" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="26"/></filter>
+        <filter id="auroraMid" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="12"/></filter>
+        <filter id="auroraInner" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4"/></filter>
       </defs>
-      <path d="${pathA}" transform="translate(0,-24)" fill="none" stroke="url(#streakA)" stroke-width="82" stroke-opacity="0.32" stroke-linecap="round" filter="url(#streakGlow)"/>
-      <path d="${pathA}" fill="none" stroke="url(#streakA)" stroke-width="42" stroke-opacity="0.55" stroke-linecap="round" filter="url(#streakGlow)"/>
-      <path d="${pathA}" transform="translate(0,34)" fill="none" stroke="url(#streakA)" stroke-width="16" stroke-opacity="0.35" stroke-linecap="round" filter="url(#streakGlow)"/>
-      <path d="${pathA}" fill="none" stroke="url(#streakA)" stroke-width="3.5" stroke-linecap="round" filter="url(#streakCore)"/>
-      <path d="${pathB}" fill="none" stroke="url(#streakB)" stroke-width="34" stroke-linecap="round" filter="url(#streakGlow)"/>
-      <path d="${pathB}" fill="none" stroke="url(#streakB)" stroke-width="2" stroke-linecap="round" filter="url(#streakCore)"/>
+      <path d="${ribbon}" fill="none" stroke="url(#auroraFade)" stroke-width="96" stroke-opacity="0.3" stroke-linecap="round" filter="url(#auroraHalo)"/>
+      <path d="${ribbon}" fill="none" stroke="url(#auroraFade)" stroke-width="36" stroke-opacity="0.55" stroke-linecap="round" filter="url(#auroraMid)"/>
+      <path d="${ribbon}" fill="none" stroke="url(#auroraFade)" stroke-width="13" stroke-opacity="0.85" stroke-linecap="round" filter="url(#auroraInner)"/>
+      <path d="${ribbon}" fill="none" stroke="url(#auroraFade)" stroke-width="3.5" stroke-opacity="1" stroke-linecap="round" filter="url(#auroraInner)"/>
+      <path d="${wisp}" fill="none" stroke="url(#auroraWisp)" stroke-width="34" stroke-opacity="0.68" stroke-linecap="round" filter="url(#auroraMid)"/>
+      <path d="${wisp}" fill="none" stroke="url(#auroraWisp)" stroke-width="8" stroke-opacity="0.7" stroke-linecap="round" filter="url(#auroraInner)"/>
     </svg>`;
 }
 
@@ -307,7 +321,7 @@ function renderLock() {
     <section class="lock-screen ${offline ? "is-offline" : ""}">
       <div class="lock-fog"></div>
       ${lockVolumetricRays()}
-      ${lockFlowStreaks()}
+      ${lockAuroraRibbon()}
       <div class="lock-branding-bloom"></div>
       <div class="lock-watermark">${logoImage()}</div>
       <div class="lock-particles">${particleDots(72)}</div>
@@ -385,7 +399,7 @@ function renderMemberLocked() {
     <section class="lock-screen lock-screen-member-locked ${offline ? "is-offline" : ""}">
       <div class="lock-fog"></div>
       ${lockVolumetricRays()}
-      ${lockFlowStreaks()}
+      ${lockAuroraRibbon()}
       <div class="lock-branding-bloom"></div>
       <div class="lock-watermark">${logoImage()}</div>
       <div class="lock-particles">${particleDots(72)}</div>

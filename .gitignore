@@ -26,3 +26,6 @@ build/
 *.sqlite3
 client_session_recovery.json
 client_session_recovery.json.tmp
+
+# Runtime-generated overlay HTML with cache-bust tokens (client/webview_ui.py)
+client/web_ui/index.generated.html

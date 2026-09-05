@@ -220,6 +220,35 @@ class LockScreenController:
         if self.enable_gui:
             self._schedule(self._show_window)
 
+    def show_logout_grace(self, remaining_seconds: int, final_warning: bool = False) -> None:
+        """Same 'grace' countdown screen as show_expiration_grace, but for a
+        member who tapped Log Out -- wording says they logged out rather
+        than that time ran out."""
+        minutes = max(0, remaining_seconds) // 60
+        seconds = max(0, remaining_seconds) % 60
+        with self.state_lock:
+            self.state.is_locked = True
+            self.state.dev_escape_active = False
+            self.state.mode = "grace"
+            self.state.headline = (
+                f"PC shutting down in {max(0, remaining_seconds)} seconds."
+                if final_warning
+                else "Logged out."
+            )
+            self.state.instruction = (
+                "This PC will shut down shortly.\n"
+                f"{self.state.customer_branding_text}\n"
+                "The cashier will start the next session."
+            )
+            self.state.countdown = f"{minutes:02d}:{seconds:02d}"
+            self.state.is_final_warning = final_warning
+
+        print(f"Logout grace screen shown: shutdown in {minutes}:{seconds:02d}.")
+        self._notify_presentation()
+
+        if self.enable_gui:
+            self._schedule(self._show_window)
+
     def show_shutdown_transition(self) -> None:
         with self.state_lock:
             self.state.is_locked = True

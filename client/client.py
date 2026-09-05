@@ -16,9 +16,11 @@ from client.config import (
     ENABLE_LOCK_SCREEN,
     ENABLE_SCREEN_MONITORING,
     AUTOMATIC_SHUTDOWN_ON_EXPIRATION,
+    AUTOMATIC_SHUTDOWN_ON_LOGOUT,
     APP_VERSION,
     CUSTOMER_OVERLAY_POSITION,
     EXPIRATION_GRACE_SECONDS,
+    LOGOUT_SHUTDOWN_GRACE_SECONDS,
     EXPIRATION_SOUND_ENABLED,
     HEARTBEAT_INTERVAL_SECONDS,
     REQUEST_TIMEOUT_SECONDS,
@@ -82,6 +84,7 @@ class SecretGroundsClient:
         self.stop_event = Event()
         self.active_session: LocalSession | None = None
         self.active_session_lock = Lock()
+        self._logout_grace_active = False
         self.last_session_init_failure_reason: str | None = None
         self.processed_command_ids: set[str] = set()
         self.remote_controls = RemoteControlHandler(pc_name)
@@ -1119,10 +1122,56 @@ class SecretGroundsClient:
             }
         )
         self.customer_overlay.hide()
-        self.lock_screen.show_locked("Session locked after customer logout.")
+
+        if AUTOMATIC_SHUTDOWN_ON_LOGOUT and LOGOUT_SHUTDOWN_GRACE_SECONDS > 0:
+            self._start_logout_shutdown_grace(session_id, LOGOUT_SHUTDOWN_GRACE_SECONDS)
+        else:
+            self.lock_screen.show_locked("Session locked after customer logout.")
+
         if sent:
             return None
         return "Logout saved. Reconnecting to finish with the server."
+
+    def _start_logout_shutdown_grace(self, session_id: str, grace_seconds: int) -> None:
+        """After a member logs out, count down on the shutdown-grace screen
+        then power the PC off -- unless the cashier starts a new session
+        first, which cancels it."""
+        self._logout_grace_active = True
+        self.lock_screen.show_logout_grace(grace_seconds)
+        Thread(
+            target=self._run_logout_shutdown_grace,
+            args=(session_id, grace_seconds),
+            name="secret-grounds-logout-grace",
+            daemon=True,
+        ).start()
+
+    def _run_logout_shutdown_grace(self, session_id: str, grace_seconds: int) -> None:
+        deadline = time.monotonic() + grace_seconds
+        while True:
+            with self.active_session_lock:
+                if self.active_session is not None:
+                    self._logout_grace_active = False
+                    print("Logout shutdown grace cancelled -- a new session started.")
+                    return
+            if not self._logout_grace_active:
+                return
+            remaining = max(0, int(deadline - time.monotonic()))
+            self.lock_screen.show_logout_grace(remaining, final_warning=remaining <= 30)
+            if remaining <= 0:
+                break
+            time.sleep(min(1, remaining))
+
+        self._logout_grace_active = False
+        self.lock_screen.show_shutdown_transition()
+        # The session was already finalized server-side by the
+        # "customer_logout" event sent above; this shutdown is a local
+        # action, same as the expiration path, so no server round-trip.
+        try:
+            message = self.remote_controls.handle_power_command("shutdown", {})
+            print(f"Automatic shutdown after logout initiated for {session_id}: {message}")
+        except Exception as error:
+            print(f"Automatic shutdown after logout failed for {session_id}: {error}")
+            self.lock_screen.show_shutdown_failure()
 
     def maybe_send_final_warning(self, session_id: str, remaining_seconds: int) -> None:
         if remaining_seconds > 30:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import sys
 from dataclasses import dataclass
@@ -133,6 +134,39 @@ def _handle_value(handle: Any) -> int:
 
 def web_ui_index_path() -> Path:
     return Path(__file__).resolve().parent / "web_ui" / "index.html"
+
+
+def web_ui_index_uri() -> str:
+    """URI for the overlay/lock HTML, with a content-hash cache-buster
+    appended to the stylesheet/script links.
+
+    Every overlay window is a separate WebView2 instance sharing one
+    persistent WebView2 disk cache. After a client update replaces
+    styles.css / app.js at the same file:// path, WebView2 can keep
+    serving a stale (sometimes partially-cached, hence unstyled) copy to
+    one or more of those windows -- observed as the collapsed pill
+    rendering as a blank white box after a reinstall. Rewriting the asset
+    URLs with a hash of their current bytes gives each build a distinct
+    cache key, so a stale entry can never be reused.
+    """
+    source = web_ui_index_path()
+    try:
+        html = source.read_text(encoding="utf-8")
+        digest = hashlib.sha1()
+        for name in ("styles.css", "app.js"):
+            try:
+                digest.update((source.parent / name).read_bytes())
+            except OSError:
+                pass
+        token = digest.hexdigest()[:12]
+        html = html.replace('href="./styles.css"', f'href="./styles.css?v={token}"')
+        html = html.replace('src="./app.js"', f'src="./app.js?v={token}"')
+        generated = source.parent / "index.generated.html"
+        generated.write_text(html, encoding="utf-8")
+        return generated.as_uri()
+    except OSError:
+        # Read-only install dir or similar -- fall back to the plain file.
+        return source.as_uri()
 
 
 def bundled_root_path() -> Path:
@@ -751,7 +785,7 @@ class SecretGroundsWebViewHost:
         }
 
     def create_windows(self, lock_only: bool = False) -> None:
-        url = web_ui_index_path().as_uri()
+        url = web_ui_index_uri()
         # The lock window is fullscreen and can't use the overlay/pill
         # off-screen trick, so it must actually start hidden until the
         # initial-reconciliation gate is satisfied -- otherwise it appears
@@ -1481,7 +1515,7 @@ def run_webview_customer_overlay_preview(view: str, right_offset: int = 16) -> N
     _diagnostic(f"before create_window overlay-preview view={view}")
     window = webview.create_window(
         f"Secret Grounds {view.title()} Preview",
-        url=web_ui_index_path().as_uri(),
+        url=web_ui_index_uri(),
         width=initial_width,
         height=initial_height,
         x=right - initial_width - right_offset,
