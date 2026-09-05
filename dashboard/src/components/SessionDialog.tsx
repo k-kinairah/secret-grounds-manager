@@ -255,8 +255,8 @@ export function SessionDialog({
     return {
       payment_method: paymentMethod,
       amount: paymentAmount,
-      cash_received: paymentMethod === "cash" ? cashReceived : undefined,
-      reference_number: paymentMethod !== "cash" ? referenceNumber : undefined,
+      cash_received: paymentMethod === "cash" && cashReceived.trim() ? cashReceived : undefined,
+      reference_number: paymentMethod !== "cash" && referenceNumber.trim() ? referenceNumber : undefined,
       idempotency_key: idempotencyKeyRef.current
     };
   }
@@ -271,12 +271,7 @@ export function SessionDialog({
       setValidationError("");
       return true;
     }
-    if (paymentMethod === "cash") {
-      if (!cashReceived.trim()) {
-        setValidationError("Enter the cash received.");
-        cashRef.current?.focus();
-        return false;
-      }
+    if (paymentMethod === "cash" && cashReceived.trim()) {
       const cashValue = Number(cashReceived);
       if (!Number.isFinite(cashValue) || cashValue <= 0) {
         setValidationError("Enter a valid cash amount.");
@@ -288,10 +283,6 @@ export function SessionDialog({
         cashRef.current?.focus();
         return false;
       }
-    } else if (!referenceNumber.trim()) {
-      setValidationError("Enter the payment reference.");
-      referenceRef.current?.focus();
-      return false;
     }
     setValidationError("");
     return true;
@@ -386,26 +377,44 @@ export function SessionDialog({
             </strong>
           </div>
         ) : null}
-        <div className={styles.tabList} role="tablist" aria-label="Session selection method">
-          <button
-            aria-selected={activeTab === "standard"}
-            className={`${styles.tabButton} ${activeTab === "standard" ? styles.tabActive : ""}`}
-            onClick={() => setActiveTab("standard")}
-            role="tab"
-            type="button"
-          >
-            {pc.is_vip ? "VIP" : "Standard"}
-          </button>
-          <button
-            aria-selected={activeTab === "member"}
-            className={`${styles.tabButton} ${activeTab === "member" ? styles.tabActive : ""}`}
-            onClick={() => setActiveTab("member")}
-            role="tab"
-            type="button"
-          >
-            Member
-          </button>
-        </div>
+        {mode === "start" ? (
+          // Starting a brand-new session always draws from the PC's own
+          // Standard/VIP pricing -- a member's existing balance is meant to
+          // be spent through their own kiosk login, not a cashier-assisted
+          // Start here, so there is nothing to toggle to. The pill stays
+          // (just non-interactive) so this still reads as "Standard" the
+          // same way the add-time dialogs do.
+          <div className={styles.tabList} role="tablist" aria-label="Session type">
+            <div
+              aria-selected="true"
+              className={`${styles.tabButton} ${styles.tabActive} ${styles.tabButtonStatic}`}
+              role="tab"
+            >
+              {pc.is_vip ? "VIP" : "Standard"}
+            </div>
+          </div>
+        ) : (
+          <div className={styles.tabList} role="tablist" aria-label="Session selection method">
+            <button
+              aria-selected={activeTab === "standard"}
+              className={`${styles.tabButton} ${activeTab === "standard" ? styles.tabActive : ""}`}
+              onClick={() => setActiveTab("standard")}
+              role="tab"
+              type="button"
+            >
+              {pc.is_vip ? "VIP" : "Standard"}
+            </button>
+            <button
+              aria-selected={activeTab === "member"}
+              className={`${styles.tabButton} ${activeTab === "member" ? styles.tabActive : ""}`}
+              onClick={() => setActiveTab("member")}
+              role="tab"
+              type="button"
+            >
+              Member
+            </button>
+          </div>
+        )}
 
         {activeTab === "member" ? (
           <div className={styles.amountPanel} role="tabpanel">
@@ -615,7 +624,7 @@ export function SessionDialog({
                   <input
                     ref={referenceRef}
                     onChange={(event) => setReferenceNumber(event.target.value)}
-                    placeholder="Required"
+                    placeholder="e.g. GC-102938"
                     value={referenceNumber}
                   />
                 </label>

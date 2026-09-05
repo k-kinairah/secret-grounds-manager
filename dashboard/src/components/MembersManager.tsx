@@ -576,9 +576,9 @@ export function MembersManager() {
       return;
     }
     const paymentValue = createPaymentValue.trim();
-    if (createPaymentMethod === "cash") {
+    if (createPaymentMethod === "cash" && paymentValue) {
       const cashReceived = Number(paymentValue);
-      if (!paymentValue || !Number.isFinite(cashReceived) || cashReceived <= 0) {
+      if (!Number.isFinite(cashReceived) || cashReceived <= 0) {
         setCreateError("Enter a valid cash amount.");
         return;
       }
@@ -586,9 +586,6 @@ export function MembersManager() {
         setCreateError(`Cash received must be at least ${formatMoney(membershipFee.price)}.`);
         return;
       }
-    } else if (!paymentValue) {
-      setCreateError("Enter the payment reference.");
-      return;
     }
 
     setIsSaving(true);
@@ -599,8 +596,8 @@ export function MembersManager() {
         pin: String(formData.get("memberPin") ?? ""),
         confirm_pin: String(formData.get("confirmMemberPin") ?? ""),
         payment_method: createPaymentMethod,
-        cash_received: createPaymentMethod === "cash" ? paymentValue : undefined,
-        reference_number: createPaymentMethod !== "cash" ? paymentValue : undefined,
+        cash_received: createPaymentMethod === "cash" && paymentValue ? paymentValue : undefined,
+        reference_number: createPaymentMethod !== "cash" && paymentValue ? paymentValue : undefined,
         idempotency_key: createMemberKeyRef.current
       });
       const payment = response.creation_payment;
@@ -666,12 +663,7 @@ export function MembersManager() {
       return;
     }
     const paymentValue = String(formData.get("paymentValue") ?? "").trim();
-    if (memberPaymentMethod === "cash") {
-      if (!paymentValue) {
-        setMemberPaymentError("Enter the cash received.");
-        memberPaymentInputRef.current?.focus();
-        return;
-      }
+    if (memberPaymentMethod === "cash" && paymentValue) {
       const cashReceived = Number(paymentValue);
       if (!Number.isFinite(cashReceived) || cashReceived <= 0) {
         setMemberPaymentError("Enter a valid cash amount.");
@@ -683,10 +675,6 @@ export function MembersManager() {
         memberPaymentInputRef.current?.focus();
         return;
       }
-    } else if (!paymentValue) {
-      setMemberPaymentError("Enter the payment reference.");
-      memberPaymentInputRef.current?.focus();
-      return;
     }
     setMemberPaymentError("");
     setIsSaving(true);
@@ -695,9 +683,9 @@ export function MembersManager() {
         product_id: selectedProduct.product_id,
         payment_method: memberPaymentMethod,
         cash_received:
-          memberPaymentMethod === "cash" ? paymentValue : undefined,
+          memberPaymentMethod === "cash" && paymentValue ? paymentValue : undefined,
         reference_number:
-          memberPaymentMethod !== "cash" ? paymentValue : undefined,
+          memberPaymentMethod !== "cash" && paymentValue ? paymentValue : undefined,
         idempotency_key: memberPurchaseKeyRef.current
       });
       setSelectedMember(response.member);
@@ -1144,7 +1132,7 @@ export function MembersManager() {
                         {createPaymentMethod === "cash" ? "Cash received" : "Reference number"}
                         <input
                           inputMode={createPaymentMethod === "cash" ? "decimal" : undefined}
-                          placeholder={createPaymentMethod === "cash" ? String(membershipFee.price) : "Required"}
+                          placeholder={createPaymentMethod === "cash" ? String(membershipFee.price) : "e.g. GC-102938"}
                           value={createPaymentValue}
                           onChange={(event) => {
                             setCreatePaymentValue(event.target.value);
@@ -1516,7 +1504,7 @@ export function MembersManager() {
                       ref={memberPaymentInputRef}
                       inputMode={memberPaymentMethod === "cash" ? "decimal" : undefined}
                       name="paymentValue"
-                      placeholder={memberPaymentMethod === "cash" ? String(selectedProduct.price) : "Required"}
+                      placeholder={memberPaymentMethod === "cash" ? String(selectedProduct.price) : "e.g. GC-102938"}
                       onChange={(event) => {
                         setMemberPaymentValue(event.target.value);
                         setMemberPaymentError("");

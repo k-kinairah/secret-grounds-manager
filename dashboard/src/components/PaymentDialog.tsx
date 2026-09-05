@@ -52,12 +52,7 @@ export function PaymentDialog({ pc, isLoading, onCancel, onConfirm }: PaymentDia
       amountRef.current?.focus();
       return;
     }
-    if (paymentMethod === "cash") {
-      if (!cashReceived.trim()) {
-        setValidationError("Enter the cash received.");
-        cashRef.current?.focus();
-        return;
-      }
+    if (paymentMethod === "cash" && cashReceived.trim()) {
       const cashValue = Number(cashReceived);
       if (!Number.isFinite(cashValue) || cashValue <= 0) {
         setValidationError("Enter a valid cash amount.");
@@ -69,17 +64,13 @@ export function PaymentDialog({ pc, isLoading, onCancel, onConfirm }: PaymentDia
         cashRef.current?.focus();
         return;
       }
-    } else if (!referenceNumber.trim()) {
-      setValidationError("Enter the payment reference.");
-      referenceRef.current?.focus();
-      return;
     }
     setValidationError("");
     onConfirm({
       payment_method: paymentMethod,
       amount,
-      cash_received: paymentMethod === "cash" ? cashReceived : undefined,
-      reference_number: paymentMethod !== "cash" ? referenceNumber : undefined,
+      cash_received: paymentMethod === "cash" && cashReceived.trim() ? cashReceived : undefined,
+      reference_number: paymentMethod !== "cash" && referenceNumber.trim() ? referenceNumber : undefined,
       notes: notes || undefined,
       idempotency_key: idempotencyKeyRef.current
     });
@@ -146,7 +137,7 @@ export function PaymentDialog({ pc, isLoading, onCancel, onConfirm }: PaymentDia
             <input
               ref={referenceRef}
               onChange={(event) => setReferenceNumber(event.target.value)}
-              placeholder="Required"
+              placeholder="e.g. GC-102938"
               value={referenceNumber}
             />
             {validationError ? <p className={styles.fieldError}>{validationError}</p> : null}

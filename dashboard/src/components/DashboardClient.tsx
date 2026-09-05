@@ -23,7 +23,9 @@ import {
   startMemberSession,
   startPrepaidSession,
   addMemberTime,
-  addPrepaidTime
+  addPrepaidTime,
+  purchaseMemberCustomAmount,
+  purchaseMemberTime
 } from "@/lib/api";
 import { useMonitorFrames } from "@/hooks/useMonitorFrames";
 import { getPackageRatesForPc } from "@/lib/packageEligibility";
@@ -38,6 +40,7 @@ import { PcMonitorTile } from "./PcMonitorTile";
 import { PaymentDialog } from "./PaymentDialog";
 import { SecretSelect, type SecretSelectOption } from "./SecretSelect";
 import { SessionDialog } from "./SessionDialog";
+import { MemberTopUpDialog } from "./MemberTopUpDialog";
 import { StationAssignmentManager } from "./StationAssignmentManager";
 import { ActivityDrawerTrigger } from "./ActivityFeed";
 import { ConfirmActionDialog } from "./ConfirmActionDialog";
@@ -376,7 +379,8 @@ export function DashboardClient() {
       });
       const slots = await fetchPcLayouts(true);
       setLayoutSlots(slots);
-      const groupName = incomeGroups.find((group) => group.income_group_id === incomeGroupId)?.name ?? "no group";
+      const rawGroupName = incomeGroups.find((group) => group.income_group_id === incomeGroupId)?.name;
+      const groupName = rawGroupName === "United" ? "Shop" : rawGroupName ?? "no group";
       const message = `${slot.display_name} income is now attributed to ${groupName}.`;
       setMessage(message);
       pushToast(message, "success");
@@ -534,23 +538,19 @@ export function DashboardClient() {
           </p>
         </div>
         <div className={styles.incomeGroupControl}>
-          <label className={styles.incomeGroupLabel} htmlFor={`income-group-${slot.pc_name}`}>
-            Income Group
-          </label>
-          <select
-            className={styles.incomeGroupSelect}
+          <SecretSelect
             disabled={isMutating}
-            id={`income-group-${slot.pc_name}`}
-            onChange={(event) => void changeIncomeGroup(slot, event.target.value === "" ? null : event.target.value)}
+            label="Income Group"
+            onChange={(next) => void changeIncomeGroup(slot, next === "" ? null : next)}
+            options={[
+              { label: "Not assigned", value: "" },
+              ...incomeGroups.map((group) => ({
+                label: group.name === "United" ? "Shop" : group.name,
+                value: group.income_group_id
+              }))
+            ]}
             value={slot.income_group_id ?? ""}
-          >
-            <option value="">Not assigned</option>
-            {incomeGroups.map((group) => (
-              <option key={group.income_group_id} value={group.income_group_id}>
-                {group.name}
-              </option>
-            ))}
-          </select>
+          />
           <p className={styles.incomeGroupHint}>
             Determines which income group receives payments attributed to this station.
           </p>
@@ -812,7 +812,42 @@ export function DashboardClient() {
         />
       ) : null}
 
-      {dialog?.type === "add" ? (
+      {dialog?.type === "add" && dialog.pc.session_mode === "member_balance" ? (
+        <MemberTopUpDialog
+          isLoading={isMutating}
+          onCancel={() => setDialog(null)}
+          onConfirm={(input) => {
+            const currentPc = findCurrentPc(dialog.pc);
+            if (!currentPc.member_id) {
+              setMessage("This PC no longer has an active member session.");
+              setDialog(null);
+              return;
+            }
+            void runAction(
+              () =>
+                input.mode === "custom"
+                  ? purchaseMemberCustomAmount(currentPc.member_id as string, {
+                      amount: input.amount as string,
+                      payment_method: input.payment_method,
+                      cash_received: input.cash_received,
+                      reference_number: input.reference_number,
+                      idempotency_key: input.idempotency_key
+                    })
+                  : purchaseMemberTime(currentPc.member_id as string, {
+                      product_id: input.product_id as string,
+                      payment_method: input.payment_method,
+                      cash_received: input.cash_received,
+                      reference_number: input.reference_number,
+                      idempotency_key: input.idempotency_key
+                    }),
+              `${currentPc.pc_name} time updated.`
+            );
+          }}
+          pc={dialog.pc}
+        />
+      ) : null}
+
+      {dialog?.type === "add" && dialog.pc.session_mode !== "member_balance" ? (
         <SessionDialog
           isLoading={isMutating}
           mode="add"

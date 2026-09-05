@@ -3302,7 +3302,8 @@ async function runAsyncAssertions() {
     assert.match(salesManagerSourceForStage6, /Income by Group/);
     assert.match(salesManagerSourceForStage6, /Pending Attribution/);
     assert.match(salesManagerSourceForStage6, /Payments awaiting automatic income-group assignment\./);
-    assert.match(salesManagerSourceForStage6, /report\.income_groups\.map/);
+    assert.match(salesManagerSourceForStage6, /report\.income_groups/);
+    assert.match(salesManagerSourceForStage6, /\.map\(\(group\) => \(\{/);
     assert.match(salesManagerSourceForStage6, /group\.income_group_name/);
     assert.match(salesManagerSourceForStage6, /group\.amount/);
     assert.match(salesManagerSourceForStage6, /group\.payment_count/);

@@ -69,7 +69,7 @@ const INCOME_GROUP_STYLE: Record<string, { label?: string; color: string }> = {
   Gene: { color: "#f472b6" }, // pink
   "Mama/Lala": { color: "#da70d6" }, // orchid
   Tyrone: { color: "#60a5fa" }, // blue
-  United: { label: "Shop", color: "#4ade80" } // green
+  United: { label: "Shop", color: "#22d3ee" } // cyan
 };
 
 function todayInputValue(): string {
@@ -374,18 +374,24 @@ export function SalesManager() {
                 title="Income by Group"
                 description="Revenue attributed to each income-group owner for this period, based on the PC each payment was made on at the time."
                 rows={[
-                  ...report.income_groups.map((group) => ({
-                    amount: group.amount,
-                    count: group.payment_count,
-                    label: INCOME_GROUP_STYLE[group.income_group_name]?.label ?? group.income_group_name,
-                    color: INCOME_GROUP_STYLE[group.income_group_name]?.color
-                  })),
+                  // Shop (the "United" owner) always leads the breakdown --
+                  // everyone else keeps the order the backend returned.
+                  ...[...report.income_groups]
+                    .sort((a, b) =>
+                      Number(b.income_group_name === "United") - Number(a.income_group_name === "United")
+                    )
+                    .map((group) => ({
+                      amount: group.amount,
+                      count: group.payment_count,
+                      label: INCOME_GROUP_STYLE[group.income_group_name]?.label ?? group.income_group_name,
+                      color: INCOME_GROUP_STYLE[group.income_group_name]?.color
+                    })),
                   {
                     amount: report.pending_attribution_amount,
                     count: report.pending_attribution_count,
                     label: "Pending Attribution",
                     hint: "Payments awaiting automatic income-group assignment.",
-                    color: ACCENT_LABEL
+                    color: "#4ade80"
                   }
                 ]}
               />

@@ -367,6 +367,20 @@ export function PcDetailsPanel({
   const [forceReason, setForceReason] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [isWorking, setIsWorking] = useState(false);
+  // A successful send flashes the button label itself ("Message Sent")
+  // instead of the shared full-row notice banner -- confirmed on the real
+  // dashboard, that banner reads as a stray floating bar for something as
+  // routine as a message send.
+  const [messageJustSent, setMessageJustSent] = useState(false);
+  const messageSentTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (messageSentTimeoutRef.current !== null) {
+        window.clearTimeout(messageSentTimeoutRef.current);
+      }
+    };
+  }, []);
   const [confirmClearLock, setConfirmClearLock] = useState(false);
   // Power Controls are locked to the protected Admin account -- not a
   // role check. Regular operators (including owners) never see this section.
@@ -484,15 +498,32 @@ export function PcDetailsPanel({
       setNotice("Enter a message for the customer.");
       return;
     }
-    void runPanelAction(
-      () =>
-        sendPcMessage(pc.pc_name, {
-          message: messageText,
-          severity: messageSeverity,
-          require_acknowledgement: messageSeverity === "urgent"
-        }),
-      "Message sent."
-    );
+    if (isWorking) {
+      return;
+    }
+    setIsWorking(true);
+    setNotice(null);
+    sendPcMessage(pc.pc_name, {
+      message: messageText,
+      severity: messageSeverity,
+      require_acknowledgement: messageSeverity === "urgent"
+    })
+      .then(() => {
+        onActionComplete();
+        setMessageJustSent(true);
+        if (messageSentTimeoutRef.current !== null) {
+          window.clearTimeout(messageSentTimeoutRef.current);
+        }
+        messageSentTimeoutRef.current = window.setTimeout(() => {
+          setMessageJustSent(false);
+        }, 4000);
+      })
+      .catch((error) => {
+        setNotice(error instanceof Error ? error.message : "Remote action failed.");
+      })
+      .finally(() => {
+        setIsWorking(false);
+      });
   }
 
   function power(command: "shutdown" | "restart" | "sleep") {
@@ -848,7 +879,7 @@ export function PcDetailsPanel({
                 type="button"
               >
                 <Icon name="message" />
-                Send Message
+                {messageJustSent ? "Message Sent" : "Send Message"}
               </button>
             </section>
 

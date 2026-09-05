@@ -62,6 +62,7 @@ from server.schemas import (
     MemberCreateRequest,
     MemberPurchaseRefundRequest,
     MemberPurchaseRefundResponse,
+    MemberCustomTopupRequest,
     MemberPurchaseRequest,
     MemberPurchaseResponse,
     MemberPinResetRequest,
@@ -961,6 +962,46 @@ async def purchase_member_time(
             except HTTPException as error:
                 logger.info(
                     "Top-up auto-extend skipped for member %s session %s: %s",
+                    member_id,
+                    active.session_id,
+                    error.detail,
+                )
+    return purchase
+
+
+@app.post("/members/{member_id}/purchase-custom-amount", response_model=MemberPurchaseResponse)
+async def purchase_member_custom_amount(
+    member_id: str,
+    request: MemberCustomTopupRequest,
+    current_user=Depends(require_role("cashier")),
+) -> MemberPurchaseResponse:
+    """Standard-rate top-up for an amount too small to match any catalog
+    package (see purchase_member_time above for the package flow) --
+    priced off the same active metered rate /rates/calculate-time uses
+    for a non-member's Standard add-time."""
+    rate = rate_repository.get_active_metered_rate()
+    if rate is None:
+        raise HTTPException(status_code=409, detail="No active standard rate is configured.")
+    calculated_time = calculate_metered_time(request.amount, rate)
+    purchase = member_repository.purchase_custom_amount(member_id, calculated_time, request, current_user)
+
+    active = session_repository.get_active_member_session(member_id)
+    if active is not None and active.status in {"active", "grace_period"}:
+        add_seconds = topup_real_seconds_for_session(purchase, active)
+        if add_seconds > 0:
+            try:
+                await session_service.add_member_time(
+                    active.session_id,
+                    member_id,
+                    add_seconds,
+                    get_on_duty_actor_user_id(current_user),
+                )
+                purchase = purchase.model_copy(
+                    update={"applied_to_active_session_seconds": add_seconds}
+                )
+            except HTTPException as error:
+                logger.info(
+                    "Standard top-up auto-extend skipped for member %s session %s: %s",
                     member_id,
                     active.session_id,
                     error.detail,

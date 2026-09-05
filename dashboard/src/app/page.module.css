@@ -2493,6 +2493,23 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+/* The Start dialog's non-interactive Standard/VIP pill (see .tabList) is
+   a <div>, not a <button> -- it doesn't get the browser's default
+   centered button text, so this centers it explicitly. */
+.tabButtonStatic {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  text-transform: uppercase;
+}
+
+/* Stretches chips to fill the row edge-to-edge instead of wrapping
+   compactly -- for a short, fixed set (e.g. Member's 2-3 packages) where
+   content-width chips would otherwise leave dead space on the right. */
+.amountChipFill > .amountChip {
+  flex: 1 1 160px;
+}
+
 .amountChip {
   background: #eff6ff;
   border: 1px solid #bfdbfe;
@@ -5793,6 +5810,50 @@
 }
 .sessionDialogFrame .memberCard .detailRow strong {
   font-variant-numeric: tabular-nums;
+}
+.memberTopUpSummaryCard {
+  align-items: center;
+  background:
+    linear-gradient(135deg, rgb(34 211 238 / 0.2), rgb(56 189 248 / 0.06) 70%),
+    rgb(9 16 28 / 0.9);
+  border: 1px solid rgb(34 211 238 / 0.42);
+  border-radius: 11px;
+  box-shadow:
+    inset 3px 0 0 #38e0f2,
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 0 24px rgb(34 211 238 / 0.14);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 14px 16px;
+}
+.memberTopUpSummaryName {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.memberTopUpSummaryName strong {
+  color: #8ff3ff;
+  font-size: 16px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 0 18px rgb(34 211 238 / 0.4);
+  white-space: nowrap;
+}
+.memberTopUpSummaryStation {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+.memberTopUpSummaryStation strong {
+  color: #8ff3ff;
+  font-size: 16px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 18px rgb(34 211 238 / 0.4);
 }
 .sessionDialogFrame .panelText {
   color: #8aa1bf;

@@ -97,16 +97,17 @@ def main() -> None:
         assert partial.balance_due == Decimal("10.00")
         assert partial.payment_status == "partially_paid"
 
-        try:
-            record_payment(
-                session_id,
-                PaymentCreateRequest(payment_method="cash", amount=Decimal("1.00")),
-            )
-        except HTTPException as error:
-            assert error.status_code == 400
-            assert error.detail == "Cash received is required"
-        else:
-            raise AssertionError("Cash payments should require cash received")
+        # Cash received is optional -- a cashier can record a cash payment
+        # without logging the exact bill handed over. change_given simply
+        # stays unset when it isn't given.
+        no_cash_received = record_payment(
+            session_id,
+            PaymentCreateRequest(payment_method="cash", amount=Decimal("1.00")),
+        )
+        assert no_cash_received.payments[-1].cash_received is None
+        assert no_cash_received.payments[-1].change_given is None
+        assert no_cash_received.total_paid == Decimal("11.00")
+        assert no_cash_received.balance_due == Decimal("9.00")
 
         try:
             record_payment(
@@ -122,11 +123,20 @@ def main() -> None:
         else:
             raise AssertionError("Insufficient cash should be rejected")
 
+        # Reference number is optional too, same rationale as cash received.
+        no_reference = record_payment(
+            session_id,
+            PaymentCreateRequest(payment_method="gcash", amount=Decimal("1.00")),
+        )
+        assert no_reference.payments[-1].reference_number is None
+        assert no_reference.total_paid == Decimal("12.00")
+        assert no_reference.balance_due == Decimal("8.00")
+
         paid = record_payment(
             session_id,
             PaymentCreateRequest(
                 payment_method="gcash",
-                amount=Decimal("10.00"),
+                amount=Decimal("8.00"),
                 reference_number="GC-123",
             ),
         )

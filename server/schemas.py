@@ -1456,6 +1456,29 @@ class MemberPurchaseRequest(BaseModel):
         return normalize_positive_money(value) if value is not None else None
 
 
+class MemberCustomTopupRequest(BaseModel):
+    """A member top-up priced off the active metered (Standard) rate
+    instead of a fixed MembershipProduct -- for cash amounts too small to
+    justify a catalog package (e.g. a member wanting just 30 minutes)."""
+
+    amount: Decimal
+    payment_method: PaymentMethod
+    cash_received: Decimal | None = None
+    reference_number: str | None = None
+    notes: str | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+    @field_validator("cash_received")
+    @classmethod
+    def validate_cash_received(cls, value: Decimal | None) -> Decimal | None:
+        return normalize_positive_money(value) if value is not None else None
+
+
 class MemberTimeTransactionRecord(BaseModel):
     transaction_id: str
     member_id: str

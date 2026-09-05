@@ -29,7 +29,9 @@ from server.promo_new_member_service import build_new_member_promo_quote, claim_
 from server.promo_repository import PromoRepository
 from server.schemas import (
     AppliedPromoSummary,
+    CalculatedTimeResponse,
     MemberCreateRequest,
+    MemberCustomTopupRequest,
     MemberPurchaseRefundRequest,
     MemberPurchaseRefundResponse,
     MemberPurchaseRequest,
@@ -312,16 +314,13 @@ class MemberRepository:
         cash_received = money(cash_received) if cash_received is not None else None
         change_given: Decimal | None = None
         if payment_method == "cash":
-            if cash_received is None:
-                raise HTTPException(status_code=400, detail="Cash received is required")
-            if cash_received < amount:
-                raise HTTPException(status_code=400, detail="Cash received cannot be lower than payment amount")
-            change_given = money(cash_received - amount)
+            if cash_received is not None:
+                if cash_received < amount:
+                    raise HTTPException(status_code=400, detail="Cash received cannot be lower than payment amount")
+                change_given = money(cash_received - amount)
         else:
             if cash_received is not None:
                 raise HTTPException(status_code=400, detail="Cash received is only valid for cash payments")
-            if not (reference_number or "").strip():
-                raise HTTPException(status_code=400, detail="Payment reference is required")
         return cash_received, change_given
 
     def _create_member_plain(
@@ -618,16 +617,13 @@ class MemberRepository:
         cash_received = money(request.cash_received) if request.cash_received is not None else None
         change_given: Decimal | None = None
         if request.payment_method == "cash":
-            if cash_received is None:
-                raise HTTPException(status_code=400, detail="Cash received is required")
-            if cash_received < request.amount:
-                raise HTTPException(status_code=400, detail="Cash received cannot be lower than payment amount")
-            change_given = money(cash_received - request.amount)
+            if cash_received is not None:
+                if cash_received < request.amount:
+                    raise HTTPException(status_code=400, detail="Cash received cannot be lower than payment amount")
+                change_given = money(cash_received - request.amount)
         else:
             if cash_received is not None:
                 raise HTTPException(status_code=400, detail="Cash received is only valid for cash payments")
-            if not (request.reference_number or "").strip():
-                raise HTTPException(status_code=400, detail="Payment reference is required")
 
         username = request.username.strip()
         username_normalized = normalize_username(username)
@@ -1653,16 +1649,13 @@ class MemberRepository:
         cash_received = money(payment_request.cash_received) if payment_request.cash_received is not None else None
         change_given: Decimal | None = None
         if payment_request.payment_method == "cash":
-            if cash_received is None:
-                raise HTTPException(status_code=400, detail="Cash received is required")
-            if cash_received < product.price:
-                raise HTTPException(status_code=400, detail="Cash received cannot be lower than payment amount")
-            change_given = money(cash_received - product.price)
+            if cash_received is not None:
+                if cash_received < product.price:
+                    raise HTTPException(status_code=400, detail="Cash received cannot be lower than payment amount")
+                change_given = money(cash_received - product.price)
         else:
             if cash_received is not None:
                 raise HTTPException(status_code=400, detail="Cash received is only valid for cash payments")
-            if not (request.reference_number or "").strip():
-                raise HTTPException(status_code=400, detail="Payment reference is required")
 
         payment_created_at = current_utc_time()
         attribution = self._resolve_purchase_attribution(member.member_id, product, payment_created_at)
@@ -1777,6 +1770,125 @@ class MemberRepository:
                 related_payment_id=payment.payment_id,
                 notes=product.name,
                 balance_type=product.balance_type,
+                connection=connection,
+            )
+        updated_member = self.get_member(member_id)
+        if updated_member is None:
+            raise HTTPException(status_code=500, detail="Member disappeared after purchase")
+        return self._build_purchase_response(updated_member, product, payment, transaction, 0)
+
+    def _standard_topup_product(
+        self, calculated_time: CalculatedTimeResponse, created_at: datetime | None = None
+    ) -> MembershipProductRecord:
+        """A synthetic, never-persisted MembershipProductRecord standing in
+        for a custom Standard-rate cash top-up (see purchase_custom_amount)
+        -- lets it reuse _resolve_purchase_attribution/_build_purchase_response
+        exactly like the catalog purchase() path, with no membership_products
+        row to look up."""
+        now = created_at or current_utc_time()
+        return MembershipProductRecord(
+            product_id="standard-topup",
+            name="Standard top-up",
+            price=calculated_time.amount,
+            time_seconds=calculated_time.duration_seconds,
+            product_type="member_topup",
+            balance_type="standard",
+            is_active=True,
+            sort_order=0,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def purchase_custom_amount(
+        self,
+        member_id: str,
+        calculated_time: CalculatedTimeResponse,
+        request: MemberCustomTopupRequest,
+        actor: UserRecord,
+    ) -> MemberPurchaseResponse:
+        """Same payment/ledger/attribution guarantees as purchase(), but for
+        a cash amount priced off the active metered (Standard) rate instead
+        of a fixed MembershipProduct -- for a member wanting less time than
+        the smallest catalog package covers. Always credits Standard
+        balance; never promo-eligible (promos are scoped to catalog
+        products only, see is_member_topup_promo_eligible)."""
+        member = self.require_usable_member(member_id)
+
+        if request.idempotency_key:
+            existing_payment = self.payment_repository.get_payment_by_idempotency_key(
+                request.idempotency_key
+            )
+            if existing_payment is not None:
+                base_transaction, _ = self.resolve_purchase_transactions(existing_payment.payment_id)
+                if base_transaction is None or base_transaction.member_id != member_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Duplicate transaction key belongs to another payment",
+                    )
+                updated_member = self.get_member(member_id)
+                if updated_member is None:
+                    raise HTTPException(status_code=500, detail="Member disappeared after purchase")
+                product = self._standard_topup_product(calculated_time)
+                return self._build_purchase_response(
+                    updated_member, product, existing_payment, base_transaction, 0
+                )
+
+        open_shift = self.shift_repository.get_open_shift_for_user(actor.user_id)
+        shift_id = open_shift.shift_id if open_shift is not None else None
+
+        cash_received = money(request.cash_received) if request.cash_received is not None else None
+        change_given: Decimal | None = None
+        if request.payment_method == "cash":
+            if cash_received is not None:
+                if cash_received < calculated_time.amount:
+                    raise HTTPException(status_code=400, detail="Cash received cannot be lower than payment amount")
+                change_given = money(cash_received - calculated_time.amount)
+        else:
+            if cash_received is not None:
+                raise HTTPException(status_code=400, detail="Cash received is only valid for cash payments")
+
+        payment_created_at = current_utc_time()
+        product = self._standard_topup_product(calculated_time, created_at=payment_created_at)
+        attribution = self._resolve_purchase_attribution(member.member_id, product, payment_created_at)
+
+        payment = PaymentRecord(
+            payment_id=str(uuid4()),
+            session_id=None,
+            amount=product.price,
+            payment_method=request.payment_method,
+            cash_received=cash_received,
+            change_given=change_given,
+            reference_number=request.reference_number,
+            notes=request.notes,
+            action_type="manual",
+            related_command_id=None,
+            review_required=False,
+            shift_id=shift_id,
+            recorded_by_user_id=actor.user_id,
+            idempotency_key=request.idempotency_key,
+            status="completed",
+            created_at=payment_created_at,
+            pc_name_snapshot=attribution.pc_name_snapshot,
+            income_group_id_snapshot=attribution.income_group_id_snapshot,
+            income_group_name_snapshot=attribution.income_group_name_snapshot,
+            attribution_status=attribution.status,  # type: ignore[arg-type]
+            attribution_assigned_at=attribution.assigned_at,
+            attribution_session_id=attribution.session_id,
+        )
+
+        # Atomic, same as purchase(): the payment and the balance it funds
+        # commit in one SQLite transaction, or neither does.
+        with get_connection() as connection:
+            self.payment_repository.create_payment(payment, connection=connection)
+            transaction = self.apply_balance_delta(
+                member.member_id,
+                "promo_topup",
+                product.time_seconds,
+                actor.user_id,
+                amount_paid=product.price,
+                related_payment_id=payment.payment_id,
+                notes=product.name,
+                balance_type="standard",
                 connection=connection,
             )
         updated_member = self.get_member(member_id)

@@ -215,22 +215,19 @@ class BillingService:
         change_given: Decimal | None = None
 
         if request.payment_method == "cash":
-            if cash_received is None:
-                raise HTTPException(status_code=400, detail="Cash received is required")
-            if cash_received < amount:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cash received cannot be lower than payment amount",
-                )
-            change_given = money(cash_received - amount)
+            if cash_received is not None:
+                if cash_received < amount:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Cash received cannot be lower than payment amount",
+                    )
+                change_given = money(cash_received - amount)
         else:
             if cash_received is not None:
                 raise HTTPException(
                     status_code=400,
                     detail="Cash received is only valid for cash payments",
                 )
-            if not (request.reference_number or "").strip():
-                raise HTTPException(status_code=400, detail="Payment reference is required")
 
         payment_created_at = current_utc_time()
         # Session-linked payments always know their PC at payment time --
@@ -326,22 +323,19 @@ class BillingService:
                 detail="Payment amount cannot exceed the amount due",
             )
         if request.payment_method == "cash":
-            if request.cash_received is None:
-                raise HTTPException(status_code=400, detail="Cash received is required")
-            cash_received = money(request.cash_received)
-            if cash_received < amount:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cash received cannot be lower than payment amount",
-                )
+            if request.cash_received is not None:
+                cash_received = money(request.cash_received)
+                if cash_received < amount:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Cash received cannot be lower than payment amount",
+                    )
         else:
             if request.cash_received is not None:
                 raise HTTPException(
                     status_code=400,
                     detail="Cash received is only valid for cash payments",
                 )
-            if not (request.reference_number or "").strip():
-                raise HTTPException(status_code=400, detail="Payment reference is required")
 
     def mark_payment_review_required(
         self,

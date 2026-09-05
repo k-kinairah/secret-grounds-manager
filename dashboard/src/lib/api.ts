@@ -854,6 +854,27 @@ export async function purchaseMemberTime(
   });
 }
 
+export async function purchaseMemberCustomAmount(
+  memberId: string,
+  input: {
+    amount: string;
+    payment_method: PaymentInput["payment_method"];
+    cash_received?: string;
+    reference_number?: string;
+    notes?: string;
+    idempotency_key?: string;
+  }
+): Promise<MemberPurchaseResponse> {
+  return requestJson<MemberPurchaseResponse>(
+    `${getApiBaseUrl()}/members/${memberId}/purchase-custom-amount`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    }
+  );
+}
+
 export async function refundMemberPurchase(
   paymentId: string,
   input: { reason: string; notes?: string }
