@@ -404,7 +404,7 @@ svg { width: 1em; height: 1em; }
   margin-top: 10px;
   font-size: 9px;
   font-weight: 700;
-  color: var(--danger);
+  color: #F472B6;
   text-align: center;
 }
 .overlay-footer-divider { height: 1px; background: rgba(34, 211, 238, 0.55); margin: 12px 0 10px; }
