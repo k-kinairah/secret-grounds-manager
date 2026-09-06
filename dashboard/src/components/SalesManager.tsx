@@ -4,8 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchSalesReport, getSalesExportUrl, type SalesReportFilters } from "@/lib/api";
 import { formatDateTime, formatMoney, formatNaturalDuration } from "@/lib/time";
-import type { PaymentMethod, PaymentStatus, SalesOperatorCollection, SalesOperatorTransaction, SalesPeriod, SalesReport, SalesType } from "@/lib/types";
+import type { PaymentMethod, PaymentStatus, SalesOperatorBreakdown, SalesOperatorCollection, SalesOperatorTransaction, SalesPeriod, SalesReport, SalesSummary, SalesType } from "@/lib/types";
 import styles from "@/app/sales/sales.module.css";
+import pageStyles from "@/app/page.module.css";
+import { CloseButton } from "./CloseButton";
 import { PageTitleIcon } from "./PageTitleIcon";
 import { SecretSelect, SelectGlyph, type SecretSelectOption } from "./SecretSelect";
 
@@ -165,6 +167,74 @@ function salesPeriodLabel(period: SalesPeriod, startDate: string, endDate: strin
   return PERIODS.find((option) => option.value === period)?.label ?? "Selected period";
 }
 
+// start_date / end_date are inclusive shop-local calendar days (YYYY-MM-DD)
+// the backend already resolved, so this just formats them -- no timezone math.
+// Collapses to a single date when the range is one day (Today / Yesterday /
+// a one-day custom range).
+function reportDateRangeLabel(startDate: string, endDate: string): string {
+  const formatDate = (value: string) => {
+    const [year, month, day] = value.split("-").map(Number);
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
+      new Date(year, month - 1, day)
+    );
+  };
+  const startText = formatDate(startDate);
+  const endText = formatDate(endDate);
+  return startText === endText ? startText : `${startText} – ${endText}`;
+}
+
+// Plain-text daily summary: date, grand totals, and each operator's collected
+// total. Built entirely from the already-loaded report -- no extra request.
+function buildSalesSummaryText(report: SalesReport, periodLabel: string): string {
+  const thin = "-".repeat(44);
+  const lines: string[] = [
+    "SECRET GROUNDS — SALES SUMMARY",
+    "=".repeat(44),
+    "",
+    `Period:     ${periodLabel}`,
+    `Date:       ${reportDateRangeLabel(report.start_date, report.end_date)}`,
+    `Generated:  ${new Date().toLocaleString()}`,
+    "",
+    "TOTAL SALES",
+    thin,
+    `Net sales:      ${formatMoney(report.summary.net_sales ?? report.summary.total_sales)}`,
+    `Gross sales:    ${formatMoney(report.summary.gross_sales ?? report.summary.total_sales)}`,
+    `Refunds/voids:  ${formatMoney(report.summary.refund_total ?? "0.00")}`,
+    `Payments:       ${report.summary.payment_count}`,
+    "",
+    "SALES BY OPERATOR",
+    thin
+  ];
+
+  if (report.operators.length === 0) {
+    lines.push("(no operator sales in this period)");
+  } else {
+    let operatorTotal = 0;
+    let operatorPayments = 0;
+    for (const operator of report.operators) {
+      operatorTotal += Number(operator.total_amount);
+      operatorPayments += operator.payment_count;
+      lines.push(
+        `${operator.operator_name.padEnd(22)}${formatMoney(operator.total_amount).padStart(14)}   (${operator.payment_count} payments)`
+      );
+    }
+    lines.push(thin);
+    lines.push(
+      `${"TOTAL".padEnd(22)}${formatMoney(operatorTotal).padStart(14)}   (${operatorPayments} payments)`
+    );
+  }
+  lines.push("");
+  // CRLF so the file opens cleanly in Windows Notepad.
+  return lines.join("\r\n");
+}
+
+function salesSummaryFileStamp(period: SalesPeriod, startDate: string, endDate: string): string {
+  if (period === "custom") {
+    return startDate === endDate ? startDate : `${startDate}_to_${endDate}`;
+  }
+  return period;
+}
+
 export function SalesManager() {
   const [period, setPeriod] = useState<SalesPeriod>("today");
   const [startDate, setStartDate] = useState(todayInputValue);
@@ -248,6 +318,22 @@ export function SalesManager() {
     setPeriod(nextPeriod);
   }
 
+  function downloadSalesSummaryText() {
+    if (report === null) {
+      return;
+    }
+    const text = buildSalesSummaryText(report, salesPeriodLabel(period, startDate, endDate));
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `secret-grounds-sales-${salesSummaryFileStamp(period, startDate, endDate)}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   function changeStartDate(nextStartDate: string) {
     setIsLoading(true);
     setStartDate(nextStartDate);
@@ -322,6 +408,12 @@ export function SalesManager() {
           </section>
 
           <OperatorCollections
+            dailySummary={{
+              dateRangeLabel: reportDateRangeLabel(report.start_date, report.end_date),
+              onExportTxt: downloadSalesSummaryText,
+              operators: report.operators,
+              summary: report.summary
+            }}
             methodFilter={methodFilter}
             operatorCollections={operatorCollections}
             operatorFilter={operatorFilter}
@@ -532,6 +624,7 @@ export function SalesManager() {
 }
 
 function OperatorCollections({
+  dailySummary,
   methodFilter,
   operatorCollections,
   operatorFilter,
@@ -548,6 +641,12 @@ function OperatorCollections({
   statusFilter,
   typeFilter
 }: {
+  dailySummary: {
+    dateRangeLabel: string;
+    onExportTxt: () => void;
+    operators: SalesOperatorBreakdown[];
+    summary: SalesSummary;
+  };
   methodFilter: PaymentMethod | "all";
   operatorCollections: OperatorCollectionView[];
   operatorFilter: string;
@@ -565,6 +664,7 @@ function OperatorCollections({
   typeFilter: SalesType | "all";
 }) {
   const [selectedTransaction, setSelectedTransaction] = useState<SalesOperatorTransaction | null>(null);
+  const [showDailySummary, setShowDailySummary] = useState(false);
   const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const hasActiveFilters = operatorFilter !== "all" || methodFilter !== "all" || typeFilter !== "all" || statusFilter !== "all";
   const selectedOperator =
@@ -636,6 +736,13 @@ function OperatorCollections({
           <h2>Operator Collections</h2>
           <p>Expected drawer cash = cash received - change given - cash refunds paid out.</p>
         </div>
+        <button
+          className={styles.dailySummaryButton}
+          onClick={() => setShowDailySummary(true)}
+          type="button"
+        >
+          Daily Summary
+        </button>
       </div>
       <div className={styles.collectionToolbar} aria-label="Operator collection filters">
         <div className={styles.collectionFilters}>
@@ -761,7 +868,97 @@ function OperatorCollections({
       {selectedTransaction ? (
         <TransactionDetailsModal onClose={() => setSelectedTransaction(null)} transaction={selectedTransaction} />
       ) : null}
+      {showDailySummary ? (
+        <DailySummaryModal
+          dateRangeLabel={dailySummary.dateRangeLabel}
+          onClose={() => setShowDailySummary(false)}
+          onExportTxt={dailySummary.onExportTxt}
+          operators={dailySummary.operators}
+          periodLabel={periodLabel}
+          summary={dailySummary.summary}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function DailySummaryModal({
+  dateRangeLabel,
+  onClose,
+  onExportTxt,
+  operators,
+  periodLabel,
+  summary
+}: {
+  dateRangeLabel: string;
+  onClose: () => void;
+  onExportTxt: () => void;
+  operators: SalesOperatorBreakdown[];
+  periodLabel: string;
+  summary: SalesSummary;
+}) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className={styles.transactionModalOverlay} onClick={onClose} role="presentation">
+      <div
+        aria-label="Daily sales summary"
+        aria-modal="true"
+        className={`${styles.transactionModal} ${styles.dailySummaryModal}`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className={styles.transactionModalHeader}>
+          <div>
+            <h2>Daily Sales Summary</h2>
+            <span>{periodLabel} · {dateRangeLabel}</span>
+          </div>
+          <CloseButton
+            className={pageStyles.iconButtonPremiumClose}
+            label="Close daily sales summary"
+            onClick={onClose}
+          />
+        </div>
+        <div className={styles.stackList}>
+          <article>
+            <div className={styles.stackRow}>
+              <strong>Total sales</strong>
+              <b>{formatMoney(summary.net_sales ?? summary.total_sales)}</b>
+            </div>
+          </article>
+          {operators.length === 0 ? (
+            <div className={styles.miniEmpty}>No operator sales in this period.</div>
+          ) : (
+            operators.map((operator) => (
+              <article key={operator.operator_id ?? operator.operator_name}>
+                <div className={styles.stackRow}>
+                  <strong>{operator.operator_name}</strong>
+                  <b>{formatMoney(operator.total_amount)}</b>
+                </div>
+                <small>
+                  {operator.signed_out_at
+                    ? `Signed out ${formatDateTime(operator.signed_out_at)}`
+                    : "Not signed out yet"}
+                </small>
+              </article>
+            ))
+          )}
+        </div>
+        <div className={styles.dailySummaryActions}>
+          <button className={styles.exportButton} onClick={onExportTxt} type="button">
+            Export TXT
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

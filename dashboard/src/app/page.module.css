@@ -2204,6 +2204,46 @@
   width: 34px;
 }
 
+/* Premium circular cyan close button -- same treatment as the member
+   dialogs' rotating X, but self-contained so it can be passed to
+   <CloseButton className={...} /> from any module. */
+.iconButtonPremiumClose {
+  height: 40px;
+  width: 40px;
+  border-radius: 999px;
+  border-color: rgb(56 232 250 / 0.42);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.18), rgb(34 211 238 / 0.04) 62%),
+    #0b1322;
+  color: #b7f2ff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    0 4px 14px rgb(34 211 238 / 0.16);
+}
+.iconButtonPremiumClose:hover:not(:disabled),
+.iconButtonPremiumClose:focus-visible {
+  border-color: rgb(120 240 255 / 0.9);
+  background:
+    linear-gradient(180deg, rgb(34 211 238 / 0.34), rgb(34 211 238 / 0.1) 62%),
+    #0b1322;
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.18),
+    0 10px 26px rgb(34 211 238 / 0.4),
+    0 0 0 3px rgb(56 189 248 / 0.18);
+  transform: translateY(-1px) scale(1.06) rotate(90deg);
+}
+.iconButtonPremiumClose:active:not(:disabled) {
+  transform: translateY(0) scale(0.94) rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .iconButtonPremiumClose:hover:not(:disabled),
+  .iconButtonPremiumClose:focus-visible,
+  .iconButtonPremiumClose:active:not(:disabled) {
+    transform: none;
+  }
+}
+
 .iconButtonSvg {
   display: block;
   height: 18px;

@@ -594,6 +594,7 @@ export interface SalesOperatorBreakdown {
   gcash_total: string;
   maya_total: string;
   other_total: string;
+  signed_out_at: string | null;
 }
 
 export interface SalesOperatorTransaction {
@@ -681,6 +682,9 @@ export interface SalesReport {
   period: SalesPeriod;
   start_at: string;
   end_at: string;
+  // Inclusive shop-local calendar days (YYYY-MM-DD) the report covers.
+  start_date: string;
+  end_date: string;
   grouping: SalesGrouping;
   summary: SalesSummary;
   payment_methods: SalesPaymentMethodBreakdown[];

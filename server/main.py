@@ -5,7 +5,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import socket
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from io import StringIO
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -530,6 +530,27 @@ def logout(
             if user_id is not None:
                 operator_state_repository.clear_sale_window(user_id)
                 operator_state_repository.clear_if_current(user_id)
+                # Record the off-duty time so the Sales daily summary can show
+                # when each operator signed out. Only an explicit Sign Out logs
+                # this -- a plain Change Operator hand-off deliberately does not.
+                signed_out_user = user_repository.get_user(user_id)
+                with get_connection() as connection:
+                    connection.execute(
+                        """
+                        INSERT INTO operator_audit_events (
+                            event_id, event_type, operator_user_id,
+                            operator_display_name, selected_by_user_id, created_at
+                        )
+                        VALUES (?, 'operator_signed_out', ?, ?, ?, ?)
+                        """,
+                        (
+                            str(uuid4()),
+                            user_id,
+                            signed_out_user.display_name if signed_out_user is not None else "Operator",
+                            user_id,
+                            current_utc_time().isoformat(),
+                        ),
+                    )
         auth_session_repository.revoke_token(sg_session)
     clear_auth_cookie(response)
     return {"message": "Logged out"}
@@ -1453,8 +1474,15 @@ def resolve_sales_range(
     period: SalesPeriod,
     start_date: date | None,
     end_date: date | None,
-) -> tuple[datetime, datetime, str]:
-    today = current_utc_time().date()
+) -> tuple[datetime, datetime, str, tzinfo, date, date]:
+    """Day boundaries are the shop's local calendar days (Settings ->
+    timezone_display, default Asia/Manila), converted to UTC only for the
+    payments query. "Today" therefore means today in Manila, not in UTC --
+    a sale at 11pm local stays in today's report instead of rolling into
+    tomorrow. Returns the UTC query bounds, the chart grouping, the shop
+    timezone, and the inclusive local start/end dates for display."""
+    shop_tz = resolve_shop_timezone(get_runtime_shop_timezone_display())
+    today = datetime.now(shop_tz).date()
     if period == "today":
         start = today
         end = today + timedelta(days=1)
@@ -1475,10 +1503,10 @@ def resolve_sales_range(
         start = start_date
         end = end_date + timedelta(days=1)
 
-    start_at = datetime.combine(start, time.min, tzinfo=timezone.utc)
-    end_at = datetime.combine(end, time.min, tzinfo=timezone.utc)
+    start_at = datetime.combine(start, time.min, tzinfo=shop_tz).astimezone(timezone.utc)
+    end_at = datetime.combine(end, time.min, tzinfo=shop_tz).astimezone(timezone.utc)
     grouping = "hour" if (end_at - start_at) <= timedelta(days=2) else "day"
-    return start_at, end_at, grouping
+    return start_at, end_at, grouping, shop_tz, start, end - timedelta(days=1)
 
 
 def sales_type_for_payment(row: object) -> tuple[str, str]:
@@ -1495,7 +1523,9 @@ def build_sales_report(
     end_date: date | None,
     recent_limit: int = 80,
 ) -> SalesReport:
-    start_at, end_at, grouping = resolve_sales_range(period, start_date, end_date)
+    start_at, end_at, grouping, shop_tz, local_start_date, local_end_date = resolve_sales_range(
+        period, start_date, end_date
+    )
     users = user_repository.list_users()
     users_by_id = {user.user_id: user.display_name for user in users}
     start_text = start_at.isoformat()
@@ -1599,6 +1629,23 @@ def build_sales_report(
             ORDER BY COALESCE(s.ended_at, s.created_at) DESC
             """
         ).fetchall()
+        signed_out_rows = connection.execute(
+            """
+            SELECT operator_user_id, MAX(created_at) AS signed_out_at
+            FROM operator_audit_events
+            WHERE event_type = 'operator_signed_out'
+              AND operator_user_id IS NOT NULL
+              AND created_at >= ?
+              AND created_at < ?
+            GROUP BY operator_user_id
+            """,
+            (start_text, end_text),
+        ).fetchall()
+
+    signed_out_by_operator = {
+        row["operator_user_id"]: storage_datetime(row["signed_out_at"])
+        for row in signed_out_rows
+    }
 
     method_totals = {
         "cash": {"amount": Decimal("0.00"), "count": 0},
@@ -1702,7 +1749,10 @@ def build_sales_report(
             pc_entry["count"] = int(pc_entry["count"]) + 1
             pc_entry["sessions"].add(row["session_id"])
 
-        bucket_start = created_at.replace(minute=0, second=0, microsecond=0) if grouping == "hour" else created_at.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Chart buckets/labels use shop-local time so an "hour" on the graph
+        # is a shop-clock hour, consistent with the shop-local report range.
+        created_at_local = created_at.astimezone(shop_tz)
+        bucket_start = created_at_local.replace(minute=0, second=0, microsecond=0) if grouping == "hour" else created_at_local.replace(hour=0, minute=0, second=0, microsecond=0)
         bucket_label = bucket_start.strftime("%I %p").lstrip("0") if grouping == "hour" else bucket_start.strftime("%b %d")
         bucket_key = bucket_start.isoformat()
         bucket = timeseries_totals.setdefault(
@@ -1894,6 +1944,8 @@ def build_sales_report(
         period=period,
         start_at=start_at,
         end_at=end_at,
+        start_date=local_start_date,
+        end_date=local_end_date,
         grouping=grouping,
         summary=SalesSummary(
             total_sales=total_sales,
@@ -1941,6 +1993,7 @@ def build_sales_report(
                 gcash_total=values["gcash"],
                 maya_total=values["maya"],
                 other_total=values["other"],
+                signed_out_at=signed_out_by_operator.get(values["operator_id"]),
             )
             for values in sorted(operator_totals.values(), key=lambda value: value["total"], reverse=True)
         ],
@@ -2034,7 +2087,7 @@ def export_sales_report(
 
 @app.get("/dashboard/today-sales", response_model=Decimal)
 def get_dashboard_today_sales(_: object = Depends(require_role("cashier"))) -> Decimal:
-    start_at, end_at, _ = resolve_sales_range("today", None, None)
+    start_at, end_at, *_ = resolve_sales_range("today", None, None)
     with get_connection() as connection:
         row = connection.execute(
             """

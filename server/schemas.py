@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -1677,6 +1677,9 @@ class SalesOperatorBreakdown(BaseModel):
     gcash_total: Decimal = Decimal("0.00")
     maya_total: Decimal = Decimal("0.00")
     other_total: Decimal = Decimal("0.00")
+    # Most recent explicit Sign Out within the report window; None if the
+    # operator has not signed out (a Change Operator hand-off does not count).
+    signed_out_at: datetime | None = None
 
 
 class SalesOperatorTransaction(BaseModel):
@@ -1775,6 +1778,10 @@ class SalesReport(BaseModel):
     period: SalesPeriod
     start_at: datetime
     end_at: datetime
+    # Inclusive shop-local calendar days the report covers -- for display,
+    # so the client never has to guess the shop timezone from start_at/end_at.
+    start_date: date
+    end_date: date
     grouping: Literal["hour", "day"]
     summary: SalesSummary
     payment_methods: list[SalesPaymentMethodBreakdown] = Field(default_factory=list)

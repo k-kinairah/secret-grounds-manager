@@ -359,8 +359,10 @@ def test_date_filters_affect_income_group_totals_identically(temp_directory: str
 
     from datetime import timedelta as _timedelta
 
-    wide_start = (current_utc_time() - _timedelta(days=10)).date()
-    wide_end = current_utc_time().date()
+    # Custom-range dates are shop-local calendar days -- reuse the report's own
+    # resolved local end date so this stays correct regardless of the UTC offset.
+    wide_end = today_report.end_date
+    wide_start = wide_end - _timedelta(days=10)
     wide_report = main_module.build_sales_report("custom", wide_start, wide_end)
     assert group_by_id(wide_report, "united").amount == Decimal("10.00")
     assert group_by_id(wide_report, "gene").amount == Decimal("20.00"), "a wider range must include the backdated payment"
