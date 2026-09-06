@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { fetchSalesReport, getSalesExportUrl, type SalesReportFilters } from "@/lib/api";
+import { fetchCurrentUser, fetchSalesReport, getSalesExportUrl, type SalesReportFilters } from "@/lib/api";
 import { formatDateTime, formatMoney, formatNaturalDuration } from "@/lib/time";
-import type { PaymentMethod, PaymentStatus, SalesOperatorBreakdown, SalesOperatorCollection, SalesOperatorTransaction, SalesPeriod, SalesReport, SalesSummary, SalesType } from "@/lib/types";
+import type { PaymentMethod, PaymentStatus, SalesOperatorBreakdown, SalesOperatorCollection, SalesOperatorTransaction, SalesPeriod, SalesReport, SalesSummary, SalesType, UserRole } from "@/lib/types";
 import styles from "@/app/sales/sales.module.css";
 import pageStyles from "@/app/page.module.css";
 import { CloseButton } from "./CloseButton";
+import { NetIncomeModal } from "./NetIncomeModal";
 import { PageTitleIcon } from "./PageTitleIcon";
 import { SecretSelect, SelectGlyph, type SecretSelectOption } from "./SecretSelect";
 
@@ -248,6 +249,9 @@ export function SalesManager() {
   const [statusFilter, setStatusFilter] = useState<PaymentStatus | "all">("all");
   const [selectedOperatorKey, setSelectedOperatorKey] = useState<string | null>(null);
   const [showDetailedTable, setShowDetailedTable] = useState(false);
+  const [role, setRole] = useState<UserRole | null>(null);
+  const [showNetIncome, setShowNetIncome] = useState(false);
+  const canSeeNetIncome = role === "admin" || role === "owner";
 
   const filters: SalesReportFilters = useMemo(
     () => ({ endDate, period, startDate }),
@@ -261,6 +265,20 @@ export function SalesManager() {
       ),
     [report]
   );
+
+  useEffect(() => {
+    let active = true;
+    fetchCurrentUser()
+      .then((user) => {
+        if (active) setRole(user.role);
+      })
+      .catch(() => {
+        if (active) setRole(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -367,11 +385,22 @@ export function SalesManager() {
               </button>
             ))}
           </div>
-          <a className={styles.exportButton} href={exportUrl}>
+          {canSeeNetIncome ? (
+            <button
+              className={styles.dailySummaryButton}
+              onClick={() => setShowNetIncome(true)}
+              type="button"
+            >
+              Net Income
+            </button>
+          ) : null}
+          <a className={styles.dailySummaryButton} href={exportUrl}>
             Export CSV
           </a>
         </div>
       </header>
+
+      {showNetIncome ? <NetIncomeModal onClose={() => setShowNetIncome(false)} /> : null}
 
       {period === "custom" ? (
         <div className={styles.customRange}>
@@ -953,7 +982,7 @@ function DailySummaryModal({
           )}
         </div>
         <div className={styles.dailySummaryActions}>
-          <button className={styles.exportButton} onClick={onExportTxt} type="button">
+          <button className={styles.dailySummaryButton} onClick={onExportTxt} type="button">
             Export TXT
           </button>
         </div>

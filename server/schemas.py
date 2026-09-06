@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
@@ -1797,6 +1798,101 @@ class SalesReport(BaseModel):
     income_groups: list[SalesIncomeGroupBreakdown] = Field(default_factory=list)
     pending_attribution_amount: Decimal = Decimal("0.00")
     pending_attribution_count: int = 0
+
+
+# --- Net Income / bills -------------------------------------------------
+
+BillKind = Literal["fixed", "variable"]
+_MONTH_KEY = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def _validate_month_key(value: str) -> str:
+    if not _MONTH_KEY.match(value):
+        raise ValueError("Month must be 'YYYY-MM'.")
+    return value
+
+
+class ShopBillRecord(BaseModel):
+    bill_id: str
+    name: str
+    kind: BillKind
+    fixed_amount: Decimal | None = None
+    created_at: datetime
+    archived_at: datetime | None = None
+
+
+class ShopBillCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+    kind: BillKind
+    fixed_amount: Decimal | None = None
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        cleaned = " ".join(value.replace("\x00", "").replace("<", "").replace(">", "").split())
+        if not cleaned:
+            raise ValueError("Bill name must not be blank.")
+        return cleaned
+
+    @model_validator(mode="after")
+    def check_fixed_amount(self) -> "ShopBillCreateRequest":
+        if self.kind == "fixed":
+            if self.fixed_amount is None or self.fixed_amount <= Decimal("0"):
+                raise ValueError("A fixed bill needs a positive amount.")
+            self.fixed_amount = normalize_money(self.fixed_amount)
+        else:
+            self.fixed_amount = None
+        return self
+
+
+class SetBillAmountRequest(BaseModel):
+    month: str
+    amount: Decimal
+
+    _month = field_validator("month")(_validate_month_key)
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+
+class OneOffExpenseRequest(BaseModel):
+    month: str
+    label: str = Field(..., min_length=1, max_length=60)
+    amount: Decimal
+
+    _month = field_validator("month")(_validate_month_key)
+
+    @field_validator("label")
+    @classmethod
+    def clean_label(cls, value: str) -> str:
+        cleaned = " ".join(value.replace("\x00", "").replace("<", "").replace(">", "").split())
+        if not cleaned:
+            raise ValueError("Expense name must not be blank.")
+        return cleaned
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: Decimal) -> Decimal:
+        return normalize_positive_money(value)
+
+
+class MonthlyBillLine(BaseModel):
+    source: Literal["fixed", "variable", "one_off"]
+    bill_id: str | None = None
+    amount_id: str | None = None
+    label: str
+    amount: Decimal | None = None  # None => a variable bill with nothing entered yet
+    applied: bool                  # counted in total_bills
+
+
+class FinancesMonthSummary(BaseModel):
+    month: str
+    income: Decimal
+    total_bills: Decimal
+    net_income: Decimal
+    lines: list[MonthlyBillLine] = Field(default_factory=list)
 
 
 class LoginRequest(BaseModel):

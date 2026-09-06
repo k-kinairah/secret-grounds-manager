@@ -2584,6 +2584,55 @@ def initialize_database() -> None:
             ON time_based_rate_applications (promo_id, created_at)
             """
         )
+        # Net Income / bills: a shop_bills row is a recurring expense
+        # definition ('fixed' carries its own amount every month; 'variable'
+        # is a recurring name whose amount is entered per month). A
+        # shop_bill_amounts row is either a per-month amount for a bill
+        # (bill_id set) or a standalone one-off expense for a month
+        # (bill_id NULL, label set). Everything is month-keyed ('YYYY-MM').
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shop_bills (
+                bill_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('fixed', 'variable')),
+                fixed_amount TEXT,
+                created_by_user_id TEXT,
+                created_at TEXT NOT NULL,
+                archived_at TEXT,
+                FOREIGN KEY (created_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shop_bill_amounts (
+                amount_id TEXT PRIMARY KEY,
+                bill_id TEXT,
+                label TEXT,
+                month TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                entered_by_user_id TEXT,
+                entered_at TEXT NOT NULL,
+                voided_at TEXT,
+                FOREIGN KEY (bill_id) REFERENCES shop_bills(bill_id),
+                FOREIGN KEY (entered_by_user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_shop_bill_amount_one_per_month
+            ON shop_bill_amounts (bill_id, month)
+            WHERE bill_id IS NOT NULL AND voided_at IS NULL
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_shop_bill_amounts_month
+            ON shop_bill_amounts (month)
+            """
+        )
 
         seed_default_metered_rate(connection)
         # Corrects an existing install's already-seeded Regular Rate row

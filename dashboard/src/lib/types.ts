@@ -597,6 +597,34 @@ export interface SalesOperatorBreakdown {
   signed_out_at: string | null;
 }
 
+export type BillKind = "fixed" | "variable";
+
+export interface ShopBill {
+  bill_id: string;
+  name: string;
+  kind: BillKind;
+  fixed_amount: string | null;
+  created_at: string;
+  archived_at: string | null;
+}
+
+export interface MonthlyBillLine {
+  source: "fixed" | "variable" | "one_off";
+  bill_id: string | null;
+  amount_id: string | null;
+  label: string;
+  amount: string | null;
+  applied: boolean;
+}
+
+export interface FinancesMonthSummary {
+  month: string;
+  income: string;
+  total_bills: string;
+  net_income: string;
+  lines: MonthlyBillLine[];
+}
+
 export interface SalesOperatorTransaction {
   payment_id: string;
   timestamp: string;

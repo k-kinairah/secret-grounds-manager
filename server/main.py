@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import json
+import calendar
 import logging
 from logging.handlers import RotatingFileHandler
 import os
@@ -123,6 +124,11 @@ from server.schemas import (
     SalesOperatorBreakdown,
     SalesOperatorCollection,
     SalesOperatorTransaction,
+    FinancesMonthSummary,
+    OneOffExpenseRequest,
+    SetBillAmountRequest,
+    ShopBillCreateRequest,
+    ShopBillRecord,
     StartSessionRequest,
     StationAssignRequest,
     StationAssignmentRecord,
@@ -179,6 +185,7 @@ from server.income_attribution import resolve_pending_payments_for_configured_pc
 from server.remote_command_repository import PCMetadataRepository, RemoteCommandRepository
 from server.pc_layout_repository import IncomeGroupRepository, OperatorStateRepository, PCLayoutRepository
 from server.prepared_session_repository import PreparedSessionRepository
+from server.finances_repository import FinancesRepository
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
@@ -220,6 +227,7 @@ station_repository = StationAssignmentRepository()
 income_group_repository = IncomeGroupRepository()
 operator_state_repository = OperatorStateRepository()
 operator_repository = OperatorRepository()
+finances_repository = FinancesRepository()
 prepared_session_repository = PreparedSessionRepository()
 billing_service = BillingService(session_repository, payment_repository, shift_repository, user_repository)
 rate_repository = RateRepository()
@@ -2099,6 +2107,97 @@ def get_dashboard_today_sales(_: object = Depends(require_role("cashier"))) -> D
             (start_at.isoformat(), end_at.isoformat()),
         ).fetchone()
     return parse_money(row["total"] if row is not None else "0.00")
+
+
+def _month_utc_range(month: str) -> tuple[datetime, datetime]:
+    """Shop-local calendar month -> [start, end) in UTC, using the same
+    shop-timezone resolution the Sales report uses."""
+    try:
+        year_text, month_text = month.split("-")
+        year, mon = int(year_text), int(month_text)
+        first = date(year, mon, 1)
+        last = date(year, mon, calendar.monthrange(year, mon)[1])
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Month must be 'YYYY-MM'.")
+    start_at, end_at, *_ = resolve_sales_range("custom", first, last)
+    return start_at, end_at
+
+
+def _collected_income(start_at: datetime, end_at: datetime) -> Decimal:
+    """Net sales collected in the range -- completed payments only, so
+    voided/refunded payments are already excluded."""
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT COALESCE(SUM(CASE WHEN status = 'completed' THEN CAST(amount AS REAL) ELSE 0 END), 0) AS total
+            FROM payments
+            WHERE created_at >= ? AND created_at < ?
+            """,
+            (start_at.isoformat(), end_at.isoformat()),
+        ).fetchone()
+    return parse_money(row["total"] if row is not None else "0.00")
+
+
+@app.get("/finances/bills", response_model=list[ShopBillRecord])
+def list_shop_bills(_: object = Depends(require_role("admin"))) -> list[ShopBillRecord]:
+    return finances_repository.list_bills()
+
+
+@app.post("/finances/bills", response_model=ShopBillRecord)
+def create_shop_bill(
+    request: ShopBillCreateRequest,
+    current_user=Depends(require_role("admin")),
+) -> ShopBillRecord:
+    return finances_repository.create_bill(request, get_actor_user_id(current_user))
+
+
+@app.post("/finances/bills/{bill_id}/archive", response_model=ShopBillRecord)
+def archive_shop_bill(bill_id: str, _: object = Depends(require_role("admin"))) -> ShopBillRecord:
+    return finances_repository.archive_bill(bill_id)
+
+
+@app.put("/finances/bills/{bill_id}/amount")
+def set_shop_bill_amount(
+    bill_id: str,
+    request: SetBillAmountRequest,
+    current_user=Depends(require_role("admin")),
+) -> dict[str, str]:
+    finances_repository.set_bill_amount(
+        bill_id, request.month, request.amount, get_actor_user_id(current_user)
+    )
+    return {"status": "ok"}
+
+
+@app.delete("/finances/bills/{bill_id}/amount")
+def clear_shop_bill_amount(
+    bill_id: str,
+    month: str,
+    _: object = Depends(require_role("admin")),
+) -> dict[str, str]:
+    finances_repository.clear_bill_amount(bill_id, month)
+    return {"status": "ok"}
+
+
+@app.post("/finances/one-off")
+def add_one_off_expense(
+    request: OneOffExpenseRequest,
+    current_user=Depends(require_role("admin")),
+) -> dict[str, str]:
+    finances_repository.add_one_off(request, get_actor_user_id(current_user))
+    return {"status": "ok"}
+
+
+@app.post("/finances/one-off/{amount_id}/void")
+def void_one_off_expense(amount_id: str, _: object = Depends(require_role("admin"))) -> dict[str, str]:
+    finances_repository.void_one_off(amount_id)
+    return {"status": "ok"}
+
+
+@app.get("/finances/summary", response_model=FinancesMonthSummary)
+def get_finances_summary(month: str, _: object = Depends(require_role("admin"))) -> FinancesMonthSummary:
+    start_at, end_at = _month_utc_range(month)
+    income = _collected_income(start_at, end_at)
+    return finances_repository.resolve_month(month, income)
 
 
 @app.get("/dashboard/operator-sale", response_model=OperatorSaleSummary)

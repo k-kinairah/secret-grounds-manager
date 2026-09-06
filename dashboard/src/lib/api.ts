@@ -40,6 +40,9 @@ import type {
   RemoteCommandRecord,
   RemoteCommandResponse,
   MessageSeverity,
+  BillKind,
+  FinancesMonthSummary,
+  ShopBill,
   SalesPeriod,
   SalesReport,
   ScreenMonitorStatus,
@@ -463,6 +466,68 @@ export function getSalesExportUrl(filters: SalesReportFilters): string {
   const search = new URLSearchParams();
   appendSalesFilters(search, filters);
   return `${getApiBaseUrl()}/sales/export.csv?${search.toString()}`;
+}
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+export async function fetchFinancesSummary(month: string): Promise<FinancesMonthSummary> {
+  return requestJson<FinancesMonthSummary>(
+    `${getApiBaseUrl()}/finances/summary?month=${encodeURIComponent(month)}`,
+    { cache: "no-store" }
+  );
+}
+
+export async function fetchShopBills(): Promise<ShopBill[]> {
+  return requestJson<ShopBill[]>(`${getApiBaseUrl()}/finances/bills`, { cache: "no-store" });
+}
+
+export async function createShopBill(body: {
+  name: string;
+  kind: BillKind;
+  fixed_amount?: string;
+}): Promise<ShopBill> {
+  return requestJson<ShopBill>(`${getApiBaseUrl()}/finances/bills`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body)
+  });
+}
+
+export async function archiveShopBill(billId: string): Promise<ShopBill> {
+  return requestJson<ShopBill>(`${getApiBaseUrl()}/finances/bills/${billId}/archive`, {
+    method: "POST"
+  });
+}
+
+export async function setShopBillAmount(billId: string, month: string, amount: string): Promise<void> {
+  await requestJson(`${getApiBaseUrl()}/finances/bills/${billId}/amount`, {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ month, amount })
+  });
+}
+
+export async function clearShopBillAmount(billId: string, month: string): Promise<void> {
+  await requestJson(
+    `${getApiBaseUrl()}/finances/bills/${billId}/amount?month=${encodeURIComponent(month)}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function addOneOffExpense(body: {
+  month: string;
+  label: string;
+  amount: string;
+}): Promise<void> {
+  await requestJson(`${getApiBaseUrl()}/finances/one-off`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body)
+  });
+}
+
+export async function voidOneOffExpense(amountId: string): Promise<void> {
+  await requestJson(`${getApiBaseUrl()}/finances/one-off/${amountId}/void`, { method: "POST" });
 }
 
 export async function fetchPcLayouts(includeDisabled = false): Promise<PcLayoutSlot[]> {
