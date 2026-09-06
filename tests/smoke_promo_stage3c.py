@@ -143,13 +143,13 @@ def test_quote_route_accepts_authorized_cashier_and_owner_operator(temp_director
     )
     assert response.source_type == "promo"
 
-    # Family "quick operators" are seeded with role=owner (rank above
-    # cashier), so they must also pass this cashier-minimum gate.
+    # Family "quick operators" are seeded as cashier, so they must pass
+    # this cashier-minimum gate.
     from server.user_repository import UserRepository
 
     mama_record = UserRepository().get_user("operator_mama")
     assert mama_record is not None
-    assert mama_record.role == "owner"
+    assert mama_record.role == "cashier"
     mama_authorized = require_role("cashier")(mama_record)
     mama_response = main_module.quote_standard_or_vip_promo(
         PromoQuoteRequest(pc_name="PC-PROMO", action="start_session", amount=Decimal("20.00")),

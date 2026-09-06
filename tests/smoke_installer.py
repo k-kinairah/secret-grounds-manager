@@ -64,9 +64,10 @@ def test_installer_supports_fixed_and_diskless_customer_modes() -> None:
     assert "ClientDisklessPage" in source
     assert "SelectedClientMode" in source
 
-    # Fixed Station keeps the full existing validation, unchanged.
+    # Fixed Station keeps online validation. The wizard now has two fields
+    # (Station ID + server host), so the port is the fixed 18001.
     assert (
-        "ValidateClientOnline(ClientPage.Values[2], ClientPage.Values[3], ClientPage.Values[0])"
+        "ValidateClientOnline(ClientPage.Values[1], '18001', ClientPage.Values[0])"
         in source
     )
 
@@ -78,7 +79,7 @@ def test_installer_supports_fixed_and_diskless_customer_modes() -> None:
     # ...but no station-availability check for diskless (pc_name is blank).
     diskless_opts_block = source[
         source.index("if SelectedClientMode = 'diskless' then begin") :
-        source.index("Result := ValidateClientOnline(ClientPage.Values[2]")
+        source.index("Result := ValidateClientOnline(ClientPage.Values[1]")
     ]
     assert "client-registration/check" not in diskless_opts_block
 
@@ -238,7 +239,7 @@ def test_installer_opens_dashboard_only_after_health_succeeds() -> None:
 
 def test_installer_cashier_autostart_checkbox_defaults_and_preserves_choice() -> None:
     source = read("installer/SecretGroundsSetup.iss")
-    assert "Start Secret Grounds automatically when this computer signs in." in source
+    assert "Start Secret Grounds automatically when this computer starts." in source
     assert "CashierOptionsPage.Values[0] := (not ExistingCashierConfigFound) or ExistingCashierAutostartEnabled;" in source
     assert "procedure DetectExistingCashierState" in source
     assert "read-cashier-status.ps1" in source
