@@ -150,12 +150,23 @@ def main() -> None:
 
         # --- 4. legacy /users behaviour intact --------------------------
         users = m.user_repository.list_users()
-        # Fresh DB: seed_family_operators seeds the 8 canonical operators with
-        # their original usernames, every one role='owner' (INSERT path).
+        # Fresh DB: seed_family_operators seeds the 8 canonical operators.
+        # Password-gated operators (Tyrone, Admin) default to role='owner';
+        # quick-access operators default to role='cashier'. An owner can
+        # promote anyone later via Staff.
         assert len(users) == 8, len(users)
-        assert "admin" in {u.username for u in users}
+        by_username = {u.username: u for u in users}
+        assert "admin" in by_username
         assert all(u.role in ("owner", "admin", "cashier") for u in users)
-        assert all(u.role == "owner" for u in users), [u.role for u in users]
+        assert by_username["admin"].role == "owner"
+        assert by_username["operator_tyrone"].role == "owner"
+        assert all(
+            by_username[name].role == "cashier"
+            for name in (
+                "operator_mama", "operator_neil", "operator_rogene",
+                "operator_rojan", "operator_bel", "operator_karen",
+            )
+        ), [u.role for u in users]
         print(f"  /users repo path intact: {len(users)} seeded users, role column readable")
 
         # --- 5. operator authentication flow regression ------------------

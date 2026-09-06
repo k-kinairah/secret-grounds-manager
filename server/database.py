@@ -1408,6 +1408,13 @@ def seed_family_operators(connection: sqlite3.Connection) -> None:
                 )
             continue
 
+        # New family operators default to the least-privileged role that
+        # still matches their intent: a password-gated operator (Tyrone,
+        # Admin) is a full admin; a quick-access operator is a Cashier.
+        # An owner can promote anyone later via Staff -- and the quick-access
+        # UPDATE branch above deliberately never re-writes role, so that
+        # promotion is not undone on the next restart.
+        default_role = "owner" if operator.password_required else "cashier"
         connection.execute(
             """
             INSERT INTO users (
@@ -1426,7 +1433,7 @@ def seed_family_operators(connection: sqlite3.Connection) -> None:
                 is_protected,
                 archived_at
             )
-            VALUES (?, ?, ?, ?, ?, 'owner', 1, ?, ?, NULL, 1, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, 1, ?, ?, NULL)
             """,
             (
                 operator.operator_id,
@@ -1434,6 +1441,7 @@ def seed_family_operators(connection: sqlite3.Connection) -> None:
                 operator.username.casefold(),
                 operator.display_name,
                 admin_password_hash if operator.password_required else disabled_password_hash,
+                default_role,
                 now,
                 now,
                 "password" if operator.password_required else "quick",

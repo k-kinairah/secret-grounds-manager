@@ -106,9 +106,9 @@ def main() -> None:
         # 8 seeded owners + o1 + c1 (now owner) = plenty; demoting one is fine.
         r = operators.update_operator(c1.operator_id, upd("cash_one", "Cash One", "quick", True, "cashier"), actor)
         assert r.role == "cashier", r.role
-        neil = operators.get_operator("operator_neil")
-        assert neil is not None and neil.role == "owner"
-        r = operators.update_operator("operator_neil", upd("operator_neil", "Neil", "quick", True, "cashier"), actor)
+        # Demote a genuine owner (o1) while admin + tyrone + others remain owners.
+        assert operators.get_operator(o1.operator_id).role == "owner"
+        r = operators.update_operator(o1.operator_id, upd("own_one", "Own One", "quick", True, "cashier"), actor)
         assert r.role == "cashier"
         print("  owner -> cashier allowed while other active owners remain")
 
