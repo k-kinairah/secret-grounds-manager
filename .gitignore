@@ -11,11 +11,8 @@ dashboard/.env.production.local
 *.tsbuildinfo
 dashboard/dashboard-dev.log
 config/.env
-logs/*.log
-logs/*.json
-logs/*.pid
-logs/*.cmd
-logs/launch-wrappers/
+logs/*
+!logs/.gitkeep
 data/*.db
 data/*.sqlite3
 backups/*.db

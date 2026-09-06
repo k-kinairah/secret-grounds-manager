@@ -16,6 +16,9 @@ from client.websocket_transport import SimpleWebSocketClient
 
 SERVER_URL = "http://127.0.0.1:8765"
 WEBSOCKET_URL = "ws://127.0.0.1:8765/ws/PC-01"
+# /commands/test-ping is gated on require_system_admin -- only the protected
+# Admin account, not a plain owner.
+ADMIN_PASSWORD = os.getenv("SECRET_GROUNDS_ADMIN_PASSWORD", "admin12345")
 
 
 def wait_for_server() -> None:
@@ -39,30 +42,18 @@ def register_pc(pc_name: str, ip_address: str) -> None:
     response.raise_for_status()
 
 
-def bootstrap_owner(database_path: str) -> None:
+def bootstrap_admin(database_path: str) -> None:
     os.environ["SECRET_GROUNDS_DB_PATH"] = database_path
     from server.database import initialize_database
-    from server.schemas import UserCreateRequest
-    from server.user_repository import UserRepository
 
-    initialize_database()
-    repository = UserRepository()
-    if repository.get_by_username("owner") is None:
-        repository.create_user(
-            UserCreateRequest(
-                username="owner",
-                display_name="Owner",
-                password="owner-pass",
-                role="owner",
-            )
-        )
+    initialize_database()  # seeds the protected `admin` operator
 
 
-def login_owner() -> requests.Session:
+def login_admin() -> requests.Session:
     session = requests.Session()
     response = session.post(
-        f"{SERVER_URL}/auth/login",
-        json={"username": "owner", "password": "owner-pass"},
+        f"{SERVER_URL}/auth/operator/admin",
+        json={"password": ADMIN_PASSWORD},
         timeout=5,
     )
     response.raise_for_status()
@@ -113,7 +104,7 @@ def main() -> None:
 
     environment = os.environ.copy()
     environment["SECRET_GROUNDS_DB_PATH"] = database_path
-    bootstrap_owner(database_path)
+    bootstrap_admin(database_path)
 
     server_process = subprocess.Popen(
         [
@@ -134,7 +125,7 @@ def main() -> None:
 
     try:
         wait_for_server()
-        admin_session = login_owner()
+        admin_session = login_admin()
         register_pc("PC-01", "127.0.0.1")
 
         received_commands: list[dict[str, Any]] = []
