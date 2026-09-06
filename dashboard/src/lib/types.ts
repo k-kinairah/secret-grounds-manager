@@ -722,6 +722,7 @@ export interface AdminSettings {
     expiration_grace_seconds: number;
     automatic_shutdown_on_expiration: boolean;
     reminder_thresholds_seconds: number[];
+    vip_metered_multiplier: string;
   };
   customer_client: {
     reminder_sounds_enabled: boolean;

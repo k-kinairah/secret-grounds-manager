@@ -815,8 +815,12 @@ export async function fetchMemberVipPreview(
   );
 }
 
-export async function fetchCalculatedTime(amount: string): Promise<CalculatedTimeResponse> {
-  return requestJson<CalculatedTimeResponse>(`${getApiBaseUrl()}/rates/calculate-time`, {
+export async function fetchCalculatedTime(
+  amount: string,
+  pcName?: string
+): Promise<CalculatedTimeResponse> {
+  const query = pcName ? `?pc_name=${encodeURIComponent(pcName)}` : "";
+  return requestJson<CalculatedTimeResponse>(`${getApiBaseUrl()}/rates/calculate-time${query}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ amount })

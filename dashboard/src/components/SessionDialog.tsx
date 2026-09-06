@@ -3,7 +3,7 @@ import styles from "@/app/page.module.css";
 import { CloseButton } from "./CloseButton";
 import { FancySelect, type FancySelectOption } from "./FancySelect";
 import { fetchCalculatedTime, fetchMemberVipPreview, fetchMembers } from "@/lib/api";
-import { formatMoney, formatNaturalDuration, formatRateDuration, minutesToSeconds } from "@/lib/time";
+import { formatMoney, formatNaturalDuration, minutesToSeconds } from "@/lib/time";
 import type {
   CalculatedTimeResponse,
   CurrentUser,
@@ -22,13 +22,6 @@ const PAYMENT_METHOD_OPTIONS: FancySelectOption<PaymentMethod>[] = [
   { value: "cash", label: "Cash" },
   { value: "gcash", label: "GCash" }
 ];
-
-function formatChipLabel(rate: RateProfile): string {
-  const price = formatMoney(rate.price).replace(/\.00$/, "");
-  const duration = formatRateDuration(rate.duration_seconds);
-  const isPromo = rate.name.toLowerCase().includes("promo");
-  return `${price} — ${duration}${isPromo ? " promo" : ""}`;
-}
 
 type DialogMode = "start" | "add";
 type SelectionTab = "standard" | "member";
@@ -94,11 +87,11 @@ export function SessionDialog({
   const idempotencyKeyRef = useRef(createIdempotencyKey());
   const pcDisplayName = pc.display_name ?? pc.pc_name;
   const title = mode === "start" ? `Start ${pcDisplayName}` : `Add time to ${pcDisplayName}`;
-  // Standard tab: VIP stations keep their existing VIP package cards (no
-  // VIP-scoped metered rate exists to calculate against, so a cash amount
-  // must never be silently priced off the Standard metered rate). Only
-  // non-VIP stations get the amount-based flow.
-  const isStandardAmountMode = activeTab === "standard" && !pc.is_vip;
+  // Standard tab: the amount-based flow (chips + free amount) on every
+  // station. On a VIP PC the backend prices that amount off the Standard
+  // metered rate scaled by the configured VIP multiplier; the live preview
+  // below passes pc_name so it shows the same VIP-scaled minutes.
+  const isStandardAmountMode = activeTab === "standard";
   const selectedPackage = packageRates.find((rate) => rate.rate_id === selectedRateId);
   const customAmountValue = Number(customAmount);
   const hasValidCustomAmount = customAmount.trim() !== "" && Number.isFinite(customAmountValue) && customAmountValue > 0;
@@ -227,7 +220,7 @@ export function SessionDialog({
     const timeoutId = window.setTimeout(() => {
       setIsCalculatingTime(true);
       setCalculationError(null);
-      fetchCalculatedTime(customAmountValue.toFixed(2))
+      fetchCalculatedTime(customAmountValue.toFixed(2), pc.pc_name)
         .then((result) => {
           if (isMounted) {
             setCalculatedTime(result);
@@ -524,7 +517,7 @@ export function SessionDialog({
               </p>
             ) : null}
           </div>
-        ) : isStandardAmountMode ? (
+        ) : (
           <div role="tabpanel">
             <div className={styles.standardAmountPanel}>
               <div className={styles.standardAmountInputGroup}>
@@ -570,26 +563,6 @@ export function SessionDialog({
                               )}`
                             : "Enter a valid amount above ₱0.00"}
                 </strong>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div role="tabpanel">
-            <div className={styles.standardAmountPanel}>
-              <h3 className={styles.vipModeHeading}>VIP</h3>
-              <div className={styles.amountChipRow}>
-                {packageRates.map((rate) => (
-                  <button
-                    className={`${styles.amountChip} ${
-                      selectedRateId === rate.rate_id ? styles.amountChipSelected : ""
-                    }`}
-                    key={rate.rate_id}
-                    onClick={() => setSelectedRateId(rate.rate_id)}
-                    type="button"
-                  >
-                    {formatChipLabel(rate)}
-                  </button>
-                ))}
               </div>
             </div>
           </div>

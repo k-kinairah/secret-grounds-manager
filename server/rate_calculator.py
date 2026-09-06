@@ -24,6 +24,26 @@ def metered_rate_snapshot(rate: RateProfile) -> str:
     )
 
 
+def vip_effective_metered_rate(rate: RateProfile, multiplier: Decimal) -> RateProfile:
+    """The shop has one Standard-scoped metered rate. For an arbitrary cash
+    top-up on a VIP PC we price it off that rate scaled by `multiplier`
+    (>= 1): the price per block goes up, so the same peso buys fewer
+    minutes. The result is always VIP-scoped so it passes the station
+    eligibility gate (a Standard-scoped rate is rejected on a VIP PC), and
+    its scaled price flows into the session's metered-rate snapshot for
+    auditing. multiplier == 1 keeps the price but still re-scopes.
+    """
+    scaled_price = (rate.price * multiplier).quantize(Decimal("0.01"))
+    suffix = "" if multiplier == Decimal("1") else f" (VIP {multiplier.normalize()}x)"
+    return rate.model_copy(
+        update={
+            "price": scaled_price,
+            "station_scope": "vip",
+            "name": f"{rate.name}{suffix}",
+        }
+    )
+
+
 def calculate_metered_time(amount: Decimal, rate: RateProfile) -> CalculatedTimeResponse:
     """Convert money to time using Decimal math, rounding down to whole seconds.
 

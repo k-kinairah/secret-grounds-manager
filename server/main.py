@@ -146,7 +146,11 @@ from server.schemas import (
     PromoUpdate,
     TimeBasedRateApplication,
 )
-from server.admin_settings_service import AdminSettingsService, get_runtime_shop_timezone_display
+from server.admin_settings_service import (
+    AdminSettingsService,
+    get_runtime_shop_timezone_display,
+    get_runtime_vip_metered_multiplier,
+)
 from server.balance_conversion import split_vip_session
 from server.promo_quote_service import build_promo_quote
 from server.auth import (
@@ -179,7 +183,8 @@ from server.session_repository import SessionRepository
 from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
 from server import pricing_service
-from server.rate_calculator import calculate_metered_time
+from server.rate_calculator import calculate_metered_time, vip_effective_metered_rate
+from server.rate_eligibility import resolve_shop_timezone
 from server.rate_repository import RateRepository
 from server.screen_monitor_service import ScreenMonitorService, sniff_image_content_type
 from server.settings import SCREEN_MONITORING_ENABLED
@@ -3809,25 +3814,34 @@ def get_rates(
     return rate_repository.list_rates(include_inactive=include_inactive)
 
 
-@app.get("/rates/metered")
-def get_metered_rate(
-    _: object = Depends(require_role("cashier")),
-) -> RateProfile:
+def _metered_rate_for_preview(pc_name: str | None) -> RateProfile:
+    """The active metered rate, scaled by the VIP multiplier when pc_name is a
+    VIP station -- so the dashboard's live "P1 = N min" preview matches what
+    resolve_session_package will actually charge on that PC."""
     rate = rate_repository.get_active_metered_rate()
     if rate is None:
         raise HTTPException(status_code=404, detail="No active metered rate is configured.")
+    cleaned = (pc_name or "").strip()
+    if cleaned and session_service.is_vip_pc(cleaned):
+        return vip_effective_metered_rate(rate, get_runtime_vip_metered_multiplier())
     return rate
+
+
+@app.get("/rates/metered")
+def get_metered_rate(
+    pc_name: str | None = None,
+    _: object = Depends(require_role("cashier")),
+) -> RateProfile:
+    return _metered_rate_for_preview(pc_name)
 
 
 @app.post("/rates/calculate-time")
 def calculate_time(
     request: CalculateTimeRequest,
+    pc_name: str | None = None,
     _: object = Depends(require_role("cashier")),
 ) -> CalculatedTimeResponse:
-    rate = rate_repository.get_active_metered_rate()
-    if rate is None:
-        raise HTTPException(status_code=404, detail="No active metered rate is configured.")
-    return calculate_metered_time(request.amount, rate)
+    return calculate_metered_time(request.amount, _metered_rate_for_preview(pc_name))
 
 
 @app.post("/rates", response_model=RateProfile)

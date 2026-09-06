@@ -251,6 +251,14 @@ class SettingsSessions(BaseModel):
     expiration_grace_seconds: int = Field(..., ge=30, le=600)
     automatic_shutdown_on_expiration: bool
     reminder_thresholds_seconds: list[int] = Field(..., min_length=1, max_length=6)
+    # Applied to the Standard metered rate for arbitrary cash top-ups on a VIP
+    # PC. 1 = same as Standard; 2 = a VIP peso buys half the minutes.
+    vip_metered_multiplier: Decimal = Field(..., ge=Decimal("1"), le=Decimal("20"))
+
+    @field_validator("vip_metered_multiplier")
+    @classmethod
+    def normalize_vip_metered_multiplier(cls, value: Decimal) -> Decimal:
+        return value.quantize(Decimal("0.01"))
 
     @field_validator("reminder_thresholds_seconds")
     @classmethod

@@ -321,6 +321,19 @@ export function SettingsManager() {
                 value={thresholdText}
               />
             </FieldGroup>
+            <FieldGroup title="VIP pricing">
+              <TextField
+                helper="How much more a VIP PC charges than the Standard metered rate for an arbitrary cash top-up. 1 = same as Standard; 2 = a VIP peso buys half the minutes."
+                label="VIP top-up rate multiplier"
+                onChange={(value) =>
+                  updateDraft((settings) => ({
+                    ...settings,
+                    sessions: { ...settings.sessions, vip_metered_multiplier: value }
+                  }))
+                }
+                value={draft.sessions.vip_metered_multiplier}
+              />
+            </FieldGroup>
           </CategoryPanel>
         ) : null}
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ from server.settings import (
     SHOP_SUBTITLE,
     TEST_MODE,
     TIMEZONE_DISPLAY,
+    VIP_METERED_MULTIPLIER,
 )
 from server.time_utils import current_utc_time
 
@@ -61,6 +63,7 @@ def build_default_settings() -> AdminSettings:
                 "expiration_grace_seconds": grace_seconds,
                 "automatic_shutdown_on_expiration": AUTOMATIC_SHUTDOWN_ON_EXPIRATION,
                 "reminder_thresholds_seconds": thresholds,
+                "vip_metered_multiplier": VIP_METERED_MULTIPLIER,
             },
             "customer_client": {
                 "reminder_sounds_enabled": REMINDER_SOUNDS_ENABLED,
@@ -315,3 +318,7 @@ def get_runtime_expiration_grace_seconds() -> int:
 
 def get_runtime_shop_timezone_display() -> str:
     return AdminSettingsService().get_settings().general.timezone_display
+
+
+def get_runtime_vip_metered_multiplier() -> Decimal:
+    return AdminSettingsService().get_settings().sessions.vip_metered_multiplier

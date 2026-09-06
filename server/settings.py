@@ -18,6 +18,10 @@ EXPIRATION_SOUND_ENABLED = read_bool("SECRET_GROUNDS_EXPIRATION_SOUND_ENABLED", 
 SHOP_DISPLAY_NAME = os.getenv("SECRET_GROUNDS_SHOP_DISPLAY_NAME", "Secret Grounds")
 SHOP_SUBTITLE = os.getenv("SECRET_GROUNDS_SHOP_SUBTITLE", "Computer Shop")
 TIMEZONE_DISPLAY = os.getenv("SECRET_GROUNDS_TIMEZONE_DISPLAY", "Asia/Manila")
+# Multiplier applied to the shop's single (Standard-scoped) metered rate when
+# an arbitrary cash amount is topped up on a VIP PC. 2 => a VIP peso buys half
+# the minutes a Standard peso does (e.g. P5 = 20 min becomes P5 = 10 min).
+VIP_METERED_MULTIPLIER = os.getenv("SECRET_GROUNDS_VIP_METERED_MULTIPLIER", "2")
 REMINDER_THRESHOLDS_SECONDS = [
     int(value.strip())
     for value in os.getenv("SECRET_GROUNDS_REMINDER_THRESHOLDS_SECONDS", "900,300,60").split(",")

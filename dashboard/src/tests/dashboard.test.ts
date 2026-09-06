@@ -1069,7 +1069,8 @@ async function runAsyncAssertions() {
       sessions: {
         expiration_grace_seconds: 120,
         automatic_shutdown_on_expiration: false,
-        reminder_thresholds_seconds: [900, 300, 60]
+        reminder_thresholds_seconds: [900, 300, 60],
+        vip_metered_multiplier: "2.00"
       },
       customer_client: {
         reminder_sounds_enabled: true,

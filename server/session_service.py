@@ -16,7 +16,7 @@ from server.pc_layout_repository import IncomeGroupRepository, PCLayoutRepositor
 from server.promo_quote_service import build_promo_quote
 from server.promo_repository import PromoRepository
 from server.promo_session_integration import claim_standard_or_vip_promo
-from server.rate_calculator import calculate_metered_time
+from server.rate_calculator import calculate_metered_time, vip_effective_metered_rate
 from server.rate_eligibility import validate_rate_for_station_and_context
 from server.rate_repository import RateRepository
 from server.schemas import (
@@ -40,6 +40,7 @@ from server.session_repository import SessionRepository
 from server.admin_settings_service import (
     get_runtime_expiration_grace_seconds,
     get_runtime_shop_timezone_display,
+    get_runtime_vip_metered_multiplier,
 )
 from server.time_utils import current_utc_time
 
@@ -190,9 +191,17 @@ class SessionService:
             metered_rate = self.rate_repository.get_active_metered_rate()
             if metered_rate is None:
                 raise HTTPException(status_code=409, detail="No active metered rate is configured")
+            # On a VIP PC an arbitrary cash amount is priced off the same
+            # metered rate scaled by the configured VIP multiplier (VIP-scoped
+            # synthetic rate, so it passes the station gate and its scaled
+            # price lands in the metered-rate snapshot).
+            if is_vip_station:
+                metered_rate = vip_effective_metered_rate(
+                    metered_rate, get_runtime_vip_metered_multiplier()
+                )
             # Same station/eligibility choke point as the rate_id branch
-            # above -- a VIP station must never be silently priced off the
-            # Standard metered rate just because a caller sent `amount`.
+            # above -- a Standard station must never be priced off a VIP
+            # metered rate, and vice versa.
             validate_rate_for_station_and_context(
                 metered_rate,
                 is_vip_station=is_vip_station,
