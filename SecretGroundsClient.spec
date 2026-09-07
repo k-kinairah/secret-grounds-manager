@@ -34,6 +34,7 @@ datas = [
     ('VERSION', '.'),
     ('client\\config.example.json', '.'),
     ('client\\assets\\secret-grounds-logo.png', 'assets'),
+    ('client\\assets\\secret-grounds-logo.ico', 'assets'),
 ]
 datas += collect_tree('client\\web_ui', 'client\\web_ui')
 datas += collect_tree(python_root / 'tcl' / 'tcl8.6', '_tcl_data')
@@ -104,6 +105,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='client\\assets\\secret-grounds-logo.ico',
     version='client\\version_info.txt',
 )
 coll = COLLECT(

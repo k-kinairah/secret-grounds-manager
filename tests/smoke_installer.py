@@ -433,6 +433,14 @@ def test_client_spec_bundles_logo_asset() -> None:
     assert logo_path.is_file(), f"Logo asset is missing from the repo: {logo_path}"
     assert logo_path.stat().st_size > 0
 
+    # The .ico is the taskbar / Alt-Tab / title-bar icon: set on the EXE and
+    # bundled for tk_runtime._apply_secret_grounds_icon()'s iconbitmap call.
+    assert "secret-grounds-logo.ico" in spec
+    assert "icon='client\\\\assets\\\\secret-grounds-logo.ico'" in spec
+    ico_path = PROJECT_ROOT / "client" / "assets" / "secret-grounds-logo.ico"
+    assert ico_path.is_file(), f"Logo .ico is missing from the repo: {ico_path}"
+    assert ico_path.stat().st_size > 0
+
 
 def test_client_executable_is_windowed_for_silent_startup() -> None:
     spec = read("SecretGroundsClient.spec")

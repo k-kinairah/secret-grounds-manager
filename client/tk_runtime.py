@@ -93,12 +93,40 @@ def verify_tk_runtime(*, create_root: bool = True) -> TkRuntimeInfo:
     )
 
 
+def _apply_secret_grounds_icon(tk, root) -> None:
+    """Give the Tk root (and, via default=/True, every later Toplevel) the
+    Secret Grounds icon so the taskbar / Alt-Tab / title bar stop showing the
+    stock Tk feather. Best-effort: any failure just leaves the default icon."""
+    from client.utils import get_logo_ico_path, get_logo_path
+
+    ico_path = get_logo_ico_path()
+    if ico_path is not None:
+        try:
+            root.iconbitmap(default=str(ico_path))
+            return
+        except Exception:
+            pass
+    png_path = get_logo_path()
+    if png_path is None:
+        return
+    try:
+        image = tk.PhotoImage(file=str(png_path))
+        root.iconphoto(True, image)
+        # PhotoImage is dropped by Tk once garbage-collected -- pin it to the
+        # root so the icon survives for the window's lifetime.
+        root._secret_grounds_icon = image  # noqa: SLF001
+    except Exception:
+        pass
+
+
 def create_tk_root():
     with _TK_STARTUP_LOCK:
         configure_tk_runtime()
         import tkinter as tk
 
-        return tk, tk.Tk()
+        root = tk.Tk()
+        _apply_secret_grounds_icon(tk, root)
+        return tk, root
 
 
 def log_tk_startup_error(context: str, error: BaseException) -> None:
