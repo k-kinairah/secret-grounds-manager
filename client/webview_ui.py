@@ -13,6 +13,17 @@ from typing import TYPE_CHECKING, Any, Callable
 import webview
 
 from client.config import APP_VERSION
+from client.utils import get_logo_ico_path
+
+
+def _webview_icon_kwargs() -> dict[str, str]:
+    """Pass the Secret Grounds .ico to webview.start so the EdgeChromium
+    windows (and their taskbar / Alt-Tab entries) stop showing the stock
+    pywebview icon. webview.create_window has no icon param -- it can only be
+    set here, once, for the whole app. Best-effort: if the packaged .ico is
+    missing we just omit it and keep the default."""
+    ico_path = get_logo_ico_path()
+    return {"icon": str(ico_path)} if ico_path is not None else {}
 
 if TYPE_CHECKING:
     from client.customer_overlay import CustomerOverlayController
@@ -577,6 +588,78 @@ def set_native_taskbar_presence(window: webview.Window, is_visible: bool) -> boo
         return False
 
 
+_APP_USER_MODEL_ID = "SecretGrounds.CustomerClient"
+_app_identity_applied = False
+
+
+def apply_windows_app_identity() -> None:
+    """Give the process its own AppUserModelID so Windows groups the taskbar
+    button under the Secret Grounds app rather than lumping it in with the
+    launching powershell.exe, and so the jump-list header resolves to our
+    identity (and icon) instead of a generic one. Safe to call more than once;
+    only the first call has any effect."""
+    global _app_identity_applied
+    if _app_identity_applied or sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(_APP_USER_MODEL_ID)
+        _app_identity_applied = True
+        _diagnostic(f"app user model id set to {_APP_USER_MODEL_ID}")
+    except Exception as error:
+        _diagnostic(f"app user model id set failed: {error}")
+
+
+def apply_native_window_icon(window: webview.Window) -> None:
+    """Force the Secret Grounds icon onto a WinForms host via WM_SETICON.
+
+    pywebview sets Form.Icon at construction, but these windows are frameless
+    and their ShowInTaskbar / ex-style gets rewritten at runtime, which can
+    drop the taskbar button back to the stock application icon. Re-sending
+    WM_SETICON against the live top-level handle after the page loads pins our
+    icon to whatever button Windows is actually showing. Best-effort."""
+    if sys.platform != "win32":
+        return
+    ico_path = get_logo_ico_path()
+    if ico_path is None:
+        return
+    try:
+        from ctypes import wintypes
+
+        hwnd_value = _taskbar_hwnd(window)
+        if not hwnd_value:
+            return
+        hwnd = wintypes.HWND(hwnd_value)
+
+        load_image = ctypes.windll.user32.LoadImageW
+        load_image.argtypes = [
+            wintypes.HINSTANCE,
+            wintypes.LPCWSTR,
+            wintypes.UINT,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        load_image.restype = wintypes.HANDLE
+        send_message = ctypes.windll.user32.SendMessageW
+        send_message.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        send_message.restype = wintypes.LPARAM
+
+        image_icon = 1
+        lr_loadfromfile = 0x00000010
+        wm_seticon = 0x0080
+        get_metric = ctypes.windll.user32.GetSystemMetrics
+        small_cx, small_cy = get_metric(49), get_metric(50)  # SM_CXSMICON / SM_CYSMICON
+        big_cx, big_cy = get_metric(11), get_metric(12)  # SM_CXICON / SM_CYICON
+
+        for icon_size_kind, cx, cy in ((0, small_cx, small_cy), (1, big_cx, big_cy)):
+            handle = load_image(None, str(ico_path), image_icon, cx, cy, lr_loadfromfile)
+            if handle:
+                send_message(hwnd, wm_seticon, icon_size_kind, handle)
+        _diagnostic(f"native window icon applied hwnd=0x{hwnd_value:X}")
+    except Exception as error:
+        _diagnostic(f"native window icon failed: {error}")
+
+
 def set_native_window_minimized(window: webview.Window, is_minimized: bool) -> bool:
     try:
         from ctypes import wintypes
@@ -929,6 +1012,7 @@ class SecretGroundsWebViewHost:
         start_callback: Callable[[], None] | None = None,
         lock_only: bool = False,
     ) -> None:
+        apply_windows_app_identity()
         self.create_windows(lock_only=lock_only)
 
         def on_start() -> None:
@@ -939,7 +1023,13 @@ class SecretGroundsWebViewHost:
             _diagnostic("startup callback returned")
 
         _diagnostic("before webview.start gui=edgechromium")
-        webview.start(on_start, gui="edgechromium", debug=debug, private_mode=True)
+        webview.start(
+            on_start,
+            gui="edgechromium",
+            debug=debug,
+            private_mode=True,
+            **_webview_icon_kwargs(),
+        )
         _diagnostic("after webview.start")
 
     def _on_start(self) -> None:
@@ -960,6 +1050,8 @@ class SecretGroundsWebViewHost:
         _diagnostic(f"page-loaded event key={key}")
         self.loaded.add(key)
         window = self.windows.get(key)
+        if window is not None:
+            apply_native_window_icon(window)
         if window is not None and self.window_visibility.get(key) is False:
             set_native_window_visibility(window, False)
         if key == "lock":
@@ -1560,7 +1652,13 @@ def run_webview_customer_overlay_preview(view: str, right_offset: int = 16) -> N
         _diagnostic(f"overlay preview startup callback view={view} renderer={webview.renderer}")
 
     print(f"Secret Grounds WebView overlay preview: {view}", flush=True)
-    webview.start(preview_started, gui="edgechromium", debug=False, private_mode=True)
+    webview.start(
+        preview_started,
+        gui="edgechromium",
+        debug=False,
+        private_mode=True,
+        **_webview_icon_kwargs(),
+    )
 
 
 if __name__ == "__main__":
