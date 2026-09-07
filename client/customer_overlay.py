@@ -813,6 +813,16 @@ class CustomerOverlayController:
             self._build_collapsed_window()
         if self.collapsed_root is None:
             return
+        # refresh_gui() runs this on every background refresh (Open Time ticks
+        # it every second, and every dashboard time push calls it too). All the
+        # work below -- geometry, rounded corners, deiconify, and especially
+        # re-setting -topmost -- must happen only when the pill is first shown,
+        # not repeatedly: re-asserting -topmost on Windows yanks the pill back
+        # to the front of the Z-order, so it kept popping over whatever the
+        # customer had clicked. WS_EX_TOPMOST set once already keeps it above
+        # ordinary/game windows without the constant re-raise.
+        if self.collapsed_root.state() != "withdrawn":
+            return
         width, height = 174, 38
         x, y = self._default_geometry(self.collapsed_root, width, height)
         self.collapsed_root.geometry(f"{width}x{height}+{x}+{y}")
@@ -820,10 +830,8 @@ class CustomerOverlayController:
         # Deliberately does not call focus_force()/lift() with keyboard
         # focus: the collapsed tab must stay visible over a fullscreen game
         # without stealing its input until the user actually clicks it.
-        was_hidden = self.collapsed_root.state() == "withdrawn"
         self.collapsed_root.deiconify()
-        if was_hidden:
-            theme.fade_in(self.collapsed_root, duration_ms=100, steps=6)
+        theme.fade_in(self.collapsed_root, duration_ms=100, steps=6)
         self.collapsed_root.attributes("-topmost", True)
 
     def _show_tk_reminder_hud(self, text: str) -> None:
