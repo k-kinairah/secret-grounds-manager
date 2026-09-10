@@ -125,6 +125,7 @@ from server.schemas import (
     SalesOperatorCollection,
     SalesOperatorTransaction,
     FinancesMonthSummary,
+    SalesEpochResponse,
     OneOffExpenseRequest,
     SetBillAmountRequest,
     ShopBillCreateRequest,
@@ -185,7 +186,12 @@ from server.income_attribution import resolve_pending_payments_for_configured_pc
 from server.remote_command_repository import PCMetadataRepository, RemoteCommandRepository
 from server.pc_layout_repository import IncomeGroupRepository, OperatorStateRepository, PCLayoutRepository
 from server.prepared_session_repository import PreparedSessionRepository
-from server.finances_repository import FinancesRepository
+from server.finances_repository import (
+    FinancesRepository,
+    clear_sales_epoch,
+    get_sales_epoch,
+    set_sales_epoch,
+)
 from server.hostname_identity import derive_station_name_from_hostname
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
@@ -1514,6 +1520,16 @@ def resolve_sales_range(
 
     start_at = datetime.combine(start, time.min, tzinfo=shop_tz).astimezone(timezone.utc)
     end_at = datetime.combine(end, time.min, tzinfo=shop_tz).astimezone(timezone.utc)
+
+    # Sales epoch: when the owner has "reset" the books (e.g. after importing
+    # carried-over member balances), no report may reach behind that moment.
+    # Clamped here so every caller -- sales report, operator collections,
+    # today's total, net income -- inherits it from the one shared range.
+    sales_epoch = get_sales_epoch()
+    if sales_epoch is not None:
+        start_at = min(max(start_at, sales_epoch), end_at)
+        start = start_at.astimezone(shop_tz).date()
+
     grouping = "hour" if (end_at - start_at) <= timedelta(days=2) else "day"
     return start_at, end_at, grouping, shop_tz, start, end - timedelta(days=1)
 
@@ -2199,6 +2215,27 @@ def get_finances_summary(month: str, _: object = Depends(require_role("admin")))
     start_at, end_at = _month_utc_range(month)
     income = _collected_income(start_at, end_at)
     return finances_repository.resolve_month(month, income)
+
+
+@app.get("/finances/sales-epoch", response_model=SalesEpochResponse)
+def get_sales_epoch_endpoint(_: object = Depends(require_role("admin"))) -> SalesEpochResponse:
+    return SalesEpochResponse(sales_epoch_at=get_sales_epoch())
+
+
+@app.post("/finances/sales-epoch", response_model=SalesEpochResponse)
+def set_sales_epoch_endpoint(current_user=Depends(require_role("admin"))) -> SalesEpochResponse:
+    """Zero the books from now on. Reporting only: every sales / operator
+    collections / net-income figure will count payments from this moment
+    onward. Deletes nothing -- payments, member time balances, member
+    history, and sessions are all untouched -- and DELETE undoes it."""
+    epoch_at = set_sales_epoch(current_utc_time(), get_actor_user_id(current_user))
+    return SalesEpochResponse(sales_epoch_at=epoch_at)
+
+
+@app.delete("/finances/sales-epoch", response_model=SalesEpochResponse)
+def clear_sales_epoch_endpoint(current_user=Depends(require_role("admin"))) -> SalesEpochResponse:
+    clear_sales_epoch(get_actor_user_id(current_user))
+    return SalesEpochResponse(sales_epoch_at=None)
 
 
 @app.get("/dashboard/operator-sale", response_model=OperatorSaleSummary)

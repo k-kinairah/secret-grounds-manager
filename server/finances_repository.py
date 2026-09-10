@@ -16,6 +16,8 @@ expense tracking.
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -45,6 +47,60 @@ def _bill_from_row(row) -> ShopBillRecord:
         created_at=row["created_at"],
         archived_at=row["archived_at"],
     )
+
+
+# The sales epoch is a single operational timestamp (not part of the
+# AdminSettings document), so it lives in the generic admin_settings table
+# under its own key. When set, every sales / operator-collections /
+# net-income figure counts only payments at or after this moment -- used to
+# zero the books after migrating carried-over member balances from another
+# system, without deleting anything. Clearing it restores full history.
+_SALES_EPOCH_KEY = "sales_epoch"
+
+
+def get_sales_epoch() -> datetime | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT value_json FROM admin_settings WHERE setting_key = ?",
+            (_SALES_EPOCH_KEY,),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        raw = json.loads(row["value_json"])
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+
+
+def set_sales_epoch(epoch_at: datetime, actor_user_id: str | None) -> datetime:
+    now_iso = current_utc_time().isoformat()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO admin_settings (setting_key, value_json, updated_by_user_id, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(setting_key) DO UPDATE SET
+                value_json = excluded.value_json,
+                updated_by_user_id = excluded.updated_by_user_id,
+                updated_at = excluded.updated_at
+            """,
+            (_SALES_EPOCH_KEY, json.dumps(epoch_at.isoformat()), actor_user_id, now_iso),
+        )
+    return epoch_at
+
+
+def clear_sales_epoch(actor_user_id: str | None) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            "DELETE FROM admin_settings WHERE setting_key = ?",
+            (_SALES_EPOCH_KEY,),
+        )
 
 
 class FinancesRepository:

@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { fetchCurrentUser, fetchSalesReport, getSalesExportUrl, type SalesReportFilters } from "@/lib/api";
+import {
+  clearSalesEpoch,
+  fetchCurrentUser,
+  fetchSalesEpoch,
+  fetchSalesReport,
+  getSalesExportUrl,
+  resetSalesEpoch,
+  type SalesReportFilters
+} from "@/lib/api";
 import { formatDateTime, formatMoney, formatNaturalDuration } from "@/lib/time";
 import type { PaymentMethod, PaymentStatus, SalesOperatorBreakdown, SalesOperatorCollection, SalesOperatorTransaction, SalesPeriod, SalesReport, SalesSummary, SalesType, UserRole } from "@/lib/types";
 import styles from "@/app/sales/sales.module.css";
@@ -184,6 +192,14 @@ function reportDateRangeLabel(startDate: string, endDate: string): string {
   return startText === endText ? startText : `${startText} – ${endText}`;
 }
 
+// The sales epoch is a UTC ISO timestamp; show it in the viewer's locale.
+function formatSalesEpoch(iso: string): string {
+  const parsed = new Date(iso);
+  return Number.isNaN(parsed.getTime())
+    ? iso
+    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(parsed);
+}
+
 // Plain-text daily summary: date, grand totals, and each operator's collected
 // total. Built entirely from the already-loaded report -- no extra request.
 function buildSalesSummaryText(report: SalesReport, periodLabel: string): string {
@@ -252,6 +268,9 @@ export function SalesManager() {
   const [role, setRole] = useState<UserRole | null>(null);
   const [showNetIncome, setShowNetIncome] = useState(false);
   const canSeeNetIncome = role === "admin" || role === "owner";
+  const [salesEpochAt, setSalesEpochAt] = useState<string | null>(null);
+  const [showResetSales, setShowResetSales] = useState(false);
+  const [salesRefreshKey, setSalesRefreshKey] = useState(0);
 
   const filters: SalesReportFilters = useMemo(
     () => ({ endDate, period, startDate }),
@@ -281,6 +300,24 @@ export function SalesManager() {
   }, []);
 
   useEffect(() => {
+    if (!canSeeNetIncome) {
+      setSalesEpochAt(null);
+      return;
+    }
+    let active = true;
+    fetchSalesEpoch()
+      .then((epoch) => {
+        if (active) setSalesEpochAt(epoch.sales_epoch_at);
+      })
+      .catch(() => {
+        if (active) setSalesEpochAt(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [canSeeNetIncome, salesRefreshKey]);
+
+  useEffect(() => {
     let isMounted = true;
     fetchSalesReport(filters)
       .then((nextReport) => {
@@ -303,7 +340,7 @@ export function SalesManager() {
     return () => {
       isMounted = false;
     };
-  }, [filters]);
+  }, [filters, salesRefreshKey]);
 
   const hasPayments = (report?.summary.payment_count ?? 0) > 0;
   const exportUrl = getSalesExportUrl(filters);
@@ -370,6 +407,11 @@ export function SalesManager() {
           <div>
             <h1>Sales</h1>
             <p>Collected payments, settlements, member purchases, and operator totals.</p>
+            {salesEpochAt ? (
+              <p className={styles.salesEpochNote}>
+                Showing sales recorded since {formatSalesEpoch(salesEpochAt)} (figures were reset).
+              </p>
+            ) : null}
           </div>
         </div>
         <div className={styles.headerActions}>
@@ -394,6 +436,15 @@ export function SalesManager() {
               Net Income
             </button>
           ) : null}
+          {canSeeNetIncome ? (
+            <button
+              className={styles.salesResetButton}
+              onClick={() => setShowResetSales(true)}
+              type="button"
+            >
+              {salesEpochAt ? "Sales reset" : "Reset sales figures"}
+            </button>
+          ) : null}
           <a className={styles.dailySummaryButton} href={exportUrl}>
             Export CSV
           </a>
@@ -401,6 +452,16 @@ export function SalesManager() {
       </header>
 
       {showNetIncome ? <NetIncomeModal onClose={() => setShowNetIncome(false)} /> : null}
+      {showResetSales ? (
+        <ResetSalesModal
+          epochAt={salesEpochAt}
+          onClose={() => setShowResetSales(false)}
+          onChanged={(next) => {
+            setSalesEpochAt(next);
+            setSalesRefreshKey((key) => key + 1);
+          }}
+        />
+      ) : null}
 
       {period === "custom" ? (
         <div className={styles.customRange}>
@@ -1573,5 +1634,107 @@ function BreakdownPanel({
         ))}
       </div>
     </section>
+  );
+}
+
+// Admin/owner action: zero the sales figures from now on (reporting only --
+// nothing is deleted, member balances/sessions untouched, reversible).
+function ResetSalesModal({
+  epochAt,
+  onChanged,
+  onClose
+}: {
+  epochAt: string | null;
+  onChanged: (next: string | null) => void;
+  onClose: () => void;
+}) {
+  const [isBusy, setIsBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isBusy) onClose();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isBusy, onClose]);
+
+  async function run(action: "reset" | "undo") {
+    setIsBusy(true);
+    setError(null);
+    try {
+      const result = action === "reset" ? await resetSalesEpoch() : await clearSalesEpoch();
+      onChanged(result.sales_epoch_at);
+      onClose();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not update the sales reset.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className={styles.transactionModalOverlay}
+      onClick={() => {
+        if (!isBusy) onClose();
+      }}
+      role="presentation"
+    >
+      <div
+        aria-label="Reset sales figures"
+        aria-modal="true"
+        className={`${styles.transactionModal} ${styles.dailySummaryModal}`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className={styles.transactionModalHeader}>
+          <div>
+            <h2>Reset sales figures</h2>
+            {epochAt ? <span>Last reset {formatSalesEpoch(epochAt)}</span> : null}
+          </div>
+          <CloseButton
+            className={pageStyles.iconButtonPremiumClose}
+            label="Close reset sales figures"
+            onClick={onClose}
+          />
+        </div>
+        <div className={styles.stackList}>
+          <article>
+            <p>
+              This zeroes the <strong>Sales report</strong>, <strong>Operator Collections</strong>,{" "}
+              <strong>Today&apos;s total</strong>, and <strong>Net Income</strong> — from now on they count
+              only what is recorded after this moment. Use it once you have finished importing members and
+              their carried-over hours.
+            </p>
+            <p>
+              Nothing is deleted. Member time balances, member history, and sessions are untouched, and you
+              can undo this at any time.
+            </p>
+          </article>
+          {error ? <div className={styles.miniEmpty}>{error}</div> : null}
+        </div>
+        <div className={styles.dailySummaryActions}>
+          {epochAt ? (
+            <button
+              className={styles.dailySummaryButton}
+              disabled={isBusy}
+              onClick={() => void run("undo")}
+              type="button"
+            >
+              {isBusy ? "Working…" : "Undo reset"}
+            </button>
+          ) : null}
+          <button
+            className={styles.salesResetButton}
+            disabled={isBusy}
+            onClick={() => void run("reset")}
+            type="button"
+          >
+            {isBusy ? "Working…" : epochAt ? "Reset again (to now)" : "Reset sales figures"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

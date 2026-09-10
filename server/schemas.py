@@ -1919,6 +1919,12 @@ class FinancesMonthSummary(BaseModel):
     lines: list[MonthlyBillLine] = Field(default_factory=list)
 
 
+class SalesEpochResponse(BaseModel):
+    # When set, every sales / operator-collections / net-income figure
+    # counts only payments at or after this UTC moment. None = full history.
+    sales_epoch_at: datetime | None = None
+
+
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)

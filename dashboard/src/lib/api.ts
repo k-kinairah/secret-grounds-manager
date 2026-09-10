@@ -477,6 +477,22 @@ export async function fetchFinancesSummary(month: string): Promise<FinancesMonth
   );
 }
 
+export interface SalesEpoch {
+  sales_epoch_at: string | null;
+}
+
+export async function fetchSalesEpoch(): Promise<SalesEpoch> {
+  return requestJson<SalesEpoch>(`${getApiBaseUrl()}/finances/sales-epoch`, { cache: "no-store" });
+}
+
+export async function resetSalesEpoch(): Promise<SalesEpoch> {
+  return requestJson<SalesEpoch>(`${getApiBaseUrl()}/finances/sales-epoch`, { method: "POST" });
+}
+
+export async function clearSalesEpoch(): Promise<SalesEpoch> {
+  return requestJson<SalesEpoch>(`${getApiBaseUrl()}/finances/sales-epoch`, { method: "DELETE" });
+}
+
 export async function fetchShopBills(): Promise<ShopBill[]> {
   return requestJson<ShopBill[]>(`${getApiBaseUrl()}/finances/bills`, { cache: "no-store" });
 }
