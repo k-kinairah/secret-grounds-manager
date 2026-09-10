@@ -1282,6 +1282,14 @@
   justify-content: flex-end;
 }
 
+.salesResetActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
+  padding-top: 8px;
+}
+
 /* --- Net Income modal --- */
 .netIncomeModal {
   background:

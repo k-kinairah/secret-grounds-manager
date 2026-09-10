@@ -1714,7 +1714,7 @@ function ResetSalesModal({
           </article>
           {error ? <div className={styles.miniEmpty}>{error}</div> : null}
         </div>
-        <div className={styles.dailySummaryActions}>
+        <div className={styles.salesResetActions}>
           {epochAt ? (
             <button
               className={styles.dailySummaryButton}
