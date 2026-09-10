@@ -52,7 +52,7 @@ The production dashboard can be opened on the cashier PC at `http://127.0.0.1:30
 
 Supported scheduled task name: `Secret Grounds Cashier Stack`.
 
-The GUI installer's "Start Secret Grounds automatically when this computer starts" option registers this task with the **at-startup** trigger, so the backend and dashboard come up on boot without anyone signing in.
+The GUI installer's "Start Secret Grounds automatically when this computer starts" option registers this task with the **at-startup** trigger, running as **SYSTEM** (RunLevel Highest), so the backend and dashboard come up on boot without anyone signing in. The at-sign-in variant instead runs as the interactive user, who has a session by then.
 
 - Install at system startup (installer default): `powershell -ExecutionPolicy Bypass -File scripts\install-cashier-autostart.ps1 -AtStartup`
 - Install after sign-in instead: `powershell -ExecutionPolicy Bypass -File scripts\install-cashier-autostart.ps1`

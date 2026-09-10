@@ -93,20 +93,26 @@ def test_autostart_task_names_are_stable() -> None:
     assert "MultipleInstances IgnoreNew" in client
 
 
-def test_cashier_autostart_task_runs_elevated_as_interactive_user() -> None:
-    # Registering a scheduled task without an explicit -Principal defaults to
-    # RunLevel Limited, which cannot write to {app}\data or {app}\logs under
-    # C:\Program Files\Secret Grounds\ -- the task reports LastTaskResult 1
-    # and both services stay stopped, even though the action, working
-    # directory, and trigger are all otherwise correct. Confirmed fixed on a
-    # clean cashier PC: registering with RunLevel Highest let the stack start
-    # both on manual Start-ScheduledTask and after a full reboot.
+def test_cashier_autostart_task_runs_at_boot_as_system() -> None:
+    # Two failure modes are guarded here:
+    #  1. No explicit -Principal defaults to RunLevel Limited, which cannot
+    #     write to {app}\data or {app}\logs under C:\Program Files\Secret
+    #     Grounds\ -- LastTaskResult 1, both services stay stopped. Fixed by
+    #     RunLevel Highest.
+    #  2. A "run only when user is logged on" (LogonType Interactive) principal
+    #     is not eligible to run at boot while the PC is on the sign-in screen,
+    #     and the -AtStartup trigger has elapsed by the time anyone signs in --
+    #     so the stack never came up on a normal reboot. Fixed by running the
+    #     -AtStartup task as SYSTEM (present in session 0, full rights to
+    #     {app}, no desktop needed since the stack starts with -NoBrowser).
     cashier = read("scripts/install-cashier-autostart.ps1")
     assert "New-ScheduledTaskPrincipal" in cashier
-    assert "-LogonType Interactive" in cashier
     assert "-RunLevel Highest" in cashier
-    assert "[System.Security.Principal.WindowsIdentity]::GetCurrent().Name" in cashier
     assert "-Principal $principal" in cashier
+    # -AtStartup -> SYSTEM; the -AtLogOn fallback keeps the interactive signer.
+    assert '-UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest' in cashier
+    assert "-LogonType Interactive" in cashier
+    assert "[System.Security.Principal.WindowsIdentity]::GetCurrent().Name" in cashier
 
     # Upgrades must replace a stale Limited-level task, never leave a
     # duplicate registered alongside the corrected one.
@@ -241,7 +247,7 @@ def main() -> None:
         test_required_deployment_scripts_exist,
         test_cashier_scripts_use_production_startup_and_pid_identity,
         test_autostart_task_names_are_stable,
-        test_cashier_autostart_task_runs_elevated_as_interactive_user,
+        test_cashier_autostart_task_runs_at_boot_as_system,
         test_client_autostart_task_runs_elevated_as_interactive_user,
         test_config_examples_are_secret_safe,
         test_development_and_production_urls_are_separate,
