@@ -1290,6 +1290,18 @@
   padding-top: 8px;
 }
 
+.salesResetConfirm {
+  border: 1px solid rgb(251 191 36 / 0.45);
+  border-radius: 12px;
+  background: rgb(245 158 11 / 0.1);
+}
+
+.salesResetConfirm strong {
+  color: #fcd34d;
+  display: block;
+  font-size: 13px;
+}
+
 /* --- Net Income modal --- */
 .netIncomeModal {
   background:

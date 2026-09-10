@@ -1650,14 +1650,20 @@ function ResetSalesModal({
 }) {
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<"reset" | "undo" | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !isBusy) onClose();
+      if (event.key !== "Escape" || isBusy) return;
+      if (pending) {
+        setPending(null);
+      } else {
+        onClose();
+      }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [isBusy, onClose]);
+  }, [isBusy, onClose, pending]);
 
   async function run(action: "reset" | "undo") {
     setIsBusy(true);
@@ -1668,6 +1674,7 @@ function ResetSalesModal({
       onClose();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not update the sales reset.");
+      setPending(null);
     } finally {
       setIsBusy(false);
     }
@@ -1677,7 +1684,12 @@ function ResetSalesModal({
     <div
       className={styles.transactionModalOverlay}
       onClick={() => {
-        if (!isBusy) onClose();
+        if (isBusy) return;
+        if (pending) {
+          setPending(null);
+        } else {
+          onClose();
+        }
       }}
       role="presentation"
     >
@@ -1712,28 +1724,58 @@ function ResetSalesModal({
               can undo this at any time.
             </p>
           </article>
+          {pending ? (
+            <article className={styles.salesResetConfirm}>
+              <strong>
+                {pending === "reset"
+                  ? "Zero all sales figures as of right now?"
+                  : "Bring every earlier sale back into the figures?"}
+              </strong>
+            </article>
+          ) : null}
           {error ? <div className={styles.miniEmpty}>{error}</div> : null}
         </div>
-        <div className={styles.salesResetActions}>
-          {epochAt ? (
+        {pending ? (
+          <div className={styles.salesResetActions}>
             <button
               className={styles.dailySummaryButton}
               disabled={isBusy}
-              onClick={() => void run("undo")}
+              onClick={() => setPending(null)}
               type="button"
             >
-              {isBusy ? "Working…" : "Undo reset"}
+              Cancel
             </button>
-          ) : null}
-          <button
-            className={styles.salesResetButton}
-            disabled={isBusy}
-            onClick={() => void run("reset")}
-            type="button"
-          >
-            {isBusy ? "Working…" : epochAt ? "Reset again (to now)" : "Reset sales figures"}
-          </button>
-        </div>
+            <button
+              className={styles.salesResetButton}
+              disabled={isBusy}
+              onClick={() => void run(pending)}
+              type="button"
+            >
+              {isBusy ? "Working…" : pending === "reset" ? "Yes, reset now" : "Yes, restore all"}
+            </button>
+          </div>
+        ) : (
+          <div className={styles.salesResetActions}>
+            {epochAt ? (
+              <button
+                className={styles.dailySummaryButton}
+                disabled={isBusy}
+                onClick={() => setPending("undo")}
+                type="button"
+              >
+                Undo reset
+              </button>
+            ) : null}
+            <button
+              className={styles.salesResetButton}
+              disabled={isBusy}
+              onClick={() => setPending("reset")}
+              type="button"
+            >
+              {epochAt ? "Reset again (to now)" : "Reset sales figures"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
