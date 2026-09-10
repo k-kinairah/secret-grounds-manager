@@ -16,6 +16,13 @@ DEFAULT_AUTO_CONNECT = True
 DEFAULT_RECONNECT_INTERVAL_SECONDS = 5
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 5
 
+# pc_name sentinel for the third identity mode: adopt this PC's Windows
+# computer name (the per-seat name a diskless system like iCafe8 already
+# assigns) and let the cashier bind it to a matching, pre-configured
+# station with no dashboard step. Like a blank pc_name it is NOT a literal
+# station id -- it is resolved at runtime -- so it skips is_valid_station_id.
+HOSTNAME_ADOPT_SENTINEL = "@hostname"
+
 
 def get_app_version() -> str:
     version_path = Path(__file__).resolve().parent.parent / "VERSION"
@@ -222,25 +229,26 @@ def validate_client_config(payload: Any, config_path: Path, require_pc_name: boo
     if not isinstance(raw_pc_name, str):
         raise ClientConfigError("Station ID must be text.")
     pc_name = raw_pc_name.strip()
-    if require_pc_name and not pc_name:
+    # Both automatic modes -- a blank pc_name (resolve from wired NIC MAC)
+    # and the "@hostname" sentinel (adopt this PC's Windows computer name)
+    # -- are resolved at runtime, not validated as literal station-id
+    # strings here.
+    is_automatic_identity = (not pc_name) or pc_name == HOSTNAME_ADOPT_SENTINEL
+    if require_pc_name and is_automatic_identity:
         raise ClientConfigError("Station ID is required.")
-    # A non-blank Station ID still has to be well-formed; a blank one is
-    # the automatic-mode sentinel and skips this check entirely -- it is
-    # resolved later from this PC's wired NIC MAC, never validated as a
-    # station-id string.
-    if pc_name and not is_valid_station_id(pc_name):
+    if not is_automatic_identity and not is_valid_station_id(pc_name):
         raise ClientConfigError("Station ID may contain only letters, numbers, dash, and underscore.")
 
     raw_display_name = payload.get("display_name")
     if raw_display_name is None or (
-        isinstance(raw_display_name, str) and not raw_display_name.strip() and not pc_name
+        isinstance(raw_display_name, str) and not raw_display_name.strip() and is_automatic_identity
     ):
-        # Absent, or blank in generic/automatic mode: mirror pc_name, which
-        # is itself blank when the station identity is resolved later from
-        # this PC's wired NIC MAC. A blank display_name alongside an
-        # explicit pc_name is still rejected below (fixed-station configs
-        # must name themselves).
-        display_name = pc_name
+        # Absent, or blank in an automatic-identity mode: there is no
+        # human-chosen name yet, so leave display_name empty (blank pc_name)
+        # or drop the sentinel. resolve_runtime_pc_name() fills both in once
+        # the real station identity is known. A blank display_name alongside
+        # an explicit fixed pc_name is still rejected below.
+        display_name = "" if pc_name == HOSTNAME_ADOPT_SENTINEL else pc_name
     else:
         if not isinstance(raw_display_name, str) or not raw_display_name.strip():
             raise ClientConfigError("Display Name is required.")

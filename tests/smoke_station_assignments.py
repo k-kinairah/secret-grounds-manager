@@ -112,6 +112,8 @@ def test_fresh_database_creates_station_assignments_table() -> None:
             "assigned_at",
             "assigned_by_user_id",
             "previous_pc_name",
+            "assignment_source",
+            "last_hostname",
         }, columns
 
         connection = sqlite3.connect(database_path)
@@ -505,6 +507,70 @@ def test_station_assignment_operations_never_touch_pc_layouts_or_pc_metadata() -
     print("pc_layouts/pc_metadata isolation test passed.")
 
 
+# --- hostname auto-adopt ---------------------------------------------------
+
+
+def test_record_sighting_stores_and_keeps_last_hostname() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
+        repository = fresh_env(Path(temp_directory) / "sighting-hostname.sqlite3")
+
+        first = repository.record_sighting("AA:BB:CC:DD:EE:20", "192.168.0.60", "PC14")
+        assert first.last_hostname == "PC14"
+        assert first.assignment_source == "manual"
+
+        # A later sighting with no hostname must not blank the recorded one.
+        second = repository.record_sighting("AA:BB:CC:DD:EE:20", "192.168.0.61")
+        assert second.last_hostname == "PC14"
+
+    print("record_sighting hostname retention test passed.")
+
+
+def test_try_auto_assign_binds_unclaimed_mac_as_auto_hostname() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
+        repository = fresh_env(Path(temp_directory) / "auto-assign.sqlite3")
+
+        repository.record_sighting("AA:BB:CC:DD:EE:21", "192.168.0.70", "PC-07")
+        record = repository.try_auto_assign_by_hostname("AA:BB:CC:DD:EE:21", "PC-07", "PC-07")
+
+        assert record is not None
+        assert record.status == "assigned"
+        assert record.pc_name == "PC-07"
+        assert record.assignment_source == "auto-hostname"
+        assert record.assigned_by_user_id is None
+        assert record.last_hostname == "PC-07"
+
+        # Idempotent for the same binding.
+        again = repository.try_auto_assign_by_hostname("AA:BB:CC:DD:EE:21", "PC-07", "PC-07")
+        assert again is not None and again.pc_name == "PC-07"
+        assert len(repository.list_assigned()) == 1
+
+    print("try_auto_assign_by_hostname binds unclaimed MAC test passed.")
+
+
+def test_try_auto_assign_never_steals_or_overrides() -> None:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_directory:
+        repository = fresh_env(Path(temp_directory) / "auto-assign-guard.sqlite3")
+
+        # (1) pc_name already held by another MAC -> refuse, no steal.
+        repository.assign("AA:BB:CC:DD:EE:22", "PC-08", assigned_by_user_id="owner-1")
+        assert repository.try_auto_assign_by_hostname("AA:BB:CC:DD:EE:23", "PC-08", "PC08") is None
+        assert repository.get_by_pc_name("PC-08").mac_address == "AA:BB:CC:DD:EE:22"
+
+        # (2) this MAC already assigned to a different station -> leave it.
+        repository.assign("AA:BB:CC:DD:EE:24", "PC-09", assigned_by_user_id="owner-1")
+        assert repository.try_auto_assign_by_hostname("AA:BB:CC:DD:EE:24", "PC-10", "PC10") is None
+        assert repository.get_by_pc_name("PC-09").mac_address == "AA:BB:CC:DD:EE:24"
+
+        # (3) this MAC was explicitly revoked -> never auto-readopt.
+        repository.record_sighting("AA:BB:CC:DD:EE:25", "192.168.0.80", "PC-11")
+        repository.assign("AA:BB:CC:DD:EE:25", "PC-11", assigned_by_user_id="owner-1")
+        repository.revoke("AA:BB:CC:DD:EE:25")
+        assert repository.try_auto_assign_by_hostname("AA:BB:CC:DD:EE:25", "PC-11", "PC-11") is None
+        assert repository.get_by_mac("AA:BB:CC:DD:EE:25").status == "revoked"
+
+    print("try_auto_assign_by_hostname guard rails test passed.")
+
+
 def main() -> None:
     tests = [
         test_fresh_database_creates_station_assignments_table,
@@ -526,6 +592,9 @@ def main() -> None:
         test_reassign_same_mac_to_a_different_pc_name,
         test_reassign_is_idempotent_for_the_same_binding,
         test_station_assignment_operations_never_touch_pc_layouts_or_pc_metadata,
+        test_record_sighting_stores_and_keeps_last_hostname,
+        test_try_auto_assign_binds_unclaimed_mac_as_auto_hostname,
+        test_try_auto_assign_never_steals_or_overrides,
     ]
     for test in tests:
         test()

@@ -172,6 +172,8 @@ export function StationAssignmentManager({ pcs, layoutSlots, refreshToken }: Sta
           <p>
             Which physical gaming PC is PC-01, PC-02, and so on. Diskless PCs detect themselves automatically --
             no MAC addresses to type in, and nothing here changes station type, income owner, or display settings.
+            A PC set up to adopt its computer name binds itself the first time it starts, as long as a station with
+            that name already exists under Setup / Layout; it shows an <strong>Auto</strong> tag below.
           </p>
         </div>
       </div>
@@ -196,6 +198,12 @@ export function StationAssignmentManager({ pcs, layoutSlots, refreshToken }: Sta
                   <dt>MAC</dt>
                   <dd className={styles.macAddress}>{station.mac_address}</dd>
                 </div>
+                {station.last_hostname ? (
+                  <div>
+                    <dt>Computer name</dt>
+                    <dd>{station.last_hostname}</dd>
+                  </div>
+                ) : null}
                 <div>
                   <dt>Last seen IP</dt>
                   <dd>{station.last_seen_ip ?? "Unknown"}</dd>
@@ -209,6 +217,12 @@ export function StationAssignmentManager({ pcs, layoutSlots, refreshToken }: Sta
                   <dd>{formatDateTime(station.last_seen_at)}</dd>
                 </div>
               </dl>
+              {station.last_hostname ? (
+                <p className={styles.computerTypeHint}>
+                  This PC calls itself <strong>{station.last_hostname}</strong>. To let it bind automatically, add a
+                  station with that exact name under Setup / Layout.
+                </p>
+              ) : null}
               <div className={styles.incomeGroupControl}>
                 <label className={styles.incomeGroupLabel} htmlFor={`assign-${station.mac_address}`}>
                   Assign as
@@ -265,6 +279,14 @@ export function StationAssignmentManager({ pcs, layoutSlots, refreshToken }: Sta
                   </span>
                 </div>
                 <dl className={styles.stationMetaList}>
+                  <div>
+                    <dt>Bound by</dt>
+                    <dd>
+                      {station.assignment_source === "auto-hostname"
+                        ? `Auto (adopted from computer name${station.last_hostname ? ` "${station.last_hostname}"` : ""})`
+                        : "Assigned in dashboard"}
+                    </dd>
+                  </div>
                   <div>
                     <dt>MAC</dt>
                     <dd className={styles.macAddress}>{station.mac_address}</dd>

@@ -102,6 +102,29 @@ def test_diskless_config_creation_stores_no_station_id(temp_directory: str) -> N
     assert not backups_dir(config_path).exists()
 
 
+def test_adopt_hostname_config_writes_sentinel_pc_name(temp_directory: str) -> None:
+    config_path = Path(temp_directory) / "config.json"
+    result = run_configure(
+        temp_directory,
+        config_path,
+        "Fresh",
+        ServerHost="192.168.1.50",
+        ServerPort="18001",
+        AdoptHostname=True,
+        AllowOffline=True,
+    )
+    assert result.returncode == 0, result.stderr
+    saved = read_config(config_path)
+    assert saved["pc_name"] == "@hostname"
+    assert saved["display_name"] == ""
+    assert saved["server_host"] == "192.168.1.50"
+
+    # The client-config reader must accept the sentinel as a valid config.
+    status = parse_status_lines(run_read_status(temp_directory, config_path).stdout)
+    assert status.get("STATUS") == "Ok", status
+    assert status.get("PC_NAME") == "@hostname", status
+
+
 def test_fixed_station_still_requires_station_id_without_diskless(temp_directory: str) -> None:
     # The diskless relaxation must not leak into the normal Fixed Station
     # path: a Fresh write with no Station ID still fails and writes nothing.
@@ -371,6 +394,7 @@ def main() -> None:
     tests = [
         test_fresh_config_creation,
         test_diskless_config_creation_stores_no_station_id,
+        test_adopt_hostname_config_writes_sentinel_pc_name,
         test_fixed_station_still_requires_station_id_without_diskless,
         test_read_status_accepts_diskless_config_as_ok,
         test_upgrade_preserves_existing_identity,

@@ -141,7 +141,30 @@ end;
 
 function IsDisklessClient: Boolean;
 begin
-  Result := (SelectedRole = 'client') and (SelectedClientMode = 'diskless');
+  Result := (SelectedRole = 'client') and
+    ((SelectedClientMode = 'diskless') or (SelectedClientMode = 'diskless_hostname'));
+end;
+
+function IsHostnameAdoptClient: Boolean;
+begin
+  Result := (SelectedRole = 'client') and (SelectedClientMode = 'diskless_hostname');
+end;
+
+function IsAutomaticStationId(Value: String): Boolean;
+begin
+  // Both diskless variants store a non-literal pc_name: '' (dashboard MAC
+  // assignment) or '@hostname' (adopt the seat's Windows computer name).
+  Result := (Trim(Value) = '') or (Trim(Value) = '@hostname');
+end;
+
+function ExpectedDisklessSentinel: String;
+begin
+  // The pc_name that configure-client.ps1 will write for the currently
+  // selected diskless variant.
+  if SelectedClientMode = 'diskless_hostname' then
+    Result := '@hostname'
+  else
+    Result := '';
 end;
 
 function IsClientPreserve: Boolean;
@@ -207,7 +230,9 @@ end;
 
 function GetDisklessSwitchArg(Value: String): String;
 begin
-  if IsDisklessClient then
+  if IsHostnameAdoptClient then
+    Result := ' -Diskless -AdoptHostname'
+  else if IsDisklessClient then
     Result := ' -Diskless'
   else
     Result := '';
@@ -449,10 +474,13 @@ begin
       SelectedRole := 'cashier';
   end;
 
-  // An existing "Ok" client config with no Station ID is an already-prepared
-  // diskless master image; otherwise default to a fixed, individually
+  // An existing "Ok" client config with a non-literal Station ID is an
+  // already-prepared diskless master image; '@hostname' is the adopt-the-
+  // computer-name variant. Otherwise default to a fixed, individually
   // installed station.
-  if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') then
+  if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '@hostname') then
+    SelectedClientMode := 'diskless_hostname'
+  else if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') then
     SelectedClientMode := 'diskless'
   else
     SelectedClientMode := 'fixed';
@@ -504,9 +532,11 @@ begin
     False
   );
   ClientModePage.Add('Fixed Station - a normal, individually installed gaming PC with a permanent Station ID.');
-  ClientModePage.Add('Diskless / Automatic - prepare a shared/master image; every cloned PC is assigned automatically.');
-  ClientModePage.Values[0] := SelectedClientMode <> 'diskless';
+  ClientModePage.Add('Diskless / Automatic - shared/master image; each cloned PC is assigned once from the dashboard.');
+  ClientModePage.Add('Diskless / Adopt PC name - shared/master image; each cloned PC adopts the name the diskless system gives it, no dashboard step.');
+  ClientModePage.Values[0] := SelectedClientMode = 'fixed';
   ClientModePage.Values[1] := SelectedClientMode = 'diskless';
+  ClientModePage.Values[2] := SelectedClientMode = 'diskless_hostname';
 
   CashierOptionsPage := CreateInputOptionPage(
     ClientModePage.ID,
@@ -585,7 +615,7 @@ begin
   if PageID = ClientPage.ID then
     Result := (SelectedRole <> 'client') or (SelectedClientMode <> 'fixed');
   if PageID = ClientDisklessPage.ID then
-    Result := (SelectedRole <> 'client') or (SelectedClientMode <> 'diskless');
+    Result := not IsDisklessClient;
   if PageID = CashierOptionsPage.ID then
     Result := SelectedRole <> 'cashier';
 end;
@@ -601,7 +631,9 @@ begin
   end;
 
   if CurPageID = ClientModePage.ID then begin
-    if ClientModePage.Values[1] then
+    if ClientModePage.Values[2] then
+      SelectedClientMode := 'diskless_hostname'
+    else if ClientModePage.Values[1] then
       SelectedClientMode := 'diskless'
     else
       SelectedClientMode := 'fixed';
@@ -610,7 +642,11 @@ begin
   if CurPageID = ClientDisklessPage.ID then begin
     if Trim(ClientDisklessPage.Values[0]) = '' then begin MsgBox('Cashier server address is required.', mbError, MB_OK); Result := False; Exit; end;
 
-    if (ExistingConfigStatus = 'Ok') and (Trim(ExistingStationId) = '') and
+    // Preserve only when the existing config already matches the chosen
+    // diskless variant's pc_name sentinel ('' for dashboard-assignment,
+    // '@hostname' for adopt-computer-name) and the server host is unchanged.
+    if (ExistingConfigStatus = 'Ok') and
+       (Trim(ExistingStationId) = ExpectedDisklessSentinel) and
        (ClientDisklessPage.Values[0] = ExistingServerHost) then
       ConfigModeValue := 'Preserve'
     else if ExistingConfigStatus = 'Ok' then
@@ -641,7 +677,7 @@ begin
       Exit;
     end;
 
-    if SelectedClientMode = 'diskless' then begin
+    if IsDisklessClient then begin
       if ClientOptionsPage.Values[1] then begin
         Result := MsgBox('Offline preparation skips the cashier server reachability check. The diskless image will still be assigned automatically once the gaming PCs can reach the cashier. Continue?', mbConfirmation, MB_YESNO) = IDYES;
         Exit;
@@ -764,17 +800,26 @@ procedure RunClientPostInstall;
 begin
   if SelectedRole <> 'client' then Exit;
 
-  if SelectedClientMode = 'diskless' then begin
+  if IsDisklessClient then begin
     // This is a master image, not a live station. Auto-start is already
     // registered by the checkbox-gated [Run] entry (so every cloned PC
     // launches the client on boot), but the client must not run here --
-    // each clone resolves its own identity from its wired NIC MAC on first
-    // boot and is assigned from the dashboard.
-    MsgBox('Diskless image ready' + #13#10#13#10 +
-      'This computer has been configured for automatic station assignment. ' +
-      'You can now capture/clone this installation to the gaming PCs. ' +
-      'Do not assign a Station ID to this image.',
-      mbInformation, MB_OK);
+    // each clone resolves its own identity on first boot: from its wired
+    // NIC MAC (assigned from the dashboard), or from its Windows computer
+    // name (adopt-PC-name variant).
+    if IsHostnameAdoptClient then
+      MsgBox('Diskless image ready' + #13#10#13#10 +
+        'This computer has been configured to adopt the PC name the diskless ' +
+        'system assigns each seat. Create the matching stations (PC-01, PC-02, ...) ' +
+        'under Setup / Layout on the dashboard, then capture/clone this image to ' +
+        'the gaming PCs. Each seat binds itself on first boot -- no per-PC step.',
+        mbInformation, MB_OK)
+    else
+      MsgBox('Diskless image ready' + #13#10#13#10 +
+        'This computer has been configured for automatic station assignment. ' +
+        'You can now capture/clone this installation to the gaming PCs. ' +
+        'Do not assign a Station ID to this image.',
+        mbInformation, MB_OK);
     Exit;
   end;
 

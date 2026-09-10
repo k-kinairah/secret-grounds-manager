@@ -62,19 +62,20 @@ The task starts in the Secret Grounds folder, uses the production startup script
 
 ## Customer PC Installation
 
-The installer's **Customer Computer** role has two modes (second wizard step, "Customer Computer Setup"):
+The installer's **Customer Computer** role has three modes (second wizard step, "Customer Computer Setup"):
 
 - **Fixed Station** - a normal, individually installed gaming PC. The wizard asks for Station ID, display name, cashier IP, and port, validates the server (`/healthz` version + `/client-registration/check`), and writes `config.json` with that `pc_name`.
-- **Diskless / Automatic** - preparing a shared/master image. The wizard asks only for cashier IP and port, does **not** ask for a Station ID, and writes `config.json` with `"pc_name": ""`. Each PC cloned from the image resolves its own identity from its wired NIC MAC via `/stations/resolve` on first boot and is assigned from the dashboard (Setup/Layout -> Station Assignment). The installer configures client auto-start on the image but does not launch the client; capture/clone the image afterward. Offline preparation is still available when the cashier is unreachable.
+- **Diskless / Automatic** - preparing a shared/master image. The wizard asks only for cashier IP and port, does **not** ask for a Station ID, and writes `config.json` with `"pc_name": ""`. Each PC cloned from the image resolves its own identity from its wired NIC MAC via `/stations/resolve` on first boot and is **assigned once from the dashboard** (Setup/Layout -> Station Assignment). The installer configures client auto-start on the image but does not launch the client; capture/clone the image afterward. Offline preparation is still available when the cashier is unreachable.
+- **Diskless / Adopt PC name** - same shared/master image flow, but `config.json` is written with `"pc_name": "@hostname"`. On first boot each seat reports its Windows computer name (the per-seat name a diskless system such as iCafe8/CCBoot already assigns) and the cashier **auto-binds** it to a station with a matching name, with **no dashboard step per PC**. Requirements: (a) the diskless system must give each seat a real, distinct computer name (`PC14`, `PC-14`, ... - Windows placeholders like `DESKTOP-xxxx` are ignored); (b) a station with that name must already exist under Setup/Layout (`PC-01`..`PC-15` are seeded by default; `PC14`/`PC-014` fold to `PC-14`). If the name has no matching station, or is already held by another PC, or the PC was explicitly unassigned, the seat falls back to the "waiting for station assignment" screen and its computer name is shown in **Newly Detected Computers**. Auto-bound stations show a "Bound by: Auto" line and can still be reassigned or unassigned.
 
-Neither mode requires hand-editing `config.json`.
+None of the modes require hand-editing `config.json`.
 
 ### Manual (portable folder, no installer)
 
 1. Copy the client folder and shared deployment scripts, or copy the full portable folder if that is how the shop is staged.
 2. Copy `client/config.example.json` to `client/config.json`.
 3. Set `server_host` to the cashier/server LAN IPv4 address.
-4. Set a unique `pc_name` for that PC (fixed station), or leave `pc_name` blank / omit it for a diskless master image.
+4. Set a unique `pc_name` for that PC (fixed station); leave `pc_name` blank / omit it for a diskless image assigned from the dashboard; or set `pc_name` to `"@hostname"` for a diskless image that adopts each seat's Windows computer name.
 5. Set `server_port` to the configured backend port.
 6. Test in a safe single-PC setup with `SECRET_GROUNDS_TEST_MODE=true` only when needed and start with `scripts\start-client.ps1 -AllowTestMode`.
 7. For production, keep test mode off and run `scripts\start-client.ps1`.

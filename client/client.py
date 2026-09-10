@@ -1,3 +1,4 @@
+import socket
 import time
 import traceback
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from client.config import (
     LOGOUT_SHUTDOWN_GRACE_SECONDS,
     EXPIRATION_SOUND_ENABLED,
     HEARTBEAT_INTERVAL_SECONDS,
+    HOSTNAME_ADOPT_SENTINEL,
     REQUEST_TIMEOUT_SECONDS,
     SCREEN_CAPTURE_INTERVAL_SECONDS,
     SCREEN_CAPTURE_JPEG_QUALITY,
@@ -1824,28 +1826,45 @@ def load_runtime_config() -> ClientConfig:
 def resolve_runtime_pc_name(runtime_config: ClientConfig) -> tuple[str, str | None]:
     """Returns (pc_name, display_name) to actually run as.
 
-    Explicit/development mode: runtime_config.pc_name is already set (a
-    human configured this specific station), so it is used unchanged --
-    today's behavior, completely untouched.
+    Fixed-station mode: runtime_config.pc_name is a literal name (a human
+    configured this specific station), used unchanged.
 
-    Automatic/diskless mode: runtime_config.pc_name is blank, so this
-    blocks until the server's /stations/resolve resolves this physical
-    machine's wired NIC MAC to a runtime pc_name. That name is kept only
-    in memory for the life of this process -- it is never written back
-    into config.json. A restart re-resolves from the MAC, so the server's
-    station_assignments table always remains the sole authority (NIC
-    replacement/reassignment take effect on the very next start, with no
-    local file to go stale).
+    Automatic modes: the name is resolved at runtime and kept only in
+    memory for the life of this process -- never written back to
+    config.json, so the server's station_assignments table always stays
+    the sole authority and a restart re-resolves cleanly.
+      - blank pc_name: block on /stations/resolve until this machine's
+        wired NIC MAC is assigned a station in the dashboard.
+      - "@hostname" sentinel: also send this PC's Windows computer name, so
+        the server can auto-bind the MAC to a matching, pre-configured
+        station with no dashboard step (the iCafe8/CCBoot flow where the
+        diskless system already gives each seat a stable per-MAC name). If
+        the hostname does not match a configured station, it falls back to
+        the same "wait for assignment" screen.
     """
-    if runtime_config.pc_name:
+    if runtime_config.pc_name and runtime_config.pc_name != HOSTNAME_ADOPT_SENTINEL:
         return runtime_config.pc_name, runtime_config.display_name
 
-    print(
-        "No pc_name configured; resolving this station's identity automatically "
-        "from its wired NIC MAC address."
-    )
+    adopt_hostname = runtime_config.pc_name == HOSTNAME_ADOPT_SENTINEL
+    reported_hostname = socket.gethostname().strip() if adopt_hostname else None
+
+    if adopt_hostname:
+        print(
+            "No fixed pc_name configured; resolving this station's identity "
+            f"automatically from its computer name ({reported_hostname!r}) and "
+            "wired NIC MAC address."
+        )
+    else:
+        print(
+            "No pc_name configured; resolving this station's identity automatically "
+            "from its wired NIC MAC address."
+        )
     resolved = resolve_station_identity(
-        resolve_fn=build_http_resolve_fn(runtime_config.server_url, runtime_config.request_timeout_seconds),
+        resolve_fn=build_http_resolve_fn(
+            runtime_config.server_url,
+            runtime_config.request_timeout_seconds,
+            hostname=reported_hostname,
+        ),
         poll_interval_seconds=runtime_config.reconnect_interval_seconds,
     )
     return resolved.pc_name, resolved.display_name

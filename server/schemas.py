@@ -486,6 +486,7 @@ class PCLayoutUpdate(BaseModel):
 
 
 StationAssignmentStatus = Literal["unclaimed", "assigned", "revoked"]
+StationAssignmentSource = Literal["manual", "auto-hostname"]
 
 
 class StationAssignmentRecord(BaseModel):
@@ -502,6 +503,15 @@ class StationAssignmentRecord(BaseModel):
     assigned_at: datetime | None = None
     assigned_by_user_id: str | None = None
     previous_pc_name: str | None = None
+    # "manual" = an owner assigned it in the dashboard; "auto-hostname" = the
+    # /stations/resolve auto-adopt path bound it from the seat's Windows
+    # computer name. Older rows created before this column predate the
+    # feature and read back as "manual".
+    assignment_source: StationAssignmentSource = "manual"
+    # Last Windows computer name this MAC reported at /stations/resolve, if
+    # any. Shown in the dashboard's "Newly Detected" panel so the owner can
+    # see what an unassigned seat calls itself.
+    last_hostname: str | None = None
 
 
 class StationResolveRequest(BaseModel):
@@ -515,6 +525,12 @@ class StationResolveRequest(BaseModel):
 
     mac_address: str = Field(..., min_length=1)
     ip_address: str = Field(..., min_length=1)
+    # Optional: the seat's Windows computer name, sent only by clients in
+    # "@hostname" identity mode. Server may auto-bind this MAC to a
+    # matching, already-configured station (see
+    # server/hostname_identity.py). A pc_name still cannot be smuggled in --
+    # the server derives and validates the name itself.
+    hostname: str | None = Field(default=None, max_length=253)
 
     @field_validator("mac_address")
     @classmethod
@@ -531,6 +547,14 @@ class StationResolveRequest(BaseModel):
         if not cleaned:
             raise ValueError("ip_address must not be blank")
         return cleaned
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class StationResolveResponse(BaseModel):

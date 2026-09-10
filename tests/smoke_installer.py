@@ -72,13 +72,15 @@ def test_installer_supports_fixed_and_diskless_customer_modes() -> None:
     )
 
     # Diskless config write path: no Station ID, and the -Diskless switch is
-    # threaded through to configure-client.ps1.
+    # threaded through to configure-client.ps1. Both diskless variants share
+    # the diskless page / validation via IsDisklessClient.
     assert "GetDisklessSwitchArg" in source
     assert "-Diskless" in source
     assert "ValidateServerReachableAndVersioned" in source
+    assert "function IsDisklessClient" in source
     # ...but no station-availability check for diskless (pc_name is blank).
     diskless_opts_block = source[
-        source.index("if SelectedClientMode = 'diskless' then begin") :
+        source.index("if IsDisklessClient then begin") :
         source.index("Result := ValidateClientOnline(ClientPage.Values[1]")
     ]
     assert "client-registration/check" not in diskless_opts_block
@@ -90,10 +92,27 @@ def test_installer_supports_fixed_and_diskless_customer_modes() -> None:
         source.index("procedure RunClientPostInstall")
         : source.index("procedure CurStepChanged")
     ]
-    assert "if SelectedClientMode = 'diskless' then begin" in run_block
+    assert "if IsDisklessClient then begin" in run_block
     assert "mbInformation" in run_block
     # The offline-prep guard the existing launch path relies on is untouched.
     assert "if not (IsClientOnline or IsClientPreserve) then Exit;" in run_block
+
+
+def test_installer_supports_hostname_adopt_diskless_variant() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    # Third radio on the mode page + its plumbing.
+    assert "diskless_hostname" in source
+    assert "Adopt PC name" in source
+    assert "function IsHostnameAdoptClient" in source
+    assert "ClientModePage.Values[2]" in source
+    # The extra switch reaches configure-client.ps1 only for this variant.
+    switch_fn = source[
+        source.index("function GetDisklessSwitchArg")
+        : source.index("function GetDisklessSwitchArg") + 400
+    ]
+    assert "-Diskless -AdoptHostname" in switch_fn
+    # Existing "@hostname" config is recognised as this variant on re-run.
+    assert "Trim(ExistingStationId) = '@hostname'" in source
 
 
 def test_configure_client_supports_diskless_switch() -> None:
@@ -102,6 +121,9 @@ def test_configure_client_supports_diskless_switch() -> None:
     assert "if (-not $Diskless)" in source
     # Fixed-station requirements still enforced when -Diskless is absent.
     assert 'Assert-ClientValue (![string]::IsNullOrWhiteSpace($StationId)) "Station ID is required."' in source
+    # Hostname-adopt variant writes the "@hostname" sentinel and implies -Diskless.
+    assert "[switch]$AdoptHostname" in source
+    assert '$StationId = "@hostname"' in source
 
 
 def test_installer_detects_and_preserves_existing_client_config() -> None:
@@ -604,6 +626,7 @@ def main() -> None:
         test_installer_preserves_cashier_data_by_default,
         test_installer_client_validation_is_present,
         test_installer_supports_fixed_and_diskless_customer_modes,
+        test_installer_supports_hostname_adopt_diskless_variant,
         test_configure_client_supports_diskless_switch,
         test_installer_detects_and_preserves_existing_client_config,
         test_installer_aborts_on_invalid_existing_client_config,

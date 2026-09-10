@@ -1601,6 +1601,18 @@ def initialize_database() -> None:
             ON station_assignments (status, last_seen_at)
             """
         )
+        # Added after the table shipped: how a binding was made ("manual" =
+        # owner assigned it in the dashboard, "auto-hostname" = the
+        # /stations/resolve auto-adopt path bound it from the seat's Windows
+        # computer name), and the last hostname a MAC reported at
+        # /stations/resolve (shown for still-unassigned seats).
+        add_column_if_missing(
+            connection,
+            "station_assignments",
+            "assignment_source",
+            "TEXT NOT NULL DEFAULT 'manual'",
+        )
+        add_column_if_missing(connection, "station_assignments", "last_hostname", "TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS remote_commands (

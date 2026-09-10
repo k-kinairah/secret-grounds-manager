@@ -49,17 +49,26 @@ def build_http_resolve_fn(
     server_url: str,
     request_timeout: int,
     session: requests.Session | None = None,
+    hostname: str | None = None,
 ) -> ResolveFn:
     """Production ResolveFn: POSTs to the server's /stations/resolve and
     returns the parsed JSON body. Kept separate from the polling loop below
     so the loop itself never depends on requests/HTTP directly and can be
-    driven by a fake in tests."""
+    driven by a fake in tests.
+
+    hostname is sent only in "@hostname" identity mode; when present the
+    server may auto-bind this MAC to a matching, pre-configured station.
+    """
     http_client = session or requests
+    cleaned_hostname = hostname.strip() if isinstance(hostname, str) else None
 
     def resolve_fn(mac_address: str, ip_address: str) -> dict[str, Any]:
+        body: dict[str, str] = {"mac_address": mac_address, "ip_address": ip_address}
+        if cleaned_hostname:
+            body["hostname"] = cleaned_hostname
         response = http_client.post(
             f"{server_url.rstrip('/')}/stations/resolve",
-            json={"mac_address": mac_address, "ip_address": ip_address},
+            json=body,
             timeout=request_timeout,
         )
         response.raise_for_status()

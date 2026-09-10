@@ -2,8 +2,16 @@ $ErrorActionPreference = "Stop"
 
 $Script:SgClientConfigRequiredFields = @("server_host", "server_port", "pc_name", "display_name")
 
+# pc_name sentinel for the "adopt this PC's Windows computer name" diskless
+# variant. Like a blank pc_name it is resolved at runtime, not a literal
+# station id, so it is exempt from the station-id format check.
+$Script:SgHostnameAdoptSentinel = "@hostname"
+
 function Test-SgStationIdFormat {
     param([string]$Value)
+    if ($Value -eq $Script:SgHostnameAdoptSentinel) {
+        return $true
+    }
     return $Value -match '^[A-Za-z0-9_-]+$'
 }
 

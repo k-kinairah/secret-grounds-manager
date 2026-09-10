@@ -145,6 +145,8 @@ export type StationAssignmentStatus = "unclaimed" | "assigned" | "revoked";
 
 // Physical-machine identity (mac_address -> pc_name), separate from
 // PcLayoutSlot's station type/income-owner/display configuration.
+export type StationAssignmentSource = "manual" | "auto-hostname";
+
 export interface StationAssignment {
   mac_address: string;
   pc_name: string | null;
@@ -155,6 +157,8 @@ export interface StationAssignment {
   assigned_at: string | null;
   assigned_by_user_id: string | null;
   previous_pc_name: string | null;
+  assignment_source: StationAssignmentSource;
+  last_hostname: string | null;
 }
 
 export interface SessionRecord {

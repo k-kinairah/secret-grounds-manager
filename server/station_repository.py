@@ -9,6 +9,15 @@ from server.schemas import StationAssignmentRecord, normalize_mac_address
 from server.time_utils import current_utc_time
 
 
+def _row_get(row: Any, key: str, default: Any = None) -> Any:
+    """Tolerate rows read before a newer column was added (older test DBs /
+    mid-migration reads): sqlite3.Row raises IndexError on an unknown key."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
 def row_to_station_assignment(row: Any) -> StationAssignmentRecord:
     return StationAssignmentRecord(
         mac_address=row["mac_address"],
@@ -20,6 +29,8 @@ def row_to_station_assignment(row: Any) -> StationAssignmentRecord:
         assigned_at=datetime.fromisoformat(row["assigned_at"]) if row["assigned_at"] else None,
         assigned_by_user_id=row["assigned_by_user_id"],
         previous_pc_name=row["previous_pc_name"],
+        assignment_source=_row_get(row, "assignment_source") or "manual",
+        last_hostname=_row_get(row, "last_hostname"),
     )
 
 
@@ -86,24 +97,34 @@ class StationAssignmentRepository:
             ).fetchall()
         return [row_to_station_assignment(row) for row in rows]
 
-    def record_sighting(self, mac_address: str, ip_address: str | None) -> StationAssignmentRecord:
-        """Passive bookkeeping only: refreshes first/last-seen and last-seen
-        IP for a MAC. Never touches status, pc_name, or assigned_* fields --
-        safe to call regardless of current assignment state."""
+    def record_sighting(
+        self,
+        mac_address: str,
+        ip_address: str | None,
+        hostname: str | None = None,
+    ) -> StationAssignmentRecord:
+        """Passive bookkeeping only: refreshes first/last-seen, last-seen IP,
+        and (when the client sent one) the last reported Windows computer
+        name for a MAC. Never touches status, pc_name, or assigned_* fields
+        -- safe to call regardless of current assignment state. A later
+        sighting with no hostname keeps the previously recorded one rather
+        than blanking it."""
         normalized_mac = require_mac_address(mac_address)
         now = current_utc_time()
         with get_connection() as connection:
             connection.execute(
                 """
                 INSERT INTO station_assignments (
-                    mac_address, pc_name, status, first_seen_at, last_seen_at, last_seen_ip
+                    mac_address, pc_name, status, first_seen_at, last_seen_at,
+                    last_seen_ip, last_hostname
                 )
-                VALUES (?, NULL, 'unclaimed', ?, ?, ?)
+                VALUES (?, NULL, 'unclaimed', ?, ?, ?, ?)
                 ON CONFLICT(mac_address) DO UPDATE SET
                     last_seen_at = excluded.last_seen_at,
-                    last_seen_ip = excluded.last_seen_ip
+                    last_seen_ip = excluded.last_seen_ip,
+                    last_hostname = COALESCE(excluded.last_hostname, station_assignments.last_hostname)
                 """,
-                (normalized_mac, now.isoformat(), now.isoformat(), ip_address),
+                (normalized_mac, now.isoformat(), now.isoformat(), ip_address, hostname),
             )
             row = connection.execute(
                 "SELECT * FROM station_assignments WHERE mac_address = ?",
@@ -117,6 +138,7 @@ class StationAssignmentRepository:
         mac_address: str,
         pc_name: str,
         assigned_by_user_id: str | None,
+        assignment_source: str = "manual",
     ) -> StationAssignmentRecord:
         """Bind an unclaimed or revoked MAC to pc_name. Rejects (409) a MAC
         that is already actively assigned elsewhere, and rejects (409) a
@@ -161,14 +183,16 @@ class StationAssignmentRepository:
                     """
                     INSERT INTO station_assignments (
                         mac_address, pc_name, status, first_seen_at, last_seen_at,
-                        last_seen_ip, assigned_at, assigned_by_user_id, previous_pc_name
+                        last_seen_ip, assigned_at, assigned_by_user_id, previous_pc_name,
+                        assignment_source
                     )
-                    VALUES (?, ?, 'assigned', ?, ?, NULL, ?, ?, NULL)
+                    VALUES (?, ?, 'assigned', ?, ?, NULL, ?, ?, NULL, ?)
                     ON CONFLICT(mac_address) DO UPDATE SET
                         pc_name = excluded.pc_name,
                         status = 'assigned',
                         assigned_at = excluded.assigned_at,
-                        assigned_by_user_id = excluded.assigned_by_user_id
+                        assigned_by_user_id = excluded.assigned_by_user_id,
+                        assignment_source = excluded.assignment_source
                     """,
                     (
                         normalized_mac,
@@ -177,6 +201,7 @@ class StationAssignmentRepository:
                         now.isoformat(),
                         now.isoformat(),
                         assigned_by_user_id,
+                        assignment_source,
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -184,6 +209,87 @@ class StationAssignmentRepository:
                     status_code=409,
                     detail=f"{cleaned_pc_name} was just claimed by another station.",
                 ) from error
+
+            row = connection.execute(
+                "SELECT * FROM station_assignments WHERE mac_address = ?",
+                (normalized_mac,),
+            ).fetchone()
+        assert row is not None
+        return row_to_station_assignment(row)
+
+    def try_auto_assign_by_hostname(
+        self,
+        mac_address: str,
+        pc_name: str,
+        hostname: str | None,
+    ) -> StationAssignmentRecord | None:
+        """Best-effort bind for the /stations/resolve auto-adopt path.
+
+        Unlike assign(), this NEVER raises on a conflict and NEVER overrides
+        a deliberate decision -- it returns None (caller then keeps the
+        client waiting) when:
+          - this MAC is already assigned to a different station,
+          - this MAC was explicitly revoked (owner said "not this one"),
+          - pc_name is already actively held by another MAC.
+        It binds only a genuinely unclaimed / never-seen MAC, and records
+        the binding as source "auto-hostname" with no assigned_by_user_id.
+        Idempotent: returns the existing record if this MAC already holds
+        pc_name.
+        """
+        normalized_mac = require_mac_address(mac_address)
+        cleaned_pc_name = require_pc_name(pc_name)
+        now = current_utc_time()
+
+        with get_connection() as connection:
+            existing_mac_row = connection.execute(
+                "SELECT * FROM station_assignments WHERE mac_address = ?",
+                (normalized_mac,),
+            ).fetchone()
+
+            if existing_mac_row is not None:
+                if existing_mac_row["status"] == "assigned":
+                    if existing_mac_row["pc_name"] == cleaned_pc_name:
+                        return row_to_station_assignment(existing_mac_row)
+                    return None
+                if existing_mac_row["status"] == "revoked":
+                    return None
+
+            conflicting_pc_row = connection.execute(
+                "SELECT mac_address FROM station_assignments WHERE pc_name = ? AND status = 'assigned'",
+                (cleaned_pc_name,),
+            ).fetchone()
+            if conflicting_pc_row is not None and conflicting_pc_row["mac_address"] != normalized_mac:
+                return None
+
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO station_assignments (
+                        mac_address, pc_name, status, first_seen_at, last_seen_at,
+                        last_seen_ip, assigned_at, assigned_by_user_id, previous_pc_name,
+                        assignment_source, last_hostname
+                    )
+                    VALUES (?, ?, 'assigned', ?, ?, NULL, ?, NULL, NULL, 'auto-hostname', ?)
+                    ON CONFLICT(mac_address) DO UPDATE SET
+                        pc_name = excluded.pc_name,
+                        status = 'assigned',
+                        assigned_at = excluded.assigned_at,
+                        assigned_by_user_id = NULL,
+                        assignment_source = 'auto-hostname',
+                        last_hostname = COALESCE(excluded.last_hostname, station_assignments.last_hostname)
+                    """,
+                    (
+                        normalized_mac,
+                        cleaned_pc_name,
+                        now.isoformat(),
+                        now.isoformat(),
+                        now.isoformat(),
+                        hostname,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                # Lost a race to another booting seat claiming the same name.
+                return None
 
             row = connection.execute(
                 "SELECT * FROM station_assignments WHERE mac_address = ?",

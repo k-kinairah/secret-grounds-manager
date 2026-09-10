@@ -13,7 +13,13 @@ param(
     [switch]$AllowOffline,
     # Diskless / automatic master-image config: no Station ID is stored;
     # each cloned PC resolves its own identity from its wired NIC MAC.
-    [switch]$Diskless
+    [switch]$Diskless,
+    # Diskless variant: instead of a blank pc_name (dashboard MAC
+    # assignment), write the "@hostname" sentinel so each cloned PC adopts
+    # the per-seat Windows computer name the diskless system assigns and the
+    # cashier auto-binds it to a matching pre-configured station. Implies
+    # -Diskless for validation purposes (no Station ID is entered).
+    [switch]$AdoptHostname
 )
 
 . "$PSScriptRoot\secret-grounds-common.ps1"
@@ -56,7 +62,16 @@ try {
     $StationId = $StationId.Trim()
     $DisplayName = ($DisplayName.Trim().Split([char[]]" `t`r`n", [System.StringSplitOptions]::RemoveEmptyEntries) -join " ")
 
-    if ($Diskless) {
+    if ($AdoptHostname) {
+        # Diskless master image, hostname-adopt variant: the sentinel
+        # "@hostname" tells the packaged client to report its Windows
+        # computer name at /stations/resolve so the cashier can auto-bind
+        # it to a matching pre-configured station.
+        $Diskless = $true
+        $StationId = "@hostname"
+        $DisplayName = ""
+    }
+    elseif ($Diskless) {
         # The generated config is a diskless master image: pc_name and
         # display_name are intentionally blank so the packaged client falls
         # into its existing automatic/MAC station-resolution flow on every
@@ -150,7 +165,7 @@ try {
 
     Write-SgClientConfigAtomic -ConfigPath $resolvedConfigPath -Config $newConfig
 
-    $stationLabel = if ($Diskless) { "automatic (diskless image)" } else { "$StationId ($DisplayName)" }
+    $stationLabel = if ($AdoptHostname) { "automatic (diskless image, adopt computer name)" } elseif ($Diskless) { "automatic (diskless image)" } else { "$StationId ($DisplayName)" }
     Write-SgLine "Client config saved at $resolvedConfigPath for station '$stationLabel' targeting $baseUrl." "INFO" $logPath
     exit 0
 } catch {

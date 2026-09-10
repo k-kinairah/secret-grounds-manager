@@ -186,6 +186,7 @@ from server.remote_command_repository import PCMetadataRepository, RemoteCommand
 from server.pc_layout_repository import IncomeGroupRepository, OperatorStateRepository, PCLayoutRepository
 from server.prepared_session_repository import PreparedSessionRepository
 from server.finances_repository import FinancesRepository
+from server.hostname_identity import derive_station_name_from_hostname
 from server.session_repository import SessionRepository
 from server.session_service import SessionService
 from server.shift_repository import ShiftRepository
@@ -2292,15 +2293,22 @@ def check_client_registration(
 @app.post("/stations/resolve", response_model=StationResolveResponse)
 def resolve_station(request: StationResolveRequest) -> StationResolveResponse:
     """Public, pre-registration identity lookup for a booting client that
-    does not yet have a pc_name. Deliberately minimal and read-mostly:
-    records this MAC's sighting (mac_address/ip_address only -- see
-    StationResolveRequest's extra="forbid", which makes it impossible for
-    a caller to smuggle a pc_name in) and reports back only whether the
-    server's station_assignments table already has an active binding for
-    it. Never creates, changes, or removes an assignment; never touches
-    pc_layouts, income groups, or Standard/VIP configuration.
+    does not yet have a pc_name. Records this MAC's sighting (plus, when the
+    client is in "@hostname" identity mode, its reported Windows computer
+    name -- a pc_name still cannot be smuggled in; extra="forbid") and
+    reports whether the server has an active binding for it.
+
+    Auto-adopt: if the MAC has no binding yet but the reported hostname
+    maps to a station the owner has *already* configured under PC Layout,
+    the server binds this MAC to it (source "auto-hostname") with no
+    dashboard step -- the iCafe8/CCBoot-style flow where the diskless
+    system already hands each seat a stable per-MAC computer name. It never
+    creates a pc_layouts row, never steals a name already held by another
+    MAC, and never re-adopts a MAC the owner explicitly revoked.
     """
-    record = station_repository.record_sighting(request.mac_address, request.ip_address)
+    record = station_repository.record_sighting(
+        request.mac_address, request.ip_address, request.hostname
+    )
 
     if record.status == "assigned" and record.pc_name is not None:
         layout = pc_layout_repository.get_layout(record.pc_name)
@@ -2310,9 +2318,26 @@ def resolve_station(request: StationResolveRequest) -> StationResolveResponse:
             display_name=layout.display_name if layout is not None else None,
         )
 
+    # Auto-adopt from the seat's Windows computer name. Only for a MAC that
+    # is genuinely unclaimed (never 'revoked' -- a revoked MAC must never
+    # regain a station automatically), and only against an already-existing
+    # PC Layout row (station identity is never created implicitly here).
+    if record.status == "unclaimed" and request.hostname:
+        candidate = derive_station_name_from_hostname(request.hostname)
+        if candidate is not None and pc_layout_repository.get_layout(candidate) is not None:
+            adopted = station_repository.try_auto_assign_by_hostname(
+                request.mac_address, candidate, request.hostname
+            )
+            if adopted is not None and adopted.status == "assigned" and adopted.pc_name is not None:
+                layout = pc_layout_repository.get_layout(adopted.pc_name)
+                return StationResolveResponse(
+                    status="assigned",
+                    pc_name=adopted.pc_name,
+                    display_name=layout.display_name if layout is not None else None,
+                )
+
     # 'unclaimed' and 'revoked' both mean "no active assignment right now"
-    # from this endpoint's perspective -- a revoked MAC must never regain
-    # its old station automatically, and the response must not hint at
+    # from this endpoint's perspective -- and the response must not hint at
     # revocation history to an unauthenticated caller.
     return StationResolveResponse(status="unclaimed", pc_name=None)
 

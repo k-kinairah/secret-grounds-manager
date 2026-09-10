@@ -65,10 +65,12 @@ def configure_pc(main_module, pc_name: str, **overrides):
     return main_module.pc_layout_repository.upsert_layout(pc_name, PCLayoutUpdate(**fields))
 
 
-def resolve(main_module, mac_address: str, ip_address: str = "192.168.0.20"):
+def resolve(main_module, mac_address: str, ip_address: str = "192.168.0.20", hostname: str | None = None):
     from server.schemas import StationResolveRequest
 
-    return main_module.resolve_station(StationResolveRequest(mac_address=mac_address, ip_address=ip_address))
+    return main_module.resolve_station(
+        StationResolveRequest(mac_address=mac_address, ip_address=ip_address, hostname=hostname)
+    )
 
 
 def assign(main_module, mac_address: str, pc_name: str, actor):
@@ -166,6 +168,70 @@ def test_resolve_revoked_mac_does_not_regain_old_assignment(temp_directory: str)
     record = main_module.station_repository.get_by_mac("AA:BB:CC:DD:EE:05")
     assert record.status == "revoked"
     assert record.previous_pc_name == "PC-12"
+
+
+def test_resolve_auto_adopts_hostname_when_station_preconfigured(temp_directory: str) -> None:
+    main_module, _, _, _ = create_env(Path(temp_directory) / "resolve-hostname-ok.sqlite3")
+    configure_pc(main_module, "PC-14")
+
+    # First boot: seat reports its Windows computer name; a PC-14 layout row
+    # already exists, so the server binds this MAC with no dashboard step.
+    response = resolve(main_module, "AA:BB:CC:DD:EE:40", "192.168.0.90", hostname="PC14")
+    assert response.status == "assigned"
+    assert response.pc_name == "PC-14"
+
+    record = main_module.station_repository.get_by_mac("AA:BB:CC:DD:EE:40")
+    assert record.assignment_source == "auto-hostname"
+    assert record.assigned_by_user_id is None
+    assert record.last_hostname == "PC14"
+
+    # Stable across reboots.
+    assert resolve(main_module, "AA:BB:CC:DD:EE:40", hostname="PC14").pc_name == "PC-14"
+
+
+def test_resolve_hostname_without_matching_layout_stays_unclaimed(temp_directory: str) -> None:
+    main_module, _, _, _ = create_env(Path(temp_directory) / "resolve-hostname-nolayout.sqlite3")
+    # PC-77 is not in the default PC Layout set -> the server never creates
+    # one implicitly; the seat keeps waiting and the hostname is surfaced so
+    # the owner can add the station.
+    assert main_module.pc_layout_repository.get_layout("PC-77") is None
+    response = resolve(main_module, "AA:BB:CC:DD:EE:41", "192.168.0.91", hostname="PC77")
+    assert response.status == "unclaimed"
+    assert response.pc_name is None
+
+    record = main_module.station_repository.get_by_mac("AA:BB:CC:DD:EE:41")
+    assert record.status == "unclaimed"
+    assert record.last_hostname == "PC77"
+
+
+def test_resolve_hostname_placeholder_is_ignored(temp_directory: str) -> None:
+    main_module, _, _, _ = create_env(Path(temp_directory) / "resolve-hostname-placeholder.sqlite3")
+    configure_pc(main_module, "DESKTOP-ABC123")  # even if a layout somehow matches
+
+    response = resolve(main_module, "AA:BB:CC:DD:EE:42", "192.168.0.92", hostname="DESKTOP-ABC123")
+    assert response.status == "unclaimed", "Windows placeholder names must never auto-adopt"
+
+
+def test_resolve_hostname_does_not_steal_a_name_held_by_another_mac(temp_directory: str) -> None:
+    main_module, owner, _, _ = create_env(Path(temp_directory) / "resolve-hostname-nosteal.sqlite3")
+    configure_pc(main_module, "PC-14")
+    assign(main_module, "AA:BB:CC:DD:EE:43", "PC-14", owner)
+
+    response = resolve(main_module, "AA:BB:CC:DD:EE:44", "192.168.0.93", hostname="PC14")
+    assert response.status == "unclaimed"
+    assert main_module.station_repository.get_by_pc_name("PC-14").mac_address == "AA:BB:CC:DD:EE:43"
+
+
+def test_resolve_hostname_never_readopts_a_revoked_mac(temp_directory: str) -> None:
+    main_module, owner, _, _ = create_env(Path(temp_directory) / "resolve-hostname-revoked.sqlite3")
+    configure_pc(main_module, "PC-14")
+
+    resolve(main_module, "AA:BB:CC:DD:EE:45", "192.168.0.94", hostname="PC14")  # auto-binds
+    main_module.revoke_station("AA:BB:CC:DD:EE:45", owner)
+
+    response = resolve(main_module, "AA:BB:CC:DD:EE:45", "192.168.0.94", hostname="PC14")
+    assert response.status == "unclaimed", "an explicitly revoked seat must not silently rebind"
+    assert main_module.station_repository.get_by_mac("AA:BB:CC:DD:EE:45").status == "revoked"
 
 
 def test_resolve_malformed_or_missing_mac_rejected(temp_directory: str) -> None:
@@ -417,6 +483,11 @@ def main() -> None:
         test_resolve_assigned_mac_returns_authoritative_pc_name,
         test_resolve_cannot_be_told_its_own_pc_name,
         test_resolve_revoked_mac_does_not_regain_old_assignment,
+        test_resolve_auto_adopts_hostname_when_station_preconfigured,
+        test_resolve_hostname_without_matching_layout_stays_unclaimed,
+        test_resolve_hostname_placeholder_is_ignored,
+        test_resolve_hostname_does_not_steal_a_name_held_by_another_mac,
+        test_resolve_hostname_never_readopts_a_revoked_mac,
         test_resolve_malformed_or_missing_mac_rejected,
         test_owner_can_list_unclaimed_and_assigned,
         test_non_owner_cannot_access_management_endpoints,
