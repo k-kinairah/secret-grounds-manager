@@ -67,6 +67,8 @@ Source: "..\scripts\remove-client-startup-folder-shortcut.ps1"; DestDir: "{app}\
 Source: "..\dist\SecretGroundsClient\*"; DestDir: "{app}\client"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsClient
 Source: "..\client\config.example.json"; DestDir: "{app}\client"; Flags: ignoreversion; Check: IsClient
 Source: "..\scripts\start-client.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
+Source: "..\scripts\run-client-supervised.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
+Source: "..\scripts\stop-client.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
 Source: "..\scripts\configure-client.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
 Source: "..\scripts\client-config-tool.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient
 Source: "..\scripts\install-client-role.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsClient

@@ -21,10 +21,11 @@ if (!(Test-Path $clientConfig)) {
 }
 
 $payload = Get-Content -LiteralPath $clientConfig -Raw | ConvertFrom-Json
-if ([string]::IsNullOrWhiteSpace($payload.pc_name) -or $payload.pc_name -eq "PC-01") {
-    if ([string]::IsNullOrWhiteSpace($payload.pc_name)) {
-        throw "Client pc_name must be configured for this specific customer PC."
-    }
+# A blank pc_name and the "@hostname" sentinel are both valid automatic
+# identity modes for a diskless master image -- the station is resolved at
+# runtime (wired NIC MAC, or the adopted Windows computer name), never from
+# this file. Only warn about the unconfigured single-PC default.
+if ($payload.pc_name -eq "PC-01") {
     Write-SgLine "Client pc_name is PC-01. Confirm this is the assigned customer PC before installing on additional stations." "WARN" $clientLog
 }
 if ([string]::IsNullOrWhiteSpace($payload.server_host)) {

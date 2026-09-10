@@ -12,7 +12,11 @@ if ([string]::IsNullOrWhiteSpace($startupFolder)) {
 }
 
 $cashierScript = Join-Path $PSScriptRoot "start-secret-grounds.ps1"
-$clientScript = Join-Path $PSScriptRoot "start-client.ps1"
+# The startup-folder fallback launches the supervised client loop too, so
+# this path also self-heals a customer ending the client in Task Manager
+# (it lacks the scheduled task's outer 1-minute watchdog, but the inner
+# ~2s relaunch still covers the common case).
+$clientScript = Join-Path $PSScriptRoot "run-client-supervised.ps1"
 $cashierLauncher = Join-Path $startupFolder "Secret Grounds Cashier Stack.vbs"
 $clientLauncher = Join-Path $startupFolder "Secret Grounds Client.vbs"
 

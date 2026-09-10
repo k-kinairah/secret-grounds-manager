@@ -36,6 +36,9 @@ def test_installer_separates_cashier_and_client_payloads() -> None:
     assert 'Source: "..\\dist\\SecretGroundsClient\\*"' in source
     assert "Check: IsCashier" in source
     assert "Check: IsClient" in source
+    # The supervised-client scripts ship with every customer install.
+    assert 'Source: "..\\scripts\\run-client-supervised.ps1"' in source
+    assert 'Source: "..\\scripts\\stop-client.ps1"' in source
 
 
 def test_installer_preserves_cashier_data_by_default() -> None:

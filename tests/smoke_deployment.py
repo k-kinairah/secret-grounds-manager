@@ -132,41 +132,68 @@ def test_cashier_autostart_task_runs_at_boot_as_system() -> None:
     assert '-WindowStyle Hidden -File `"$scriptPath`" -NoBrowser' in cashier
 
 
-def test_client_autostart_task_runs_elevated_as_interactive_user() -> None:
-    # Same root cause and fix as the cashier task above: a customer PC's
-    # scheduled task registered without an explicit -Principal defaults to
-    # RunLevel Limited, which cannot reliably start the client process --
-    # LastTaskResult 1, no client process remains. Confirmed fixed on a clean
-    # customer PC by registering with RunLevel Highest.
+def test_client_autostart_task_supervises_and_watchdogs_the_client() -> None:
     client = read("scripts/install-client-autostart.ps1")
+    # Elevated interactive principal (RunLevel Highest) is still required --
+    # a Limited-level task cannot start the client under Program Files.
     assert "New-ScheduledTaskPrincipal" in client
     assert "-LogonType Interactive" in client
     assert "-RunLevel Highest" in client
     assert "[System.Security.Principal.WindowsIdentity]::GetCurrent().Name" in client
     assert "-Principal $principal" in client
 
-    # Upgrades must replace a stale Limited-level task, never leave a
-    # duplicate registered alongside the corrected one.
+    # The action is now the supervisor loop, not a one-shot launcher.
+    assert "run-client-supervised.ps1" in client
+    assert "start-client.ps1" not in client
+    # The supervisor must be allowed to run for the whole session...
+    assert "-ExecutionTimeLimit ([TimeSpan]::Zero)" in client
+    assert "New-TimeSpan -Minutes 10" not in client
+    # ...and a 1-minute repetition is the outer watchdog for a killed supervisor.
+    assert "$trigger.Repetition" in client
+    assert "-RepetitionInterval (New-TimeSpan -Minutes 1)" in client
+    assert "-MultipleInstances IgnoreNew" in client
+
+    # Upgrades must replace a stale task, never leave a duplicate.
     assert "Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue" in client
     assert "Unregister-ScheduledTask -TaskName $taskName -Confirm:$false" in client
     unregister_index = client.index("Unregister-ScheduledTask -TaskName $taskName -Confirm:$false")
     register_index = client.index("Register-ScheduledTask -TaskName $taskName")
     assert unregister_index < register_index
 
-    # At most one automatic restart beyond the initial attempt, and a hard
-    # cap so a stuck instance cannot run indefinitely.
-    assert "-RestartCount 2" in client
-    assert "-ExecutionTimeLimit (New-TimeSpan -Minutes 10)" in client
-
-    # The action itself (hidden PowerShell, start-client.ps1) must be
-    # unchanged by the principal/settings fix.
-    assert '-WindowStyle Hidden -File `"$scriptPath`"' in client
-
-    # Cashier autostart is a separate task and must keep its own independent
-    # principal wiring -- this fix must not merge the two task registrations.
+    # Cashier autostart is a separate task and keeps its own wiring.
     cashier = read("scripts/install-cashier-autostart.ps1")
     assert 'taskName = "Secret Grounds Cashier Stack"' in cashier
     assert 'taskName = "Secret Grounds Client"' in client
+
+
+def test_client_supervisor_relaunches_and_is_stoppable() -> None:
+    supervisor = read("scripts/run-client-supervised.ps1")
+    # The loop relaunches the client after each exit...
+    assert "$proc.WaitForExit()" in supervisor
+    assert "Start-Sleep -Seconds $RelaunchDelaySeconds" in supervisor
+    # ...but a stop sentinel makes it exit without relaunching, so teardown
+    # and uninstall can actually stop it.
+    assert "client-supervisor.stop" in supervisor
+    assert "Test-StopRequested" in supervisor
+    # It tracks both its own PID and the live client PID for the stop scripts.
+    assert 'Set-SgProcessRecord "client-supervisor"' in supervisor
+    assert 'Set-SgProcessRecord "client"' in supervisor
+
+    stop = read("scripts/stop-client.ps1")
+    assert "client-supervisor.stop" in stop
+    assert 'Disable-ScheduledTask -TaskName $taskName' in stop
+    assert 'Stop-SgStartedProcess "client-supervisor"' in stop
+    assert 'Stop-SgStartedProcess "client"' in stop
+
+    # Uninstall/teardown disables the tasks and drops the sentinel BEFORE
+    # killing processes, so nothing respawns during file deletion.
+    stop_all = read("scripts/stop-all-for-uninstall.ps1")
+    assert "Disable-ScheduledTask" in stop_all
+    assert "client-supervisor.stop" in stop_all
+    assert 'Stop-SgStartedProcess "client-supervisor"' in stop_all
+    disable_index = stop_all.index("Disable-ScheduledTask")
+    kill_index = stop_all.index('Stop-SgStartedProcess "client-supervisor"')
+    assert disable_index < kill_index
 
 
 def test_config_examples_are_secret_safe() -> None:
@@ -248,7 +275,8 @@ def main() -> None:
         test_cashier_scripts_use_production_startup_and_pid_identity,
         test_autostart_task_names_are_stable,
         test_cashier_autostart_task_runs_at_boot_as_system,
-        test_client_autostart_task_runs_elevated_as_interactive_user,
+        test_client_autostart_task_supervises_and_watchdogs_the_client,
+        test_client_supervisor_relaunches_and_is_stoppable,
         test_config_examples_are_secret_safe,
         test_development_and_production_urls_are_separate,
         lambda: test_deployment_paths_are_outside_source_defaults(

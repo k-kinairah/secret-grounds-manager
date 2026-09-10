@@ -86,6 +86,20 @@ Supported scheduled task name: `Secret Grounds Client`.
 - Install: `powershell -ExecutionPolicy Bypass -File scripts\install-client-autostart.ps1`
 - Remove: `powershell -ExecutionPolicy Bypass -File scripts\remove-client-autostart.ps1`
 
+### Customer client self-heals
+
+The `Secret Grounds Client` task runs a supervisor loop (`run-client-supervised.ps1`), not a one-shot launcher. If a customer ends `SecretGroundsClient.exe` in Task Manager, the supervisor relaunches it within ~2 seconds and the lock screen comes back; if they also end the supervisor process, the task's 1-minute repetition trigger brings it back (the client keeps running, still locked, in that gap). The cashier server stays authoritative for session and lock state, so a relaunched client re-locks an idle PC and never adds time to an active session.
+
+To actually stop it (maintenance, editing a diskless image):
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\stop-client.ps1
+```
+
+That drops a stop sentinel, disables the task, and stops the supervisor and client. Re-enable with `scripts\install-client-autostart.ps1` (or `Enable-ScheduledTask "Secret Grounds Client"; Start-ScheduledTask "Secret Grounds Client"`). Safe Mode also bypasses the supervisor. Uninstall disables the task and drops the sentinel before removing files, so nothing respawns mid-uninstall.
+
+Not covered yet: a user with local **admin** rights can unregister the task and kill it for good — closing that needs running the customer session as a standard (non-admin) account.
+
 ## Logs And Diagnostics
 
 - Backend log: `logs/server.log`

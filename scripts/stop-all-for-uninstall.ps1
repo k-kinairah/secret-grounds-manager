@@ -5,6 +5,27 @@ Import-SgEnv
 
 $serverLog = Get-SgEnv "SECRET_GROUNDS_SERVER_LOG" ".\logs\server.log"
 
+# The customer client is supervised (run-client-supervised.ps1 relaunches it
+# within ~2s, and the "Secret Grounds Client" task's 1-minute repetition
+# relaunches the supervisor). Before killing anything, take away both revival
+# mechanisms: disable the scheduled tasks and drop the supervisor's stop
+# sentinel so a loop already between iterations exits instead of relaunching
+# during file deletion.
+foreach ($taskName in @("Secret Grounds Client", "Secret Grounds Cashier Stack")) {
+    try {
+        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+            Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
+        }
+    } catch {
+        Write-SgLine "Could not disable scheduled task '$taskName' before uninstall: $($_.Exception.Message)" "WARN" $serverLog
+    }
+}
+try {
+    $clientLogDir = Split-Path (Resolve-SgPath (Get-SgEnv "SECRET_GROUNDS_CLIENT_LOG" ".\logs\client.log"))
+    New-Item -ItemType Directory -Force -Path $clientLogDir | Out-Null
+    Set-Content -LiteralPath (Join-Path $clientLogDir "client-supervisor.stop") -Value "stop" -Encoding ASCII
+} catch {}
+
 # Uninstall must never leave the client connected, the backend/dashboard
 # running, or the install directory locked. The PID-tracked graceful stop
 # (Stop-SgStartedProcess) is the fast, precise path -- but a clean uninstall
@@ -14,6 +35,7 @@ $serverLog = Get-SgEnv "SECRET_GROUNDS_SERVER_LOG" ".\logs\server.log"
 # is covered here regardless of which role this specific install/uninstall
 # actually is, since each Stop-SgStartedProcess call for a role that was
 # never running is a harmless no-op.
+Stop-SgStartedProcess "client-supervisor"
 Stop-SgStartedProcess "client"
 Stop-SgStartedProcess "dashboard"
 Stop-SgStartedProcess "backend"
