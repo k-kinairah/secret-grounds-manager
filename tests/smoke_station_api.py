@@ -189,6 +189,20 @@ def test_resolve_auto_adopts_hostname_when_station_preconfigured(temp_directory:
     assert resolve(main_module, "AA:BB:CC:DD:EE:40", hostname="PC14").pc_name == "PC-14"
 
 
+def test_resolve_auto_adopts_a_single_digit_seat_against_the_seeded_default(temp_directory: str) -> None:
+    # Confirmed live at the shop: `hostname` on a real seat prints "PC05".
+    # seed_default_pc_layouts() already seeds "PC-05" (zero-padded) on a
+    # fresh database -- no configure_pc() needed here, unlike the
+    # PC-14 test above, specifically to prove this works against exactly
+    # what a brand-new cashier install already has, with no manual setup.
+    main_module, _, _, _ = create_env(Path(temp_directory) / "resolve-hostname-single-digit.sqlite3")
+    assert main_module.pc_layout_repository.get_layout("PC-05") is not None
+
+    response = resolve(main_module, "AA:BB:CC:DD:EE:50", "192.168.0.100", hostname="PC05")
+    assert response.status == "assigned"
+    assert response.pc_name == "PC-05"
+
+
 def test_resolve_hostname_without_matching_layout_stays_unclaimed(temp_directory: str) -> None:
     main_module, _, _, _ = create_env(Path(temp_directory) / "resolve-hostname-nolayout.sqlite3")
     # PC-77 is not in the default PC Layout set -> the server never creates
@@ -484,6 +498,7 @@ def main() -> None:
         test_resolve_cannot_be_told_its_own_pc_name,
         test_resolve_revoked_mac_does_not_regain_old_assignment,
         test_resolve_auto_adopts_hostname_when_station_preconfigured,
+        test_resolve_auto_adopts_a_single_digit_seat_against_the_seeded_default,
         test_resolve_hostname_without_matching_layout_stays_unclaimed,
         test_resolve_hostname_placeholder_is_ignored,
         test_resolve_hostname_does_not_steal_a_name_held_by_another_mac,

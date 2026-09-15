@@ -32,8 +32,10 @@ _PLACEHOLDER_EXACT = {"", "LOCALHOST", "PC", "COMPUTER", "USER-PC"}
 _SANE_NAME = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,31}$")
 
 # "PC14", "PC-14", "PC-014", "PC 14" (space already rejected above) all mean
-# the same seat -- fold them to the canonical "PC-14" so the owner only has
-# to create "PC-1".."PC-N" once under PC Layout.
+# the same seat -- fold them to a canonical "PC-NN" so the owner only has to
+# create the station once under PC Layout. Zero-padded to 2 digits (PC-01,
+# not PC-1) to match seed_default_pc_layouts()'s own PC-01..PC-15 naming --
+# a bare PC-5 would silently never match the seeded PC-05.
 _PC_NUMBER = re.compile(r"^PC[-_]?0*([0-9]{1,3})$")
 
 
@@ -42,7 +44,7 @@ def derive_station_name_from_hostname(hostname: str | None) -> str | None:
     hostname is empty, a Windows placeholder, or not a clean seat name.
 
     Normalization: strip any DNS suffix, upper-case, then fold the common
-    PC-number spellings (PC14 / PC-14 / PC-014) to "PC-14".
+    PC-number spellings (PC5 / PC05 / PC-5 / PC-005) to "PC-05".
     """
     if not hostname:
         return None
@@ -57,5 +59,5 @@ def derive_station_name_from_hostname(hostname: str | None) -> str | None:
 
     pc_number_match = _PC_NUMBER.match(candidate)
     if pc_number_match is not None:
-        return f"PC-{int(pc_number_match.group(1))}"
+        return f"PC-{int(pc_number_match.group(1)):02d}"
     return candidate

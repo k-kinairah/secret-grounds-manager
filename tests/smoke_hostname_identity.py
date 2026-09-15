@@ -26,6 +26,15 @@ def test_derive_folds_common_pc_number_spellings() -> None:
         assert derive_station_name_from_hostname(raw) == "PC-14", raw
 
 
+def test_derive_zero_pads_single_digit_seats_to_match_the_seeded_layout() -> None:
+    # Confirmed live at the shop: `hostname` on a real seat prints "PC05",
+    # not "PC-05" or "PC-5". seed_default_pc_layouts() seeds "PC-01".."PC-15"
+    # (zero-padded) -- a bare "PC-5" would never match "PC-05" and that seat
+    # would sit in Newly Detected forever.
+    for raw in ("PC05", "PC5", "PC-5", "PC-05", "pc_5"):
+        assert derive_station_name_from_hostname(raw) == "PC-05", raw
+
+
 def test_derive_passes_through_a_clean_non_pc_name() -> None:
     assert derive_station_name_from_hostname("GAMING-ROW-A") == "GAMING-ROW-A"
     assert derive_station_name_from_hostname("vip07") == "VIP07"
@@ -136,6 +145,7 @@ def test_resolve_runtime_pc_name_sends_hostname_only_in_hostname_mode() -> None:
 def main() -> None:
     tests = [
         test_derive_folds_common_pc_number_spellings,
+        test_derive_zero_pads_single_digit_seats_to_match_the_seeded_layout,
         test_derive_passes_through_a_clean_non_pc_name,
         test_derive_rejects_windows_placeholders_and_junk,
         test_client_config_accepts_hostname_sentinel,
