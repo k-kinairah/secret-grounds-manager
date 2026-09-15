@@ -166,6 +166,28 @@ def test_client_autostart_task_supervises_and_watchdogs_the_client() -> None:
     assert 'taskName = "Secret Grounds Client"' in client
 
 
+def test_client_task_launches_through_a_hidden_vbs_wrapper_no_console_flash() -> None:
+    # Reported from the shop: a console window flashed open and vanished
+    # right at logon, just before the lock screen appeared. -WindowStyle
+    # Hidden alone doesn't prevent this -- Windows shows the console for an
+    # instant before PowerShell's own startup code hides it. The task must
+    # launch through a WScript.Shell.Run(cmd, 0, True) VBS wrapper instead
+    # (window style 0 reaches CreateProcess itself, so no flash ever
+    # occurs), with wait=True so wscript.exe -- not the inner powershell --
+    # is the task's own tracked process for its whole run.
+    client = read("scripts/install-client-autostart.ps1")
+    assert 'New-ScheduledTaskAction -Execute "wscript.exe"' in client
+    assert '-Execute "powershell.exe"' not in client
+    assert 'CreateObject("WScript.Shell")' in client
+    assert "shell.Run" in client
+    assert ", 0, True" in client
+    assert "run-client-supervised-hidden.vbs" in client
+
+    remover = read("scripts/remove-client-autostart.ps1")
+    assert "run-client-supervised-hidden.vbs" in remover
+    assert "Remove-Item" in remover
+
+
 def test_client_supervisor_relaunches_and_is_stoppable() -> None:
     supervisor = read("scripts/run-client-supervised.ps1")
     # The loop relaunches the client after each exit...
@@ -276,6 +298,7 @@ def main() -> None:
         test_autostart_task_names_are_stable,
         test_cashier_autostart_task_runs_at_boot_as_system,
         test_client_autostart_task_supervises_and_watchdogs_the_client,
+        test_client_task_launches_through_a_hidden_vbs_wrapper_no_console_flash,
         test_client_supervisor_relaunches_and_is_stoppable,
         test_config_examples_are_secret_safe,
         test_development_and_production_urls_are_separate,

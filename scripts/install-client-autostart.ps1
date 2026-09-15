@@ -6,8 +6,31 @@ $taskName = "Secret Grounds Client"
 # the customer client alive so ending it in Task Manager just re-locks the
 # PC a couple of seconds later. See run-client-supervised.ps1.
 $scriptPath = Join-Path $PSScriptRoot "run-client-supervised.ps1"
-$argument = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argument -WorkingDirectory $Script:SecretGroundsRoot
+
+# Reported from the shop: a PowerShell/console window flashed open and
+# vanished right at logon, just before the lock screen appeared. Cause:
+# -WindowStyle Hidden is applied by the PowerShell host itself once it
+# starts -- but Windows still allocates and briefly shows the console
+# window at process creation, before that code runs. It's most visible
+# right at logon while the desktop is still settling.
+#
+# A WScript.Shell.Run(cmd, 0, wait) VBS wrapper avoids this: window style 0
+# is passed to CreateProcess itself, so the console is never shown, not even
+# for an instant (the same trick install-startup-folder-shortcuts.ps1
+# already uses for its fallback launchers). wait=True here (unlike that
+# fallback's fire-and-forget False) so wscript.exe blocks for the
+# supervisor's entire lifetime and stays the task's own tracked process --
+# MultipleInstances IgnoreNew and the 1-minute repetition trigger below both
+# rely on that to know an instance is still running.
+$vbsPath = Join-Path $PSScriptRoot "run-client-supervised-hidden.vbs"
+$hiddenCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
+$vbsContent = @"
+Set shell = CreateObject("WScript.Shell")
+shell.Run "$($hiddenCommand.Replace('"', '""'))", 0, True
+"@
+Set-Content -LiteralPath $vbsPath -Value $vbsContent -Encoding ASCII
+
+$action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$vbsPath`"" -WorkingDirectory $Script:SecretGroundsRoot
 
 # AtLogOn starts the supervisor for the customer session. The 1-minute
 # repetition is the OUTER watchdog: if a customer also ends the supervisor
@@ -39,4 +62,4 @@ if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
 }
 
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Keeps the Secret Grounds customer PC client running (supervised)." | Out-Null
-Write-SgLine "Installed scheduled task '$taskName' for $currentUser (supervised client, LogonType Interactive, RunLevel Highest, 1-minute watchdog)." "INFO" (Get-SgEnv "SECRET_GROUNDS_CLIENT_LOG" ".\logs\client.log")
+Write-SgLine "Installed scheduled task '$taskName' for $currentUser (supervised client via hidden VBS launcher, LogonType Interactive, RunLevel Highest, 1-minute watchdog)." "INFO" (Get-SgEnv "SECRET_GROUNDS_CLIENT_LOG" ".\logs\client.log")
