@@ -211,6 +211,58 @@ def primary_work_area() -> tuple[int, int, int, int]:
     return (0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
 
 
+def current_screen_size() -> tuple[int, int]:
+    """The full physical primary-display resolution (SM_CXSCREEN/SM_CYSCREEN
+    -- not the work area: a kiosk fullscreen window must cover the taskbar
+    strip too). Queried fresh on every call, deliberately not cached, so a
+    resolution change after the window was created is always detectable."""
+    user32 = ctypes.windll.user32
+    return (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
+
+
+def resize_and_reposition_fullscreen(window: webview.Window, width: int, height: int) -> bool:
+    """Force a window to exactly cover (0, 0)-(width, height) and stay
+    topmost.
+
+    Fixes a real kiosk-escape gap seen on freshly-imaged diskless PCs: a
+    generic/basic display driver is active for the first few seconds after
+    the desktop appears, at a lower resolution than the monitor's native
+    one; Windows applies the real resolution moments later. The lock
+    window's `fullscreen=True` sized itself against whatever resolution was
+    active at window-creation time (very early in the session), so when the
+    resolution later jumps up, the window keeps its stale, smaller size --
+    leaving a strip of desktop, including the taskbar, exposed at the edge
+    of the screen. Called from the periodic refresh tick whenever the
+    detected screen size has changed since last checked."""
+    try:
+        from ctypes import wintypes
+
+        hwnd_value = _taskbar_hwnd(window)
+        if hwnd_value is None:
+            return False
+        hwnd = wintypes.HWND(hwnd_value)
+        set_window_pos = ctypes.windll.user32.SetWindowPos
+        set_window_pos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        set_window_pos.restype = wintypes.BOOL
+        insert_after = wintypes.HWND(-1)  # HWND_TOPMOST
+        flags = 0x0010 | 0x4000  # NOACTIVATE | ASYNCWINDOWPOS
+        if not set_window_pos(hwnd, insert_after, 0, 0, width, height, flags):
+            raise ctypes.WinError()
+        _diagnostic(f"re-covered fullscreen window to {width}x{height} hwnd=0x{hwnd_value:X}")
+        return True
+    except Exception as error:
+        _diagnostic(f"fullscreen re-cover failed: {error}")
+        return False
+
+
 def bottom_right_geometry(width: int, height: int, margin: int = 16) -> tuple[int, int]:
     left, top, right, bottom = primary_work_area()
     return (right - width - margin, bottom - height - margin)
@@ -788,6 +840,11 @@ class SecretGroundsWebViewHost:
         self._pending_hud_text: str | None = None
         self.refresh_thread: Thread | None = None
         self.setup_active = False
+        # Last screen size the geometry-reconciliation tick observed. Seeded
+        # in _on_start once the lock window's initial fullscreen has taken
+        # its shape; None beforehand so the very first tick never fires an
+        # unnecessary resize.
+        self._last_screen_size: tuple[int, int] | None = None
         self._native_lock_deactivate_handler: Callable[..., None] | None = None
         if self.lock_controller is not None:
             self.lock_controller.set_presentation_refresh(self.request_lock_refresh)
@@ -1036,6 +1093,10 @@ class SecretGroundsWebViewHost:
         _diagnostic("webview host on_start")
         self.started.set()
         self._bind_native_lock_guard()
+        try:
+            self._last_screen_size = current_screen_size()
+        except Exception as error:
+            _diagnostic(f"initial screen size read failed: {error}")
         if self.lock_controller is not None or self.overlay_controller is not None:
             self.refresh_thread = Thread(
                 target=self._refresh_loop,
@@ -1091,10 +1152,31 @@ class SecretGroundsWebViewHost:
             self.pending_overlay_refresh = True
         self.refresh_event.set()
 
+    def _reconcile_screen_geometry(self) -> None:
+        """Re-cover the lock window if the display resolution changed since
+        last checked. See resize_and_reposition_fullscreen() for why this is
+        needed on freshly-imaged diskless PCs. Runs on every refresh tick
+        (every ~0.5s) but only ever acts when the size actually changed --
+        same "only on a real transition" discipline as the collapsed-pill
+        topmost fix, so this never fights the window on every tick."""
+        try:
+            width, height = current_screen_size()
+        except Exception as error:
+            _diagnostic(f"screen geometry check failed: {error}")
+            return
+        if (width, height) == self._last_screen_size:
+            return
+        _diagnostic(f"screen resolution changed to {width}x{height} (was {self._last_screen_size})")
+        self._last_screen_size = (width, height)
+        lock_window = self.windows.get("lock")
+        if lock_window is not None:
+            resize_and_reposition_fullscreen(lock_window, width, height)
+
     def _refresh_loop(self) -> None:
         while not self.refresh_stop.is_set():
             self.refresh_event.wait(0.5)
             self.refresh_event.clear()
+            self._reconcile_screen_geometry()
             with self.lock:
                 refresh_lock = self.pending_lock_refresh
                 refresh_overlay = self.pending_overlay_refresh

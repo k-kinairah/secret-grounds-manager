@@ -234,6 +234,47 @@ def test_webview_collapse_shows_desktop_control() -> None:
     assert host.window_visibility["pill"] is True
 
 
+def test_screen_geometry_reconciliation_only_acts_on_a_real_change() -> None:
+    """Regression for the diskless-boot bug: a generic display driver runs
+    at a lower resolution for the first few seconds, the lock window
+    fullscreens to that, then Windows applies the monitor's real resolution
+    -- leaving the window's stale, smaller size exposing a strip of desktop
+    (and the taskbar) at the edge. The fix must re-cover the window when the
+    resolution changes, and do nothing on every other tick."""
+    import client.webview_ui as webview_ui_module
+
+    calls: list[tuple[object, int, int]] = []
+    original_resize = webview_ui_module.resize_and_reposition_fullscreen
+    sizes = iter([(1920, 1080), (1920, 1080), (1024, 768), (1024, 768)])
+    original_screen_size = webview_ui_module.current_screen_size
+
+    def fake_resize(window, width, height):
+        calls.append((window, width, height))
+        return True
+
+    webview_ui_module.resize_and_reposition_fullscreen = fake_resize
+    webview_ui_module.current_screen_size = lambda: next(sizes)
+    try:
+        host = SecretGroundsWebViewHost()
+        window = object()
+        host.windows = {"lock": window}  # type: ignore[dict-item]
+
+        host._reconcile_screen_geometry()  # None -> 1920x1080: first-ever size, seeds it
+        assert calls == [(window, 1920, 1080)]
+
+        host._reconcile_screen_geometry()  # unchanged -> no-op
+        assert len(calls) == 1
+
+        host._reconcile_screen_geometry()  # 1920x1080 -> 1024x768: real change
+        assert calls == [(window, 1920, 1080), (window, 1024, 768)]
+
+        host._reconcile_screen_geometry()  # unchanged again -> no-op
+        assert len(calls) == 2
+    finally:
+        webview_ui_module.resize_and_reposition_fullscreen = original_resize
+        webview_ui_module.current_screen_size = original_screen_size
+
+
 def test_native_visibility_returns_false_without_a_loaded_winforms_host() -> None:
     window = SimpleNamespace(native=None)
     assert not set_native_window_visibility(window, True)  # type: ignore[arg-type]
@@ -252,6 +293,7 @@ def main() -> None:
     test_webview_startup_failure_uses_tk_fallback()
     test_window_visibility_changes_are_idempotent()
     test_webview_collapse_shows_desktop_control()
+    test_screen_geometry_reconciliation_only_acts_on_a_real_change()
     test_native_visibility_returns_false_without_a_loaded_winforms_host()
     test_javascript_errors_are_recorded_by_the_bridge()
     print("WebView UI smoke tests passed.")
