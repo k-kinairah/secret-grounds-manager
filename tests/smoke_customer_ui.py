@@ -189,9 +189,12 @@ def test_reminders_fire_once_and_do_not_replay_after_reconnect() -> None:
 def test_reminder_threshold_signals_the_hud_not_the_sidebar_notice() -> None:
     # Generic formatter: the standard thresholds and arbitrary valid ones.
     assert CustomerOverlayController._format_reminder_text(15 * 60) == "15 minutes left"
-    assert CustomerOverlayController._format_reminder_text(5 * 60) == "5 minutes left"
-    assert CustomerOverlayController._format_reminder_text(60) == "1 minute left"
     assert CustomerOverlayController._format_reminder_text(10 * 60) == "10 minutes left"
+    assert CustomerOverlayController._format_reminder_text(5 * 60) == "5 minutes left"
+    assert CustomerOverlayController._format_reminder_text(4 * 60) == "4 minutes left"
+    assert CustomerOverlayController._format_reminder_text(3 * 60) == "3 minutes left"
+    assert CustomerOverlayController._format_reminder_text(2 * 60) == "2 minutes left"
+    assert CustomerOverlayController._format_reminder_text(60) == "1 minute left"
     assert CustomerOverlayController._format_reminder_text(90) == "1 minute 30 seconds left"
     assert CustomerOverlayController._format_reminder_text(45) == "45 seconds left"
 
@@ -202,9 +205,9 @@ def test_reminder_threshold_signals_the_hud_not_the_sidebar_notice() -> None:
     assert vm.reminder_hud_text is None
     assert vm.reminder_hud_token == 0
 
-    # Crossing 900 bumps the HUD token with the generic text -- and never
-    # touches the sidebar notice slot. The message-list return contract is
-    # unchanged.
+    # Crossing 900 (15 min) bumps the HUD token with the generic text -- and
+    # never touches the sidebar notice slot. The message-list return
+    # contract is unchanged.
     assert overlay.update_time(900) == [
         "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
     ]
@@ -213,15 +216,28 @@ def test_reminder_threshold_signals_the_hud_not_the_sidebar_notice() -> None:
     assert vm.reminder_hud_token == 1
     assert vm.notice is None
 
-    # A later crossing bumps the token again (fire-once dedup still applies:
-    # re-reporting 900 does not re-fire).
+    # Fire-once dedup still applies: re-reporting 900 does not re-fire.
     assert overlay.update_time(899) == []
     assert overlay.build_view_model().reminder_hud_token == 1
-    overlay.update_time(301)
-    overlay.update_time(300)
-    vm = overlay.build_view_model()
-    assert vm.reminder_hud_text == "5 minutes left"
-    assert vm.reminder_hud_token == 2
+
+    # Every added threshold (10, 5, 4, 3, 2 minutes) fires its own crossing,
+    # each bumping the token exactly once with the right text and log line.
+    expected_crossings = [
+        (600, "10 minutes left", "You have 10 minutes remaining."),
+        (300, "5 minutes left", "You have 5 minutes remaining."),
+        (240, "4 minutes left", "You have 4 minutes remaining."),
+        (180, "3 minutes left", "You have 3 minutes remaining."),
+        (120, "2 minutes left", "You have 2 minutes remaining."),
+        (60, "1 minute left", "Your session will end in 1 minute. Please save your work."),
+    ]
+    expected_token = 1
+    for threshold, hud_text, log_message in expected_crossings:
+        assert overlay.update_time(threshold + 1) == []  # still above -- no crossing yet
+        assert overlay.update_time(threshold) == [log_message]
+        expected_token += 1
+        vm = overlay.build_view_model()
+        assert vm.reminder_hud_text == hud_text, threshold
+        assert vm.reminder_hud_token == expected_token, threshold
 
     # Threshold 0 / <=0 never signals the HUD (expiration/grace owns that).
     overlay2 = CustomerOverlayController(

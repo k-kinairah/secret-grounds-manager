@@ -9,7 +9,7 @@ from client.tk_runtime import create_tk_root, log_tk_startup_error
 from client.utils import get_logo_path
 
 
-DEFAULT_REMINDER_THRESHOLDS_SECONDS = [15 * 60, 5 * 60, 60, 0]
+DEFAULT_REMINDER_THRESHOLDS_SECONDS = [15 * 60, 10 * 60, 5 * 60, 4 * 60, 3 * 60, 2 * 60, 60, 0]
 TIME_ADDED_CONFIRMATION_TICKS = 6
 # Milliseconds the Tk-fallback reminder HUD stays on screen. The production
 # WebView HUD runs its own CSS-timed ~3.4s show/fade; this is the plain
@@ -404,13 +404,20 @@ class CustomerOverlayController:
             self.state.notice = None
 
     def build_reminder_message(self, threshold: int) -> str:
+        # Log-only text (printed as "Customer reminder: ..."; update_time()'s
+        # callers never read its return value) -- the customer-facing copy is
+        # _format_reminder_text() below, on the HUD banner. 15 minutes and 1
+        # minute keep their own fuller copy; every other minute mark (10, 5,
+        # 4, 3, 2, ...) shares one generic template so adding a threshold
+        # never needs a new branch here.
         if threshold == 15 * 60:
             return "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
-        if threshold == 5 * 60:
-            return "You have 5 minutes remaining."
         if threshold == 60:
             return "Your session will end in 1 minute. Please save your work."
-        return "Your time has ended. Please proceed to the cashier."
+        if threshold <= 0:
+            return "Your time has ended. Please proceed to the cashier."
+        minutes = threshold // 60
+        return f"You have {minutes} minute{'s' if minutes != 1 else ''} remaining."
 
     @staticmethod
     def _format_reminder_text(seconds: int) -> str:
