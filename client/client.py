@@ -973,7 +973,15 @@ class SecretGroundsClient:
                     return
                 continue
 
-            stop_event.wait(min(5, remaining_seconds))
+            # Ticking at most once a second (not every 5s, the original
+            # interval): reminder-threshold crossings are only detected on
+            # this loop's own ticks, so a coarser interval directly delays
+            # the on-screen banner and the spoken announcement behind the
+            # real-time minute mark by up to that whole interval. The extra
+            # tick rate costs nothing real (an in-memory state update, no
+            # I/O) and by this point in the loop remaining_seconds is
+            # already >= 1 (<= 0 was handled and continue'd above).
+            stop_event.wait(min(1, remaining_seconds))
 
     def enter_expiration_grace(self, session_id: str) -> bool:
         with self.active_session_lock:
