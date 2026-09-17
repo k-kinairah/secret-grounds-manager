@@ -848,11 +848,11 @@ class SecretGroundsClient:
                 state="active",
                 session_mode=self.active_session.session_mode,
             )
-            self.customer_overlay.reset_reminders_after_add_time()
             remaining_seconds = max(
                 0,
                 int(self.active_session.deadline_monotonic - time.monotonic()),
             )
+            self.customer_overlay.reset_reminders_after_add_time(remaining_seconds)
             if was_in_grace:
                 self.lock_screen.hide_for_session()
                 self.customer_overlay.show_session(

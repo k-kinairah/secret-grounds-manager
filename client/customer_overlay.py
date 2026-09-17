@@ -339,13 +339,21 @@ class CustomerOverlayController:
         )
         self.schedule_gui_refresh()
 
-    def reset_reminders_after_add_time(self) -> None:
+    def reset_reminders_after_add_time(self, remaining_seconds: int) -> None:
+        # Takes the freshly-extended remaining time as a parameter rather
+        # than reading self.state.seconds_value: the caller (client.py)
+        # computes remaining_seconds from the new deadline *after* this used
+        # to run against the still-stale pre-top-up value (often near 0,
+        # e.g. mid-expiration-grace), which satisfied `seconds_value <=
+        # threshold` for every threshold and so cleared none of them --
+        # every reminder that had already fired earlier in the session
+        # stayed marked fired forever, even though the extended countdown
+        # would legitimately cross it again.
         with self.lock:
             self.state.fired_thresholds = {
                 threshold
                 for threshold in self.state.fired_thresholds
-                if self.state.seconds_value is not None
-                and self.state.seconds_value <= threshold
+                if remaining_seconds <= threshold
             }
 
     def build_view_model(self) -> CustomerOverlayViewModel:

@@ -320,6 +320,38 @@ def test_resync_of_an_already_active_session_does_not_eat_reminder_crossings() -
     ]
 
 
+def test_reminders_refire_after_time_is_added_mid_grace() -> None:
+    # Reported live: a customer top-up (₱1 added while a session was near
+    # expiration) never showed 15/10-minute banners again even though the
+    # countdown legitimately re-crossed them. Root cause: client.py used to
+    # call reset_reminders_after_add_time() BEFORE computing the freshly
+    # extended remaining_seconds, so it read the function's old signature's
+    # self.state.seconds_value -- still the stale, near-zero pre-top-up
+    # value. Every threshold satisfies "stale_near_zero <= threshold", so
+    # every already-fired threshold stayed marked fired forever, and could
+    # never cross (and fire) again for the rest of that session.
+    overlay = CustomerOverlayController("PC-ADD-TIME", enable_gui=False)
+    overlay.show_session("Prepaid")
+    overlay.update_time(901)
+    assert overlay.update_time(900) == [
+        "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
+    ]
+    assert overlay.update_time(600) == ["You have 10 minutes remaining."]
+
+    # Top-up extends the session back past both already-fired thresholds.
+    overlay.reset_reminders_after_add_time(901)
+    overlay.show_time_added_confirmation(1000, 901)
+
+    # The tick that lands exactly on the new remaining time never "crosses"
+    # anything (it's a jump up, not a countdown); the real countdown resuming
+    # from there is what re-crosses each threshold, same as any fresh count.
+    assert overlay.update_time(901) == []
+    assert overlay.update_time(900) == [
+        "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
+    ]
+    assert overlay.update_time(600) == ["You have 10 minutes remaining."]
+
+
 def test_reminder_crossings_are_announced_by_voice_when_enabled() -> None:
     announced: list[str] = []
     original = customer_overlay_module.announce_reminder
@@ -660,6 +692,7 @@ def main() -> None:
     test_reminder_threshold_signals_the_hud_not_the_sidebar_notice()
     test_reminder_hud_does_not_disturb_the_time_added_confirmation()
     test_resync_of_an_already_active_session_does_not_eat_reminder_crossings()
+    test_reminders_refire_after_time_is_added_mid_grace()
     test_reminder_crossings_are_announced_by_voice_when_enabled()
     test_reminder_crossings_are_not_announced_when_voice_disabled()
     test_add_time_confirmation_and_countdown_update()
