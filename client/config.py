@@ -328,6 +328,13 @@ AUTOMATIC_SHUTDOWN_ON_LOGOUT = read_bool_config(
     not TEST_MODE,
 )
 EXPIRATION_SOUND_ENABLED = read_bool_config("SECRET_GROUNDS_EXPIRATION_SOUND_ENABLED", True)
+# Spoken "N minutes remaining" announcements alongside the on-screen
+# reminder banners (client/voice_announcer.py). Separate switch from the
+# beep above -- a shop can turn this off if it turns out too chatty over
+# game audio without losing the plain expiration beep. Off by default
+# under TEST_MODE for the same reason AUTOMATIC_SHUTDOWN_ON_LOGOUT is:
+# dev/test runs must not trigger real-world side effects.
+REMINDER_VOICE_ENABLED = read_bool_config("SECRET_GROUNDS_REMINDER_VOICE_ENABLED", not TEST_MODE)
 
 # PC screen monitoring (client/screen_capture.py). On by default to match
 # the server (server.settings.SCREEN_MONITORING_ENABLED also defaults on),

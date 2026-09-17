@@ -8,9 +8,15 @@ from threading import Event, Thread
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import client.customer_overlay as customer_overlay_module
 from client.customer_overlay import CustomerOverlayController
 from client.lock_screen import LockScreenController
 from client.webview_ui import SecretGroundsWebViewHost
+
+# Reminder crossings would otherwise spawn a real, audible PowerShell
+# text-to-speech process (client/voice_announcer.py) -- silence it for the
+# whole file regardless of REMINDER_VOICE_ENABLED's default.
+customer_overlay_module.announce_reminder = lambda *_a, **_kw: None
 
 
 def main() -> None:
