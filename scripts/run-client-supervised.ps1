@@ -50,6 +50,71 @@ function Test-StopRequested {
     return $false
 }
 
+function Move-ItemWithRetry {
+    # The client exe/DLLs can stay briefly locked for a moment after the
+    # process handle closes -- a few short retries rides that out instead of
+    # failing the whole update apply over a race.
+    param([string]$LiteralPath, [string]$Destination)
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            Move-Item -LiteralPath $LiteralPath -Destination $Destination -Force
+            return
+        } catch {
+            if ($attempt -eq 5) { throw }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
+function Invoke-PendingClientUpdate {
+    # Applies an update UpdateManager (client\update_manager.py) already
+    # downloaded and sha256-verified, and that client.py only asked for
+    # (via updates\pending-apply.json) once the PC was confirmed idle. The
+    # client process that requested it has already exited by the time this
+    # runs -- that exit is exactly what got us back to this loop iteration
+    # -- so nothing has these files open right now.
+    $updatesRoot = Join-Path $Script:SecretGroundsRoot "updates"
+    $marker = Join-Path $updatesRoot "pending-apply.json"
+    if (!(Test-Path -LiteralPath $marker)) {
+        return
+    }
+
+    try {
+        $pending = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+        $version = [string]$pending.version
+        $stagedPackageDir = Join-Path $updatesRoot "staged\$version\package"
+        $stagedExe = Join-Path $stagedPackageDir "SecretGroundsClient.exe"
+        $stagedInternal = Join-Path $stagedPackageDir "_internal"
+        $liveClientDir = Join-Path $Script:SecretGroundsRoot "client"
+        $liveExe = Join-Path $liveClientDir "SecretGroundsClient.exe"
+        $liveInternal = Join-Path $liveClientDir "_internal"
+
+        if (!(Test-Path -LiteralPath $stagedExe) -or !(Test-Path -LiteralPath $stagedInternal)) {
+            Write-SgLine "Pending update $version is incomplete at $stagedPackageDir; skipping apply." "WARN" $clientLog
+            return
+        }
+
+        $backupDir = Join-Path $liveClientDir "_previous-version"
+        Remove-Item -LiteralPath $backupDir -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+        if (Test-Path -LiteralPath $liveExe) { Move-ItemWithRetry -LiteralPath $liveExe -Destination $backupDir }
+        if (Test-Path -LiteralPath $liveInternal) { Move-ItemWithRetry -LiteralPath $liveInternal -Destination $backupDir }
+
+        Move-ItemWithRetry -LiteralPath $stagedExe -Destination $liveExe
+        Move-ItemWithRetry -LiteralPath $stagedInternal -Destination $liveInternal
+
+        $rootVersionFile = Join-Path $Script:SecretGroundsRoot "VERSION"
+        Set-Content -LiteralPath $rootVersionFile -Value $version -NoNewline -Encoding utf8
+
+        Remove-Item -LiteralPath (Join-Path $updatesRoot "staged\$version") -Recurse -Force -ErrorAction SilentlyContinue
+        Write-SgLine "Applied client update $version; previous version backed up to $backupDir." "INFO" $clientLog
+    } catch {
+        Write-SgLine "Applying pending client update failed: $_. The previous client build, if backed up, is still in client\_previous-version." "WARN" $clientLog
+    } finally {
+        Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # --- resolve what to supervise -------------------------------------------
 if ($ClientCommandOverride) {
     $targetFile = "powershell.exe"
@@ -152,6 +217,8 @@ try {
         $proc.WaitForExit()
         try { $exitCode = $proc.ExitCode } catch { $exitCode = "unknown" }
         Write-SgLine "Secret Grounds client process $($proc.Id) exited (code $exitCode)." "WARN" $clientLog
+
+        Invoke-PendingClientUpdate
 
         if (Test-StopRequested) {
             Write-SgLine "Stop requested; client supervisor exiting without relaunch." "INFO" $clientLog

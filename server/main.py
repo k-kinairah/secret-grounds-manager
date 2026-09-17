@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from io import StringIO
 from contextlib import asynccontextmanager
 from decimal import Decimal
+from pathlib import Path
 from typing import AsyncIterator
 from uuid import uuid4
 
@@ -205,6 +206,7 @@ from server.settings import SCREEN_MONITORING_ENABLED
 from server.station_repository import StationAssignmentRepository
 from server.time_utils import current_utc_time
 from server.system_service import SystemService
+from server.update_service import UpdateService
 from server.version import APP_VERSION
 
 
@@ -214,6 +216,8 @@ pc_registry: dict[str, PCRecord] = {}
 recovery_flags: dict[str, dict[str, str]] = {}
 connection_manager = ClientConnectionManager()
 screen_monitor_service = ScreenMonitorService()
+update_service = UpdateService(Path(__file__).resolve().parent.parent / "updates", APP_VERSION)
+UPDATE_SCAN_INTERVAL_SECONDS = 300
 session_repository = SessionRepository()
 payment_repository = PaymentRepository()
 shift_repository = ShiftRepository()
@@ -443,6 +447,51 @@ async def run_scheduled_backups() -> None:
             print(f"Automatic backup failed: {error}")
 
 
+async def broadcast_update_available(manifest) -> None:
+    """Fire-and-forget a push to every customer PC currently connected. A PC
+    that is offline right now, or whose push times out, still picks the same
+    update up on its own via GET /updates/client/manifest the next time its
+    command WebSocket (re)connects -- see UpdateManager.check_server_for_update
+    in client/update_manager.py."""
+    payload = {
+        "version": manifest.version,
+        "sha256": manifest.sha256,
+        "size_bytes": manifest.size_bytes,
+    }
+    for pc_name in connection_manager.active_pc_names():
+        command = ClientCommand(
+            command_id=str(uuid4()),
+            type="update_available",
+            payload=payload,
+            created_at=current_utc_time(),
+        )
+        asyncio.create_task(_push_update_command(pc_name, command))
+
+
+async def _push_update_command(pc_name: str, command: ClientCommand) -> None:
+    try:
+        await session_service.send_required_command(pc_name, command)
+    except Exception as error:
+        print(f"Update push to {pc_name} failed; it will pick up the update on its own next connect: {error}")
+
+
+async def run_update_scanner() -> None:
+    while True:
+        try:
+            newly_staged = await asyncio.to_thread(update_service.scan_incoming)
+            if newly_staged is not None:
+                logging.info(
+                    "Client update staged: version=%s sha256=%s size_bytes=%d",
+                    newly_staged.version,
+                    newly_staged.sha256,
+                    newly_staged.size_bytes,
+                )
+                await broadcast_update_available(newly_staged)
+        except Exception as error:
+            print(f"Update scan failed: {error}")
+        await asyncio.sleep(UPDATE_SCAN_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_file_logging()
@@ -450,6 +499,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     initialize_database()
     monitor_task = asyncio.create_task(monitor_pc_statuses())
     backup_task = asyncio.create_task(run_scheduled_backups())
+    update_scan_task = asyncio.create_task(run_update_scanner())
 
     try:
         yield
@@ -457,6 +507,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logging.info("Secret Grounds backend shutdown requested.")
         monitor_task.cancel()
         backup_task.cancel()
+        update_scan_task.cancel()
 
 
 app = FastAPI(
@@ -667,6 +718,39 @@ def get_system_storage(_: object = Depends(require_system_admin)) -> dict[str, o
     return system_service.get_storage()
 
 
+def _describe_staged_update() -> dict[str, object] | None:
+    manifest = update_service.get_available_update()
+    if manifest is None:
+        return None
+    return {
+        "version": manifest.version,
+        "sha256": manifest.sha256,
+        "size_bytes": manifest.size_bytes,
+    }
+
+
+@app.get("/system/updates")
+def get_update_status(_: object = Depends(require_system_admin)) -> dict[str, object]:
+    return {
+        "current_version": APP_VERSION,
+        "staged_update": _describe_staged_update(),
+        "last_scan_error": update_service.last_scan_error,
+    }
+
+
+@app.post("/system/updates/rescan")
+async def rescan_updates(_: object = Depends(require_system_admin)) -> dict[str, object]:
+    """Force an immediate check of updates\\incoming\\ instead of waiting up
+    to UPDATE_SCAN_INTERVAL_SECONDS for the background scanner."""
+    newly_staged = await asyncio.to_thread(update_service.scan_incoming)
+    if newly_staged is not None:
+        await broadcast_update_available(newly_staged)
+    return {
+        "staged_update": _describe_staged_update(),
+        "last_scan_error": update_service.last_scan_error,
+    }
+
+
 @app.get("/system/info")
 def get_system_info(_: object = Depends(require_system_admin)) -> dict[str, object]:
     return system_service.get_info(
@@ -706,6 +790,30 @@ def get_system_clients(_: object = Depends(require_system_admin)) -> list[dict[s
 @app.get("/client-settings", response_model=ClientSafeSettings)
 def get_client_settings() -> ClientSafeSettings:
     return admin_settings_service.get_client_settings()
+
+
+@app.get("/updates/client/manifest")
+def get_client_update_manifest() -> dict[str, object]:
+    """Same trust boundary as /client-settings above: any PC on the shop
+    LAN can ask whether a newer client build is staged. Polled once per
+    WebSocket (re)connect by UpdateManager.check_server_for_update() so a PC
+    that was offline when the update was pushed still finds it."""
+    manifest = update_service.get_available_update()
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="No client update is available")
+    return {
+        "version": manifest.version,
+        "sha256": manifest.sha256,
+        "size_bytes": manifest.size_bytes,
+    }
+
+
+@app.get("/updates/client/package/{version}")
+def download_client_update_package(version: str) -> FileResponse:
+    package_path = update_service.get_package_path(version)
+    if package_path is None:
+        raise HTTPException(status_code=404, detail="No staged update matches that version")
+    return FileResponse(package_path, media_type="application/zip", filename=package_path.name)
 
 
 @app.post("/shifts/open", response_model=CashierShiftDetail)
