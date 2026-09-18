@@ -51,6 +51,7 @@ Source: "..\scripts\stop-all-for-uninstall.ps1"; DestDir: "{app}\scripts"; Flags
 Source: "..\scripts\start-secret-grounds.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\start-backend.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\start-dashboard.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
+Source: "..\scripts\run-cashier-supervised.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\stop-secret-grounds.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\restart-secret-grounds.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\status-secret-grounds.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
