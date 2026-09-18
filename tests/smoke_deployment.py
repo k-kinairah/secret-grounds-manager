@@ -24,6 +24,7 @@ SCRIPT_NAMES = {
     "status-secret-grounds.ps1",
     "install-cashier-autostart.ps1",
     "remove-cashier-autostart.ps1",
+    "run-cashier-supervised.ps1",
     "start-client.ps1",
     "install-client-autostart.ps1",
     "remove-client-autostart.ps1",
@@ -122,14 +123,59 @@ def test_cashier_autostart_task_runs_at_boot_as_system() -> None:
     register_index = cashier.index("Register-ScheduledTask -TaskName $taskName")
     assert unregister_index < register_index
 
-    # At most one automatic restart beyond the initial attempt, and a hard
-    # cap so a stuck instance cannot run indefinitely.
-    assert "-RestartCount 2" in cashier
-    assert "-ExecutionTimeLimit (New-TimeSpan -Minutes 10)" in cashier
-
-    # The action itself (hidden PowerShell, -NoBrowser, start-secret-grounds.ps1)
-    # must be unchanged by the principal/settings fix.
+    # The action itself (hidden PowerShell, -NoBrowser) must be unchanged by
+    # the principal/settings fix.
     assert '-WindowStyle Hidden -File `"$scriptPath`" -NoBrowser' in cashier
+
+
+def test_cashier_autostart_task_supervises_and_watchdogs_the_stack() -> None:
+    # Reported live: the cashier reinstall replaced this task, but since
+    # -AtStartup only fires on an actual boot, the stack silently never came
+    # up until someone ran the start scripts by hand. Even once running,
+    # there was previously no ongoing supervision -- if the backend or
+    # dashboard crashed mid-day, nothing brought it back. The action is now a
+    # polling supervisor loop, matching the client's supervised pattern.
+    cashier = read("scripts/install-cashier-autostart.ps1")
+
+    # The action is now the supervisor loop, not a one-shot launcher.
+    assert "run-cashier-supervised.ps1" in cashier
+    # The supervisor must be allowed to run for the whole session...
+    assert "-ExecutionTimeLimit ([TimeSpan]::Zero)" in cashier
+    assert "New-TimeSpan -Minutes 10" not in cashier
+    # ...and a 1-minute repetition is the outer watchdog for a killed
+    # supervisor process (distinct from the supervisor's own inner health
+    # poll of the backend/dashboard processes).
+    assert "$trigger.Repetition" in cashier
+    assert "-RepetitionInterval (New-TimeSpan -Minutes 1)" in cashier
+    assert "-MultipleInstances IgnoreNew" in cashier
+
+
+def test_cashier_supervisor_relaunches_and_is_stoppable() -> None:
+    supervisor = read("scripts/run-cashier-supervised.ps1")
+    # The loop polls both processes and restarts the whole stack if either
+    # one has died...
+    assert 'Test-SgStartedProcess (Get-SgProcessRecord "backend")' in supervisor
+    assert 'Test-SgStartedProcess (Get-SgProcessRecord "dashboard")' in supervisor
+    assert "start-secret-grounds.ps1" in supervisor
+    assert "Start-Sleep -Seconds $PollSeconds" in supervisor
+    # ...but a stop sentinel makes it exit without relaunching, so teardown
+    # and uninstall can actually stop it.
+    assert "cashier-supervisor.stop" in supervisor
+    assert "Test-StopRequested" in supervisor
+    # It tracks its own PID for the stop scripts.
+    assert 'Set-SgProcessRecord "cashier-supervisor"' in supervisor
+
+    stop = read("scripts/stop-secret-grounds.ps1")
+    assert "cashier-supervisor.stop" in stop
+    assert 'Stop-SgStartedProcess "cashier-supervisor"' in stop
+    assert "Disable-ScheduledTask" in stop
+    assert "KeepTaskEnabled" in stop
+
+    # A manual restart must re-arm the watchdog rather than leave the stack
+    # unsupervised until someone remembers to reinstall the autostart task.
+    restart = read("scripts/restart-secret-grounds.ps1")
+    assert "stop-secret-grounds.ps1" in restart
+    assert "-KeepTaskEnabled" in restart
 
 
 def test_client_autostart_task_supervises_and_watchdogs_the_client() -> None:
@@ -297,6 +343,8 @@ def main() -> None:
         test_cashier_scripts_use_production_startup_and_pid_identity,
         test_autostart_task_names_are_stable,
         test_cashier_autostart_task_runs_at_boot_as_system,
+        test_cashier_autostart_task_supervises_and_watchdogs_the_stack,
+        test_cashier_supervisor_relaunches_and_is_stoppable,
         test_client_autostart_task_supervises_and_watchdogs_the_client,
         test_client_task_launches_through_a_hidden_vbs_wrapper_no_console_flash,
         test_client_supervisor_relaunches_and_is_stoppable,
