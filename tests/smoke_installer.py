@@ -316,6 +316,34 @@ def test_installer_dashboard_shortcuts_ensure_services_running() -> None:
     assert "Start-Process $dashboardUrl" in open_dashboard
 
 
+def test_dashboard_shortcuts_use_the_sg_logo_not_a_generic_shell_icon() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    assert "{sys}\\shell32.dll" not in source
+    assert 'IconFilename: "{app}\\secret-grounds-logo.ico"' in source
+
+
+def test_dashboard_auto_opens_at_cashier_logon() -> None:
+    # The cashier PC boots and starts the backend/dashboard as SYSTEM before
+    # anyone signs in (see install-cashier-autostart.ps1's -AtStartup
+    # branch) -- a session-0 task cannot show a browser window on anyone's
+    # desktop. So opening the dashboard automatically, rather than waiting
+    # for a manual shortcut click, needs its own logon-triggered task that
+    # runs in the cashier's own interactive session.
+    autostart = read("scripts/install-cashier-autostart.ps1")
+    assert 'taskName = "Secret Grounds Cashier Stack"' in autostart
+    assert '$autoOpenTaskName = "Secret Grounds Dashboard AutoOpen"' in autostart
+    assert "open-dashboard.ps1" in autostart
+    assert "New-ScheduledTaskTrigger -AtLogOn" in autostart
+    # Registering the stack task must not clobber a previously-registered
+    # auto-open task, or vice versa -- each guards only its own task name.
+    autoopen_index = autostart.index('$autoOpenTaskName = "Secret Grounds Dashboard AutoOpen"')
+    assert 'Unregister-ScheduledTask -TaskName $autoOpenTaskName' in autostart[autoopen_index:]
+
+    remover = read("scripts/remove-cashier-autostart.ps1")
+    assert '"Secret Grounds Cashier Stack"' in remover
+    assert '"Secret Grounds Dashboard AutoOpen"' in remover
+
+
 def test_installer_cashier_role_safety() -> None:
     source = read("installer/SecretGroundsSetup.iss")
     # Cashier automation must never launch or configure the customer client.
@@ -663,6 +691,8 @@ def main() -> None:
         test_installer_cashier_autostart_checkbox_defaults_and_preserves_choice,
         test_installer_does_not_pass_boolean_literals_to_external_powershell,
         test_installer_dashboard_shortcuts_ensure_services_running,
+        test_dashboard_shortcuts_use_the_sg_logo_not_a_generic_shell_icon,
+        test_dashboard_auto_opens_at_cashier_logon,
         test_installer_cashier_role_safety,
         test_no_developer_specific_absolute_paths_are_tracked,
         test_installer_ships_bundled_runtime_not_dev_venv,

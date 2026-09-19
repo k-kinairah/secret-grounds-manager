@@ -59,3 +59,27 @@ if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
 
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Starts and supervises the Secret Grounds backend and production dashboard." | Out-Null
 Write-SgLine "Installed scheduled task '$taskName' as $principalLabel, RunLevel Highest, 1-minute watchdog." "INFO" (Get-SgEnv "SECRET_GROUNDS_SERVER_LOG" ".\logs\server.log")
+
+# Second task: open the dashboard in the cashier's own browser automatically
+# at logon, once the stack is healthy (open-dashboard.ps1 already knows how
+# to wait for that, and to start the stack itself as a fallback if it
+# somehow isn't up yet). This always targets the interactive signer,
+# regardless of whether the stack task above runs -AtStartup as SYSTEM or
+# -AtLogOn -- a SYSTEM/session-0 task cannot show a window on anyone's
+# desktop (Windows session isolation), so opening a browser has to happen
+# from the logged-on user's own session either way. Same non-elevated
+# identity as the existing manual "Secret Grounds Dashboard" shortcut, since
+# this is just that same action running automatically instead of on a click.
+$autoOpenTaskName = "Secret Grounds Dashboard AutoOpen"
+$autoOpenScriptPath = Join-Path $PSScriptRoot "open-dashboard.ps1"
+$autoOpenAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$autoOpenScriptPath`"" -WorkingDirectory $Script:SecretGroundsRoot
+$autoOpenTrigger = New-ScheduledTaskTrigger -AtLogOn
+$autoOpenPrincipal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive
+$autoOpenSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
+
+if (Get-ScheduledTask -TaskName $autoOpenTaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $autoOpenTaskName -Confirm:$false
+}
+
+Register-ScheduledTask -TaskName $autoOpenTaskName -Action $autoOpenAction -Trigger $autoOpenTrigger -Principal $autoOpenPrincipal -Settings $autoOpenSettings -Description "Opens the Secret Grounds dashboard automatically once the cashier signs in." | Out-Null
+Write-SgLine "Installed scheduled task '$autoOpenTaskName' for $currentUser (LogonType Interactive, at logon)." "INFO" (Get-SgEnv "SECRET_GROUNDS_SERVER_LOG" ".\logs\server.log")

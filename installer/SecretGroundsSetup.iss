@@ -85,12 +85,12 @@ Source: "..\scripts\read-client-config-status.ps1"; DestDir: "{tmp}"; Flags: don
 Source: "..\scripts\read-cashier-status.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
-Name: "{group}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14; Check: IsCashier
+Name: "{group}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\secret-grounds-logo.ico"; Check: IsCashier
 Name: "{group}\Start Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\start-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
 Name: "{group}\Stop Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\stop-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
 Name: "{group}\Restart Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\restart-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
 Name: "{group}\Secret Grounds Status"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\status-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
-Name: "{commondesktop}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14; Check: IsCashier
+Name: "{commondesktop}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\secret-grounds-logo.ico"; Check: IsCashier
 Name: "{group}\Configure Secret Grounds Client"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"""; WorkingDir: "{app}"; Check: IsClient
 
 [Run]
