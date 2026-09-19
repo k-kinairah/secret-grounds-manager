@@ -306,6 +306,7 @@ def test_collapsed_pill_gets_taskbar_presence_and_starts_minimized() -> None:
     order: list[str] = []
     taskbar_calls: list[tuple[object, bool]] = []
     minimize_calls: list[object] = []
+    restore_calls: list[object] = []
     original_taskbar_presence = webview_ui_module.set_native_taskbar_presence
     original_minimize = webview_ui_module.minimize_native_window
     original_restore = webview_ui_module.restore_native_window
@@ -320,9 +321,13 @@ def test_collapsed_pill_gets_taskbar_presence_and_starts_minimized() -> None:
         minimize_calls.append(window)
         return True
 
+    def fake_restore(window: object) -> bool:
+        restore_calls.append(window)
+        return True
+
     webview_ui_module.set_native_taskbar_presence = fake_taskbar_presence
     webview_ui_module.minimize_native_window = fake_minimize
-    webview_ui_module.restore_native_window = lambda window: True
+    webview_ui_module.restore_native_window = fake_restore
     try:
         host = SecretGroundsWebViewHost()
         pill_window = FakeWindow()
@@ -332,9 +337,24 @@ def test_collapsed_pill_gets_taskbar_presence_and_starts_minimized() -> None:
         host.show_collapsed_control()
         assert taskbar_calls == [(pill_window, True)]
         assert minimize_calls == [pill_window]
+        assert restore_calls == [pill_window]
         # Taskbar presence and minimize must apply only after the pill is
         # actually positioned/shown, in that order.
         assert order == ["taskbar", "minimize"]
+
+        # refresh_overlay() calls collapse_overlay() -> show_collapsed_control()
+        # on every refresh tick (about once a second) for as long as the
+        # session stays collapsed, not just on the transition into being
+        # collapsed -- window_visibility["pill"] is now True, exactly like a
+        # second tick while nothing has changed. None of these three calls
+        # may repeat: restore_native_window would pull the pill back out of
+        # its minimized state every second, and the taskbar toggle/minimize
+        # would force a visible redraw/re-animate every second -- together
+        # this is what actually read as "glitching" on screen.
+        host.show_collapsed_control()
+        assert taskbar_calls == [(pill_window, True)]
+        assert minimize_calls == [pill_window]
+        assert restore_calls == [pill_window]
     finally:
         webview_ui_module.set_native_taskbar_presence = original_taskbar_presence
         webview_ui_module.minimize_native_window = original_minimize

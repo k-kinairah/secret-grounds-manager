@@ -1389,24 +1389,38 @@ class SecretGroundsWebViewHost:
         pill = self.windows.get("pill")
         if pill is None:
             return
-        # A minimized WinForms window ignores bounds changes until restored
-        # to Normal -- without this, a *second* collapse in the same session
-        # (minimize, restore the full overlay, minimize again) would leave
-        # the pill stuck at its minimized position instead of its anchored
-        # corner.
-        restore_native_window(pill)
+        # refresh_overlay() calls collapse_overlay() -> here on every refresh
+        # tick (about once a second) for as long as the session stays
+        # collapsed, not just on the transition into being collapsed. Without
+        # this check, the taskbar-presence toggle and minimize below would
+        # re-fire every tick -- forcing a frame-change redraw and re-playing
+        # the minimize animation once a second, which read as the taskbar
+        # icon/window visibly glitching rather than just sitting minimized.
+        was_already_collapsed = self.window_visibility.get("pill") is True
+        if not was_already_collapsed:
+            # A minimized WinForms window ignores bounds changes until
+            # restored to Normal -- without this, a *second* collapse in the
+            # same session (minimize, restore the full overlay, minimize
+            # again) would leave the pill stuck at its minimized position
+            # instead of its anchored corner. Gated the same as the taskbar
+            # presence/minimize below: calling this every tick would restore
+            # the pill out of its minimized state every second even while
+            # the customer never touched it.
+            restore_native_window(pill)
         self.render_pill()
         width, height = self.last_pill_size
         apply_pill_native_geometry(pill, width, height)
         self._set_window_visible("pill", True)
         self._set_window_on_top("pill", pill, False)
-        # A real taskbar button, minimized by default: the customer clicks it
-        # to check their remaining time (Windows itself restores + activates
-        # the window on that click), and the Deactivate guard bound in
-        # _bind_pill_auto_minimize_guard sends it back down the moment they
-        # click back into whatever they were doing.
-        set_native_taskbar_presence(pill, True)
-        minimize_native_window(pill)
+        if not was_already_collapsed:
+            # A real taskbar button, minimized by default: the customer
+            # clicks it to check their remaining time (Windows itself
+            # restores + activates the window on that click), and the
+            # Deactivate guard bound in _bind_pill_auto_minimize_guard sends
+            # it back down the moment they click back into whatever they
+            # were doing.
+            set_native_taskbar_presence(pill, True)
+            minimize_native_window(pill)
 
     def collapse_overlay(self) -> None:
         _diagnostic("collapse_overlay invoked")
