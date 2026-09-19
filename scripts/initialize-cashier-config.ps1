@@ -46,6 +46,29 @@ try {
 }
 $secret = [Convert]::ToBase64String($secretBytes)
 
+# Audited before go-live: the System Admin account (full system access --
+# backups, PC power control, settings, everything) used to seed with a
+# hardcoded "admin12345" fallback whenever this env var wasn't set, and
+# nothing ever set it. Generate a real one per install instead, the same
+# way the deployment secret above already is. Unlike the deployment secret,
+# a human actually needs to read this one once to log in the first time --
+# the installer (RunCashierPostInstall) shows it in a message box right
+# after this script runs, sourced from $adminPasswordOutPath below. It's a
+# one-time bootstrap value: the dashboard's Staff page already has a
+# "Change Password" action on the Admin account (OperatorsManager.tsx) for
+# setting something memorable afterward.
+$adminPasswordChars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789".ToCharArray()
+$adminPasswordBytes = [byte[]]::new(16)
+$adminPasswordRandomNumberGenerator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    $adminPasswordRandomNumberGenerator.GetBytes($adminPasswordBytes)
+} finally {
+    $adminPasswordRandomNumberGenerator.Dispose()
+}
+$adminPassword = -join ($adminPasswordBytes | ForEach-Object { $adminPasswordChars[$_ % $adminPasswordChars.Length] })
+$adminPasswordOutPath = Join-Path ([System.IO.Path]::GetTempPath()) "secret-grounds-admin-password.txt"
+Set-Content -LiteralPath $adminPasswordOutPath -Value $adminPassword -Encoding ASCII -NoNewline
+
 New-Item -ItemType Directory -Force -Path `
     (Join-Path $Script:SecretGroundsRoot "config"),
     (Join-Path $Script:SecretGroundsRoot "data"),
@@ -81,6 +104,7 @@ SECRET_GROUNDS_CORS_ORIGINS=$CorsOrigins
 SECRET_GROUNDS_AUTH_SECURE_COOKIE=false
 SECRET_GROUNDS_AUTH_SECONDS=28800
 SECRET_GROUNDS_DEPLOYMENT_SECRET=$secret
+SECRET_GROUNDS_ADMIN_PASSWORD=$adminPassword
 NEXT_PUBLIC_FASTAPI_BASE_URL=$DashboardApiUrl
 NEXT_PUBLIC_POLL_INTERVAL_MS=4000
 "@

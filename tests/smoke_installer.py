@@ -29,6 +29,40 @@ def test_inno_installer_has_role_selection() -> None:
     assert "IsClient" in source
 
 
+def test_cashier_gets_a_generated_admin_password_not_a_hardcoded_default() -> None:
+    # Pre-deployment audit finding: the System Admin account (full system
+    # access -- backups, PC power control, settings) seeded with a
+    # hardcoded "admin12345" fallback whenever SECRET_GROUNDS_ADMIN_PASSWORD
+    # wasn't set, and nothing in the install flow ever set it -- anyone on
+    # the shop LAN who tried the well-known default got full control.
+    config_script = read("scripts/initialize-cashier-config.ps1")
+    assert "SECRET_GROUNDS_ADMIN_PASSWORD=$adminPassword" in config_script
+    assert "RandomNumberGenerator" in config_script
+    # Written for the installer to read back and show once -- not left
+    # sitting around afterward (the .iss side must delete it).
+    assert "secret-grounds-admin-password.txt" in config_script
+
+    iss_source = read("installer/SecretGroundsSetup.iss")
+    assert "ShowGeneratedAdminPasswordIfPresent" in iss_source
+    assert "secret-grounds-admin-password.txt" in iss_source
+    assert "DeleteFile(PasswordPath)" in iss_source
+    # Must resolve to the same directory PowerShell's
+    # [System.IO.Path]::GetTempPath() writes to, not Inno's own
+    # install-session-specific {tmp} subfolder -- the PowerShell script has
+    # no way to know that subfolder's randomly-generated name.
+    assert "{localappdata}" in iss_source
+    password_path_line = next(
+        line for line in iss_source.splitlines() if "PasswordPath :=" in line
+    )
+    assert "{tmp}" not in password_path_line
+    # The generated-password call site must run right after the config is
+    # actually created, and the shop owner must be told where to change it.
+    init_index = iss_source.index("initialize-cashier-config.ps1")
+    show_index = iss_source.index("ShowGeneratedAdminPasswordIfPresent;")
+    assert init_index < show_index
+    assert "Change Password" in iss_source
+
+
 def test_installer_and_uninstall_entry_have_a_real_app_icon() -> None:
     # Reported live: Windows Settings -> Installed apps showed Secret Grounds
     # with a blank/generic icon. UninstallDisplayIcon pointed at {app}\VERSION
@@ -670,6 +704,7 @@ def test_client_post_install_script_uses_scheduled_task_as_launch_mechanism() ->
 def main() -> None:
     tests = [
         test_inno_installer_has_role_selection,
+        test_cashier_gets_a_generated_admin_password_not_a_hardcoded_default,
         test_installer_and_uninstall_entry_have_a_real_app_icon,
         test_installer_separates_cashier_and_client_payloads,
         test_installer_preserves_cashier_data_by_default,

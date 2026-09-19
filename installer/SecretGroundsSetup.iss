@@ -734,6 +734,35 @@ begin
     Result := '-DisableAutostart';
 end;
 
+procedure ShowGeneratedAdminPasswordIfPresent;
+var
+  PasswordPath, Password: String;
+  Lines: TArrayOfString;
+begin
+  // initialize-cashier-config.ps1 only writes this file when it actually
+  // generated a fresh config (first-ever setup on this machine) -- on a
+  // reinstall where the existing config.env is preserved, no file appears
+  // here and this is a silent no-op, which is correct: the admin password
+  // set during that earlier install (or changed since, via the dashboard's
+  // own Change Password action) is untouched.
+  //
+  // NOT {tmp}: that is Inno's own install-session-specific subfolder
+  // ({localappdata}\Temp\is-XXXXXXXX.tmp\), which the PowerShell script has
+  // no way to know the name of. [System.IO.Path]::GetTempPath() in that
+  // script resolves to {localappdata}\Temp\ itself (its parent) under a
+  // normal interactive install, so that is where this must look instead.
+  PasswordPath := ExpandConstant('{localappdata}') + '\Temp\secret-grounds-admin-password.txt';
+  if not FileExists(PasswordPath) then Exit;
+  if LoadStringsFromFile(PasswordPath, Lines) and (GetArrayLength(Lines) > 0) then begin
+    Password := Lines[0];
+    MsgBox('Secret Grounds System Admin password (write this down now -- it will not be shown again):' + #13#10#13#10 +
+      Password + #13#10#13#10 +
+      'Sign in with this password, then go to Staff -> Admin -> Change Password to set one you''ll remember.',
+      mbInformation, MB_OK);
+  end;
+  DeleteFile(PasswordPath);
+end;
+
 procedure RunCashierPostInstall;
 var
   Retry: Boolean;
@@ -747,6 +776,7 @@ begin
       CashierLogPathsMessage, mbError, MB_OK);
     Exit;
   end;
+  ShowGeneratedAdminPasswordIfPresent;
 
   if not RunCashierScript('install-backend-firewall-rule.ps1', '') then begin
     MsgBox('Secret Grounds could not install the Private-network firewall rule for the backend.' + #13#10#13#10 +

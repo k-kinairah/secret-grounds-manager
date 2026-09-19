@@ -23,6 +23,12 @@ if (!(Test-Path (Join-Path $Script:SecretGroundsRoot "dashboard\.next\standalone
 $secret = Get-SgEnv "SECRET_GROUNDS_DEPLOYMENT_SECRET" ""
 if (Test-SgPlaceholderValue $secret) { Add-Error "SECRET_GROUNDS_DEPLOYMENT_SECRET is missing or still an example value." }
 if (![string]::IsNullOrWhiteSpace($secret) -and $secret.Length -lt 32) { Add-Error "SECRET_GROUNDS_DEPLOYMENT_SECRET must be at least 32 characters." }
+$adminPassword = Get-SgEnv "SECRET_GROUNDS_ADMIN_PASSWORD" ""
+if ([string]::IsNullOrWhiteSpace($adminPassword)) {
+    Add-Warning "SECRET_GROUNDS_ADMIN_PASSWORD is not set. The System Admin account (full system access) falls back to a well-known default password -- set this or change the password from Staff -> Admin -> Change Password."
+} elseif ($adminPassword -eq "admin12345") {
+    Add-Warning "SECRET_GROUNDS_ADMIN_PASSWORD is still the well-known default. Change it from Staff -> Admin -> Change Password."
+}
 if ((Get-SgBool "SECRET_GROUNDS_TEST_MODE" $false) -and !$AllowTestMode) { Add-Error "SECRET_GROUNDS_TEST_MODE=true is not allowed for production startup." }
 if ((Get-SgEnv "SECRET_GROUNDS_APP_MODE" "production").ToLowerInvariant() -ne "production") { Add-Error "SECRET_GROUNDS_APP_MODE must be production." }
 

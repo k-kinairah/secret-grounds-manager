@@ -1043,6 +1043,41 @@ class SessionService:
                 status_code=502,
                 detail=f"Add time command failed: {error}",
             ) from error
+        # Re-read right before writing rather than reusing the pre-await
+        # snapshot: send_required_command just awaited a network round-trip
+        # to the client PC, and in that window another session mutation can
+        # commit its own full-row overwrite -- most commonly the client's
+        # OWN expiration message independently firing begin_expiration_grace
+        # for this exact session, since a top-up racing the session's own
+        # expiration is precisely the "rescue" scenario add_time already has
+        # a branch for (is_grace_rescue). Without this, whichever of the two
+        # writes lands second would blindly revert the other: either the
+        # customer's just-added time gets discarded, or the grace-period
+        # transition gets silently undone. Rebuilding updated_session from a
+        # fresh read means this add_time's own changes land on top of
+        # whatever happened in between instead of clobbering it. The command
+        # already sent to the client keeps using the pre-await view (it had
+        # to be built before awaiting the client's ack) -- the client's
+        # existing resync-on-reconnect logic reconciles any small drift
+        # against this now-authoritative database write.
+        latest_session = self.repository.get_session(session_id) or session
+        is_grace_rescue = latest_session.status == "grace_period"
+        updated_session = latest_session.model_copy(
+            update={
+                "status": "active",
+                "added_seconds": latest_session.added_seconds + seconds,
+                "total_seconds": latest_session.total_seconds + seconds,
+                "scheduled_end_at": (
+                    now + timedelta(seconds=seconds)
+                    if is_grace_rescue
+                    else latest_session.scheduled_end_at + timedelta(seconds=seconds)
+                ),
+                "additional_amount": latest_session.additional_amount + amount,
+                "total_amount": latest_session.total_amount + amount,
+                "grace_started_at": None,
+                "shutdown_at": None,
+            }
+        )
         self.repository.update_session(updated_session)
         self.create_event(
             session.session_id,
@@ -1604,6 +1639,32 @@ class SessionService:
             ) from error
 
         if not session_already_persisted:
+            # Same re-read-before-write fix as add_time() above, and for the
+            # same reason: send_required_command just awaited a network
+            # round-trip, during which the client's own expiration message
+            # can independently commit a begin_expiration_grace write for
+            # this exact session (add_time's docstring on the identical fix
+            # has the full explanation). Rebuild from a fresh read so this
+            # payment's added time lands on top of that instead of
+            # reverting it.
+            latest_session = self.repository.get_session(session.session_id) or session
+            is_grace_rescue = latest_session.status == "grace_period"
+            updated_session = latest_session.model_copy(
+                update={
+                    "status": "active",
+                    "added_seconds": latest_session.added_seconds + seconds,
+                    "total_seconds": latest_session.total_seconds + seconds,
+                    "scheduled_end_at": (
+                        now + timedelta(seconds=seconds)
+                        if is_grace_rescue
+                        else latest_session.scheduled_end_at + timedelta(seconds=seconds)
+                    ),
+                    "additional_amount": latest_session.additional_amount + amount_due,
+                    "total_amount": latest_session.total_amount + amount_due,
+                    "grace_started_at": None,
+                    "shutdown_at": None,
+                }
+            )
             self.repository.update_session(updated_session)
         self.create_event(
             session.session_id,

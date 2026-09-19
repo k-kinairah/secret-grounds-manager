@@ -37,7 +37,7 @@ Runtime files belong in `data/`, `backups/`, `logs/`, and private `config/.env`.
 
 1. Install Python and Node.js, or copy a prepared portable folder that already includes `.venv` and dashboard dependencies.
 2. Copy `config/.env.example` to `config/.env`.
-3. Edit `config/.env`; set ports, `SECRET_GROUNDS_DB_PATH`, `SECRET_GROUNDS_BACKUP_DIR`, `NEXT_PUBLIC_FASTAPI_BASE_URL`, CORS origins, and a real `SECRET_GROUNDS_DEPLOYMENT_SECRET`.
+3. Edit `config/.env`; set ports, `SECRET_GROUNDS_DB_PATH`, `SECRET_GROUNDS_BACKUP_DIR`, `NEXT_PUBLIC_FASTAPI_BASE_URL`, CORS origins, a real `SECRET_GROUNDS_DEPLOYMENT_SECRET`, and a real `SECRET_GROUNDS_ADMIN_PASSWORD` -- this seeds the System Admin account (full system access) on first boot, and falls back to a well-known default if left unset. (The GUI installer's Cashier setup does this for you automatically and shows the generated password once; this manual path does not, so set it yourself.)
 4. Keep `SECRET_GROUNDS_TEST_MODE=false` for shop use.
 5. Run `powershell -ExecutionPolicy Bypass -File scripts\install-dependencies.ps1`.
 6. Run `powershell -ExecutionPolicy Bypass -File scripts\build-dashboard.ps1`.

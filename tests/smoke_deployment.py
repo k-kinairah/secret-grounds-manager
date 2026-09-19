@@ -325,6 +325,7 @@ def test_check_deployment_covers_requested_safety_checks() -> None:
         "PRAGMA integrity_check",
         "legacy database",
         "Test-SgPortAvailable",
+        "SECRET_GROUNDS_ADMIN_PASSWORD",
     ]:
         assert expected in check
 
