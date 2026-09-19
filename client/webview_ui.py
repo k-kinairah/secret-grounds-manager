@@ -544,6 +544,52 @@ def set_native_window_visibility(
         return False
 
 
+def minimize_native_window(window: webview.Window) -> bool:
+    """Minimize a loaded WinForms host to the taskbar without blocking on
+    Control.Invoke. Used to send the collapsed-session pill back down to a
+    taskbar button instead of leaving it floating over whatever the customer
+    is doing."""
+    try:
+        from ctypes import wintypes
+
+        hwnd_value = _taskbar_hwnd(window)
+        if hwnd_value is None:
+            return False
+        hwnd = wintypes.HWND(hwnd_value)
+        show_window = ctypes.windll.user32.ShowWindowAsync
+        show_window.argtypes = [wintypes.HWND, ctypes.c_int]
+        show_window.restype = wintypes.BOOL
+        _diagnostic(f"native minimize before {_thread_label()}")
+        show_window(hwnd, 6)  # SW_MINIMIZE
+        _diagnostic(f"native minimize after {_thread_label()}")
+        return True
+    except Exception as error:
+        _diagnostic(f"native minimize failed: {error}")
+        return False
+
+
+def restore_native_window(window: webview.Window) -> bool:
+    """Undo a prior SW_MINIMIZE. A minimized WinForms window ignores
+    SetWindowPos bounds changes until it is back in the Normal state, so this
+    must run before repositioning a pill that was minimized on a previous
+    collapse."""
+    try:
+        from ctypes import wintypes
+
+        hwnd_value = _taskbar_hwnd(window)
+        if hwnd_value is None:
+            return False
+        hwnd = wintypes.HWND(hwnd_value)
+        show_window = ctypes.windll.user32.ShowWindowAsync
+        show_window.argtypes = [wintypes.HWND, ctypes.c_int]
+        show_window.restype = wintypes.BOOL
+        show_window(hwnd, 9)  # SW_RESTORE
+        return True
+    except Exception as error:
+        _diagnostic(f"native restore failed: {error}")
+        return False
+
+
 def set_native_window_z_order(window: webview.Window, on_top: bool) -> bool:
     try:
         from ctypes import wintypes
@@ -846,6 +892,7 @@ class SecretGroundsWebViewHost:
         # unnecessary resize.
         self._last_screen_size: tuple[int, int] | None = None
         self._native_lock_deactivate_handler: Callable[..., None] | None = None
+        self._native_pill_deactivate_handler: Callable[..., None] | None = None
         if self.lock_controller is not None:
             self.lock_controller.set_presentation_refresh(self.request_lock_refresh)
         if self.overlay_controller is not None:
@@ -1093,6 +1140,7 @@ class SecretGroundsWebViewHost:
         _diagnostic("webview host on_start")
         self.started.set()
         self._bind_native_lock_guard()
+        self._bind_pill_auto_minimize_guard()
         try:
             self._last_screen_size = current_screen_size()
         except Exception as error:
@@ -1341,11 +1389,24 @@ class SecretGroundsWebViewHost:
         pill = self.windows.get("pill")
         if pill is None:
             return
+        # A minimized WinForms window ignores bounds changes until restored
+        # to Normal -- without this, a *second* collapse in the same session
+        # (minimize, restore the full overlay, minimize again) would leave
+        # the pill stuck at its minimized position instead of its anchored
+        # corner.
+        restore_native_window(pill)
         self.render_pill()
         width, height = self.last_pill_size
         apply_pill_native_geometry(pill, width, height)
         self._set_window_visible("pill", True)
         self._set_window_on_top("pill", pill, False)
+        # A real taskbar button, minimized by default: the customer clicks it
+        # to check their remaining time (Windows itself restores + activates
+        # the window on that click), and the Deactivate guard bound in
+        # _bind_pill_auto_minimize_guard sends it back down the moment they
+        # click back into whatever they were doing.
+        set_native_taskbar_presence(pill, True)
+        minimize_native_window(pill)
 
     def collapse_overlay(self) -> None:
         _diagnostic("collapse_overlay invoked")
@@ -1362,6 +1423,11 @@ class SecretGroundsWebViewHost:
         pill = self.windows.get("pill")
         overlay = self.windows.get("overlay")
         if pill is not None:
+            # Undo a pending minimize first: GetWindowRect on a minimized
+            # window reports its iconic placeholder position, not its
+            # anchored corner, and the next collapse would otherwise inherit
+            # that same stale minimized state.
+            restore_native_window(pill)
             self._set_window_visible("pill", False)
         if overlay is not None:
             self.render_overlay()
@@ -1570,6 +1636,32 @@ class SecretGroundsWebViewHost:
             native.Deactivate += reassert
         except Exception as error:
             _diagnostic(f"native lock focus guard failed: {error}")
+
+    def _bind_pill_auto_minimize_guard(self) -> None:
+        # Mirror image of the lock guard above: the pill is a real taskbar
+        # window (see set_native_taskbar_presence) so a customer can click it
+        # to check their remaining time while playing a game in fullscreen,
+        # but it must not just sit floating on top afterward. As soon as it
+        # loses focus again (they clicked back into the game), send it back
+        # down to a taskbar button.
+        pill_window = self.windows.get("pill")
+        if pill_window is None:
+            return
+        native = getattr(pill_window, "native", None)
+        if native is None:
+            return
+
+        def auto_minimize(sender: Any, _args: Any) -> None:
+            try:
+                minimize_native_window(pill_window)
+            except Exception as error:
+                _diagnostic(f"pill auto-minimize failed: {error}")
+
+        self._native_pill_deactivate_handler = auto_minimize
+        try:
+            native.Deactivate += auto_minimize
+        except Exception as error:
+            _diagnostic(f"native pill auto-minimize guard failed: {error}")
 
     def _open_setup(self) -> None:
         action = (

@@ -3,6 +3,7 @@ import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -281,6 +282,102 @@ def test_screen_geometry_reconciliation_only_acts_on_a_real_change() -> None:
         webview_ui_module.current_screen_size = original_screen_size
 
 
+def test_collapsed_pill_gets_taskbar_presence_and_starts_minimized() -> None:
+    # The customer's own request: the pill must not float on top of whatever
+    # they're doing. It should be a real taskbar button, minimized by
+    # default, that they click to check their remaining time -- and the
+    # Deactivate guard (bound in _bind_pill_auto_minimize_guard) sends it
+    # back down the moment they click back into their game.
+    import client.webview_ui as webview_ui_module
+
+    class FakeWindow:
+        def show(self) -> None:
+            pass
+
+        def hide(self) -> None:
+            pass
+
+        def resize(self, width: int, height: int) -> None:
+            pass
+
+        def move(self, x: int, y: int) -> None:
+            pass
+
+    order: list[str] = []
+    taskbar_calls: list[tuple[object, bool]] = []
+    minimize_calls: list[object] = []
+    original_taskbar_presence = webview_ui_module.set_native_taskbar_presence
+    original_minimize = webview_ui_module.minimize_native_window
+    original_restore = webview_ui_module.restore_native_window
+
+    def fake_taskbar_presence(window: object, visible: bool) -> bool:
+        order.append("taskbar")
+        taskbar_calls.append((window, visible))
+        return True
+
+    def fake_minimize(window: object) -> bool:
+        order.append("minimize")
+        minimize_calls.append(window)
+        return True
+
+    webview_ui_module.set_native_taskbar_presence = fake_taskbar_presence
+    webview_ui_module.minimize_native_window = fake_minimize
+    webview_ui_module.restore_native_window = lambda window: True
+    try:
+        host = SecretGroundsWebViewHost()
+        pill_window = FakeWindow()
+        host.windows = {"pill": pill_window}  # type: ignore[dict-item]
+        host.loaded = {"pill"}
+        host.window_visibility = {"pill": False}
+        host.show_collapsed_control()
+        assert taskbar_calls == [(pill_window, True)]
+        assert minimize_calls == [pill_window]
+        # Taskbar presence and minimize must apply only after the pill is
+        # actually positioned/shown, in that order.
+        assert order == ["taskbar", "minimize"]
+    finally:
+        webview_ui_module.set_native_taskbar_presence = original_taskbar_presence
+        webview_ui_module.minimize_native_window = original_minimize
+        webview_ui_module.restore_native_window = original_restore
+
+
+def test_pill_auto_minimizes_when_it_loses_focus() -> None:
+    import client.webview_ui as webview_ui_module
+
+    class FakeEvent:
+        def __init__(self) -> None:
+            self.handlers: list[Any] = []
+
+        def __iadd__(self, handler: Any) -> "FakeEvent":
+            self.handlers.append(handler)
+            return self
+
+    class FakeNative:
+        def __init__(self) -> None:
+            self.Deactivate = FakeEvent()
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.native = FakeNative()
+
+    minimize_calls: list[object] = []
+    original_minimize = webview_ui_module.minimize_native_window
+    webview_ui_module.minimize_native_window = lambda window: minimize_calls.append(window) or True
+    try:
+        host = SecretGroundsWebViewHost()
+        pill_window = FakeWindow()
+        host.windows = {"pill": pill_window}  # type: ignore[dict-item]
+        host._bind_pill_auto_minimize_guard()
+        assert len(pill_window.native.Deactivate.handlers) == 1
+
+        # Simulate the customer clicking back into their game: the window
+        # loses focus, .NET fires Deactivate.
+        pill_window.native.Deactivate.handlers[0](pill_window.native, None)
+        assert minimize_calls == [pill_window]
+    finally:
+        webview_ui_module.minimize_native_window = original_minimize
+
+
 def test_native_visibility_returns_false_without_a_loaded_winforms_host() -> None:
     window = SimpleNamespace(native=None)
     assert not set_native_window_visibility(window, True)  # type: ignore[arg-type]
@@ -299,6 +396,8 @@ def main() -> None:
     test_webview_startup_failure_uses_tk_fallback()
     test_window_visibility_changes_are_idempotent()
     test_webview_collapse_shows_desktop_control()
+    test_collapsed_pill_gets_taskbar_presence_and_starts_minimized()
+    test_pill_auto_minimizes_when_it_loses_focus()
     test_screen_geometry_reconciliation_only_acts_on_a_real_change()
     test_native_visibility_returns_false_without_a_loaded_winforms_host()
     test_javascript_errors_are_recorded_by_the_bridge()
