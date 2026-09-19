@@ -29,6 +29,23 @@ def test_inno_installer_has_role_selection() -> None:
     assert "IsClient" in source
 
 
+def test_installer_and_uninstall_entry_have_a_real_app_icon() -> None:
+    # Reported live: Windows Settings -> Installed apps showed Secret Grounds
+    # with a blank/generic icon. UninstallDisplayIcon pointed at {app}\VERSION
+    # -- a plain text file, not an icon-bearing one, so Windows had nothing to
+    # extract an icon from and fell back to generic. Setup.exe itself was
+    # never given a branded icon either.
+    source = read("installer/SecretGroundsSetup.iss")
+    assert "UninstallDisplayIcon={app}\\VERSION" not in source
+    assert "UninstallDisplayIcon={app}\\secret-grounds-logo.ico" in source
+    assert "SetupIconFile=..\\client\\assets\\secret-grounds-logo.ico" in source
+    # The icon file itself must actually be installed (unconditionally --
+    # Settings shows the uninstall entry regardless of which role was
+    # chosen), not just referenced.
+    assert 'Source: "..\\client\\assets\\secret-grounds-logo.ico"; DestDir: "{app}"' in source
+    assert (PROJECT_ROOT / "client" / "assets" / "secret-grounds-logo.ico").is_file()
+
+
 def test_installer_separates_cashier_and_client_payloads() -> None:
     source = read("installer/SecretGroundsSetup.iss")
     assert 'Source: "..\\server\\*.py"' in source
@@ -625,6 +642,7 @@ def test_client_post_install_script_uses_scheduled_task_as_launch_mechanism() ->
 def main() -> None:
     tests = [
         test_inno_installer_has_role_selection,
+        test_installer_and_uninstall_entry_have_a_real_app_icon,
         test_installer_separates_cashier_and_client_payloads,
         test_installer_preserves_cashier_data_by_default,
         test_installer_client_validation_is_present,

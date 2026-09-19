@@ -20,7 +20,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 WizardStyle=modern
-UninstallDisplayIcon={app}\VERSION
+UninstallDisplayIcon={app}\secret-grounds-logo.ico
+SetupIconFile=..\client\assets\secret-grounds-logo.ico
 SetupLogging=yes
 VersionInfoVersion=1.0.0.0
 VersionInfoTextVersion={#AppVersion}
@@ -39,6 +40,7 @@ Name: "{app}\client"; Check: IsClient
 
 [Files]
 Source: "..\VERSION"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\client\assets\secret-grounds-logo.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\ARCHITECTURE.md"; DestDir: "{app}"; Flags: ignoreversion; Check: IsCashier
 Source: "..\config\.env.example"; DestDir: "{app}\config"; Flags: ignoreversion; Check: IsCashier
 Source: "..\server\*.py"; DestDir: "{app}\server"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsCashier
