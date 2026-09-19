@@ -220,3 +220,39 @@ The lock screen includes an administrator-only recovery mechanism protected by a
 
 Reason:
 Authorized staff must always be able to regain control of a client PC.
+
+---
+
+## Decision #24: Client updates are staged on the Cashier PC, not fetched from the internet
+
+An operator builds a release, then drops its zip and a manifest (version, sha256, size) into `updates\incoming\` on the Cashier PC (`scripts\stage-client-update.ps1` produces both). The backend validates and promotes that drop into `updates\staged\` on its own; it never reaches out to the internet to look for one.
+
+Reason:
+The shop's own LAN, not internet access, is the one thing every deployment can rely on. Requiring the operator to physically place the release also doubles as the authorization step -- nothing auto-installs anything nobody chose to hand the server.
+
+---
+
+## Decision #25: The server pushes updates over the same command WebSocket; clients also poll on reconnect
+
+Once an update is staged, the server sends every currently-connected customer PC an `update_available` command (payload: version, sha256, size). A PC that is offline at that moment, or whose push doesn't get delivered, still discovers the same staged update itself the next time its command WebSocket (re)connects, via `GET /updates/client/manifest`.
+
+Reason:
+Decision #9 already established that commands are not queued for offline clients. Update delivery cannot depend on every PC being online at the exact moment the operator stages a release, so the push is best-effort and reconnect-time polling is the real guarantee.
+
+---
+
+## Decision #26: A client update is downloaded and verified in the background, but only ever applied while the PC is idle
+
+`UpdateManager` (client\update_manager.py) downloads the staged package over HTTP, verifies its sha256, and extracts it into `updates\staged\<version>\` -- all while the client keeps handling sessions normally. Only once there is no active local session (Decision #18: that already means the lock screen is showing) does the client write `updates\pending-apply.json` and exit the process.
+
+Reason:
+Windows keeps a running exe's own files open, so this process can never safely replace itself anyway. Gating the exit on "idle" the same way Decisions #18-#22 already gate unlocking means an update can never interrupt a paying customer's session, and a session that starts in the split second before the exit is no different from the customer killing the client in Task Manager -- already a case the client recovers from cleanly.
+
+---
+
+## Decision #27: The process supervisor performs the actual file swap
+
+`scripts\run-client-supervised.ps1` already restarts the client unconditionally whenever it exits, so it is the one place guaranteed to run with the old client's files completely unlocked. On seeing `updates\pending-apply.json` after an exit, it moves the current `SecretGroundsClient.exe`/`_internal\` into `client\_previous-version\` and moves the staged build into their place before relaunching.
+
+Reason:
+Building a separate updater process to do this would duplicate a restart-and-recover mechanism the supervisor already provides for a different reason (a customer ending the client in Task Manager). Reusing it means the update path is exercised by the same code as ordinary crash recovery, not a rarely-run parallel one.

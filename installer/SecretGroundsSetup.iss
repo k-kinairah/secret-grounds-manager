@@ -36,6 +36,9 @@ Name: "{app}\data"; Check: IsCashier
 Name: "{app}\backups"; Check: IsCashier
 Name: "{app}\logs"
 Name: "{app}\client"; Check: IsClient
+Name: "{app}\updates\incoming"; Check: IsCashier
+Name: "{app}\updates\staged"; Check: IsCashier
+Name: "{app}\updates"; Check: IsClient
 
 [Files]
 Source: "..\VERSION"; DestDir: "{app}"; Flags: ignoreversion

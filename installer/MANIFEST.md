@@ -25,6 +25,11 @@ Creates at install or first run:
 - `data\`
 - `backups\`
 - `logs\`
+- `updates\incoming\` -- drop a release here (scripts\stage-client-update.ps1's
+  output) to roll it out to every connected customer PC automatically; see
+  ARCHITECTURE.md Decision #24.
+- `updates\staged\` -- the server's own validated copy, served to clients.
+  Managed entirely by the backend; do not edit by hand.
 - Private-profile-only firewall rule: `Secret Grounds Backend Private`
 - Scheduled task: `Secret Grounds Cashier Stack`
 
@@ -48,6 +53,13 @@ Creates:
 
 - `client\config.json`
 - `client\config-backups\` (timestamped backups made before any explicit configuration change or when an existing config is found invalid)
+- `client\_previous-version\` (the exe/`_internal\` an auto-update replaced,
+  kept for manual rollback -- overwritten by the next update, never by
+  anything else)
+- `updates\staged\<version>\` (a downloaded, sha256-verified update, staged
+  until the PC is idle) and `updates\pending-apply.json` (briefly, only
+  between the client exiting to apply an update and the supervisor script
+  applying it)
 - optional scheduled task: `Secret Grounds Client`
 
 Upgrade behavior:
@@ -62,3 +74,4 @@ Upgrade behavior:
 - `data\`
 - `backups\`
 - `logs\`
+- `updates\`

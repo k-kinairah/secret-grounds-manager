@@ -75,6 +75,13 @@ def get_client_config_path() -> Path:
     return Path(__file__).resolve().with_name("config.json")
 
 
+def get_client_install_dir() -> Path:
+    """The directory holding the running client -- SecretGroundsClient.exe
+    and config.json when packaged, or the client/ package in dev. Used by
+    UpdateManager to find updates\\ as a sibling of this directory."""
+    return get_client_config_path().parent
+
+
 def default_config_payload() -> dict[str, object]:
     return {
         "server_host": DEFAULT_SERVER_HOST,

@@ -1,3 +1,4 @@
+import os
 import socket
 import time
 import traceback
@@ -32,6 +33,7 @@ from client.config import (
     SCREEN_CAPTURE_MAX_WIDTH,
     SESSION_RECOVERY_PATH,
     get_client_config_path,
+    get_client_install_dir,
     load_client_config,
 )
 from client.customer_overlay import CustomerOverlayController
@@ -41,8 +43,12 @@ from client.screen_capture import ScreenCaptureWorker
 from client.session_recovery import SessionRecoveryStore
 from client.setup_wizard import show_setup_wizard
 from client.station_resolver import build_http_resolve_fn, resolve_station_identity
+from client.update_manager import UpdateManager
 from client.utils import get_local_ip, get_local_mac_address
 from client.websocket_transport import SimpleWebSocketClient
+
+
+UPDATE_APPLY_CHECK_INTERVAL_SECONDS = 30
 
 
 @dataclass
@@ -90,6 +96,13 @@ class SecretGroundsClient:
         self.last_session_init_failure_reason: str | None = None
         self.processed_command_ids: set[str] = set()
         self.remote_controls = RemoteControlHandler(pc_name)
+        self.update_manager = UpdateManager(
+            server_url=self.server_url,
+            current_version=APP_VERSION,
+            install_root=get_client_install_dir(),
+            request_timeout=self.request_timeout,
+            http_session=self.session,
+        )
         self.final_warning_sound_enabled = EXPIRATION_SOUND_ENABLED
         self.websocket_lock = Lock()
         self.current_websocket: SimpleWebSocketClient | None = None
@@ -477,6 +490,9 @@ class SecretGroundsClient:
         if command_type in {"show_message", "show_announcement"}:
             return self.handle_remote_message_command(command)
 
+        if command_type == "update_available":
+            return self.handle_update_available_command(command)
+
         return self.build_acknowledgement(
             command_id=command_id,
             status="failed",
@@ -519,6 +535,25 @@ class SecretGroundsClient:
         except Exception as error:
             print(f"Remote {command_type} rejected: {error}")
             return self.build_acknowledgement(command_id, "failed", str(error))
+
+    def handle_update_available_command(self, command: dict[str, Any]) -> dict[str, str | None]:
+        """Kicks off a background download only -- the update is never
+        applied here. See UpdateManager and run_update_apply_loop() below:
+        applying means exiting the process, which must only happen once the
+        PC is confirmed idle, not synchronously from a command handler."""
+        command_id = str(command.get("command_id", ""))
+        payload = command.get("payload")
+        if not isinstance(payload, dict):
+            return self.build_acknowledgement(command_id, "failed", "invalid_payload")
+        try:
+            version = str(payload["version"])
+            sha256 = str(payload["sha256"])
+            size_bytes = int(payload["size_bytes"])
+        except (KeyError, TypeError, ValueError):
+            return self.build_acknowledgement(command_id, "failed", "invalid_payload")
+
+        self.update_manager.consider_update(version, sha256, size_bytes)
+        return self.build_acknowledgement(command_id, "completed", f"Update {version} queued for background download")
 
     def handle_remote_message_command(self, command: dict[str, Any]) -> dict[str, str | None]:
         command_id = str(command.get("command_id", ""))
@@ -1296,6 +1331,10 @@ class SecretGroundsClient:
                     self.customer_overlay.set_connection_online(True)
                     self.reconcile_session_state()
                     self.flush_pending_completion()
+                    # Covers a PC that was offline (or mid-reconnect) when the
+                    # server pushed update_available -- it still finds the
+                    # same staged update for itself every time it reconnects.
+                    Thread(target=self.update_manager.check_server_for_update, daemon=True).start()
 
                     while not self.stop_event.is_set():
                         self.handle_command(websocket)
@@ -1322,6 +1361,25 @@ class SecretGroundsClient:
             time.sleep(self.heartbeat_interval)
             self.send_heartbeat()
 
+    def run_update_apply_loop(self) -> None:
+        """Periodically checks whether a verified update is staged and the
+        PC is idle, and if so exits the process so the supervisor script can
+        swap the files in before relaunching it. Never fires mid-session:
+        Decision #18 already makes "no active local session" mean the lock
+        screen is showing, so this is the same idle signal the rest of the
+        client already trusts."""
+        while not self.stop_event.is_set():
+            time.sleep(UPDATE_APPLY_CHECK_INTERVAL_SECONDS)
+            with self.active_session_lock:
+                has_active_session = self.active_session is not None
+            is_idle = (
+                self.initial_reconciliation_complete.is_set()
+                and not has_active_session
+                and self.lock_screen.is_locked()
+            )
+            if self.update_manager.apply_if_idle(is_idle):
+                os._exit(0)
+
     def run_forever(self) -> None:
         self.register_until_connected()
         try:
@@ -1333,6 +1391,8 @@ class SecretGroundsClient:
         # not stop presence updates, and a server restart reconnects both paths.
         websocket_thread = Thread(target=self.run_websocket_loop, daemon=True)
         websocket_thread.start()
+        update_apply_thread = Thread(target=self.run_update_apply_loop, daemon=True)
+        update_apply_thread.start()
         if self.screen_capture_worker is not None:
             self.screen_capture_worker.start()
         self.run_heartbeat_loop()

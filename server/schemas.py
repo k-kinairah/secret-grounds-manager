@@ -346,6 +346,7 @@ class ClientCommand(BaseModel):
         "show_message",
         "show_announcement",
         "clear_customer_lock",
+        "update_available",
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
