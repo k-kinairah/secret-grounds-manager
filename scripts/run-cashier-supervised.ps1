@@ -30,7 +30,16 @@ New-Item -ItemType Directory -Force -Path (Split-Path $resolvedServerLog) | Out-
 $stopSentinel = if ($StopSentinelPath) {
     $StopSentinelPath
 } else {
-    Join-Path (Split-Path $resolvedServerLog) "cashier-supervisor.stop"
+    # NOT under {app}\logs: that directory is created by this SYSTEM-run
+    # supervisor, and Program Files' default ACL blocks a non-admin
+    # interactive user (the cashier, clicking the "Stop Secret Grounds"
+    # shortcut) from writing there at all -- confirmed live as an
+    # UnauthorizedAccessException. %ProgramData% is a fixed, machine-wide
+    # location any signed-in user can write to without elevation, and SYSTEM
+    # can read regardless of who wrote it.
+    $stopSentinelDir = Join-Path $env:ProgramData "Secret Grounds"
+    New-Item -ItemType Directory -Force -Path $stopSentinelDir | Out-Null
+    Join-Path $stopSentinelDir "cashier-supervisor.stop"
 }
 
 function Test-StopRequested {

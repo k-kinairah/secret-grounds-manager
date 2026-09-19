@@ -164,12 +164,20 @@ def test_cashier_supervisor_relaunches_and_is_stoppable() -> None:
     assert "Test-StopRequested" in supervisor
     # It tracks its own PID for the stop scripts.
     assert 'Set-SgProcessRecord "cashier-supervisor"' in supervisor
+    # Reported live: writing the sentinel under {app}\logs threw
+    # UnauthorizedAccessException for the non-admin cashier -- that
+    # directory is created by this SYSTEM-run supervisor, and Program
+    # Files' default ACL lets a standard user modify files they already
+    # made but not create a brand-new one there. Must live under
+    # %ProgramData% instead, which does not require elevation.
+    assert 'Join-Path $env:ProgramData "Secret Grounds"' in supervisor
 
     stop = read("scripts/stop-secret-grounds.ps1")
     assert "cashier-supervisor.stop" in stop
     assert 'Stop-SgStartedProcess "cashier-supervisor"' in stop
     assert "Disable-ScheduledTask" in stop
     assert "KeepTaskEnabled" in stop
+    assert 'Join-Path $env:ProgramData "Secret Grounds"' in stop
 
     # A manual restart must re-arm the watchdog rather than leave the stack
     # unsupervised until someone remembers to reinstall the autostart task.

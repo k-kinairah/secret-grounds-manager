@@ -13,7 +13,16 @@ Import-SgEnv
 $serverLog = Get-SgEnv "SECRET_GROUNDS_SERVER_LOG" ".\logs\server.log"
 $resolvedServerLog = Resolve-SgPath $serverLog
 New-Item -ItemType Directory -Force -Path (Split-Path $resolvedServerLog) | Out-Null
-$stopSentinel = Join-Path (Split-Path $resolvedServerLog) "cashier-supervisor.stop"
+# NOT under {app}\logs -- confirmed live as an UnauthorizedAccessException:
+# that directory is created by the SYSTEM-run supervisor, and Program
+# Files' default ACL lets a non-admin interactive user (the cashier,
+# clicking the "Stop Secret Grounds" shortcut) modify files they already
+# have access to but not CREATE a brand-new one there. See the matching
+# comment in run-cashier-supervised.ps1, which must resolve to this same
+# path.
+$stopSentinelDir = Join-Path $env:ProgramData "Secret Grounds"
+New-Item -ItemType Directory -Force -Path $stopSentinelDir | Out-Null
+$stopSentinel = Join-Path $stopSentinelDir "cashier-supervisor.stop"
 $taskName = "Secret Grounds Cashier Stack"
 
 # 1. Tell a running supervisor loop not to restart the stack after this.
