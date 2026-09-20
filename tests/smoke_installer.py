@@ -29,6 +29,27 @@ def test_inno_installer_has_role_selection() -> None:
     assert "IsClient" in source
 
 
+def test_cashier_data_folders_are_writable_by_the_interactive_operator() -> None:
+    # Reported live: the interactive cashier operator (signed in normally,
+    # not elevated) got "Access to the path '...\logs\server.log' is
+    # denied" from both the AutoOpen task and the plain "Secret Grounds
+    # Dashboard" shortcut -- {app}\data\{app}\logs are created by the
+    # SYSTEM-run Cashier Stack task, and Program Files' default ACL only
+    # grants BUILTIN\Users read/execute, not write.
+    config_script = read("scripts/initialize-cashier-config.ps1")
+    assert "icacls" in config_script
+    assert "*S-1-5-32-545" in config_script  # BUILTIN\Users, locale-independent
+    assert "(OI)(CI)M" in config_script
+    # Must run unconditionally, before the "existing config preserved"
+    # early return -- an existing install reinstalled with this fix must
+    # still get its folder permissions corrected, since config being
+    # preserved has nothing to do with whether those folders are already
+    # writable.
+    icacls_index = config_script.index("icacls")
+    preserved_index = config_script.index("Existing cashier config preserved")
+    assert icacls_index < preserved_index
+
+
 def test_cashier_gets_a_generated_admin_password_not_a_hardcoded_default() -> None:
     # Pre-deployment audit finding: the System Admin account (full system
     # access -- backups, PC power control, settings) seeded with a
@@ -724,6 +745,7 @@ def test_client_post_install_script_uses_scheduled_task_as_launch_mechanism() ->
 def main() -> None:
     tests = [
         test_inno_installer_has_role_selection,
+        test_cashier_data_folders_are_writable_by_the_interactive_operator,
         test_cashier_gets_a_generated_admin_password_not_a_hardcoded_default,
         test_installer_and_uninstall_entry_have_a_real_app_icon,
         test_installer_separates_cashier_and_client_payloads,

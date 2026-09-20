@@ -23,6 +23,34 @@ if ($BackendPort -eq 8000 -or $DashboardPort -eq 3000) {
     throw "Installer production defaults must not use development ports 8000 or 3000."
 }
 
+# Reported live: the interactive cashier operator, signed in normally (not
+# elevated), got "Access to the path '...\logs\server.log' is denied" the
+# moment anything they ran (the AutoOpen task, or the plain "Secret Grounds
+# Dashboard" shortcut) tried to log a line -- {app}\data\{app}\logs are
+# created by the SYSTEM-run Cashier Stack task, and Program Files' default
+# ACL only grants BUILTIN\Users read/execute, not write. This must run
+# every time, not just on a fresh config (below), since an *existing*
+# install reinstalled with this fix would otherwise keep its
+# already-broken folder permissions forever -- config being preserved has
+# nothing to do with whether these folders are already writable.
+New-Item -ItemType Directory -Force -Path `
+    (Join-Path $Script:SecretGroundsRoot "config"),
+    (Join-Path $Script:SecretGroundsRoot "data"),
+    (Join-Path $Script:SecretGroundsRoot "backups"),
+    (Join-Path $Script:SecretGroundsRoot "logs") | Out-Null
+foreach ($writableDir in @("config", "data", "backups", "logs")) {
+    $writablePath = Join-Path $Script:SecretGroundsRoot $writableDir
+    # *S-1-5-32-545 = the well-known SID for BUILTIN\Users, used instead of
+    # the literal name so this works regardless of the OS's display
+    # language. (OI)(CI)M = Modify, inherited by files and subfolders
+    # created later too (the whole point -- server.log itself doesn't
+    # exist yet the first time this runs).
+    & icacls $writablePath /grant "*S-1-5-32-545:(OI)(CI)M" /T /Q 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Could not grant write access on $writablePath (icacls exit $LASTEXITCODE). The cashier operator may need to run as Administrator to start Secret Grounds manually."
+    }
+}
+
 if ((Test-Path $Script:ConfigPath) -and !$Force) {
     Import-SgEnv -RequireConfig
     Assert-SgDeploymentConfig
@@ -68,12 +96,6 @@ try {
 $adminPassword = -join ($adminPasswordBytes | ForEach-Object { $adminPasswordChars[$_ % $adminPasswordChars.Length] })
 $adminPasswordOutPath = Join-Path ([System.IO.Path]::GetTempPath()) "secret-grounds-admin-password.txt"
 Set-Content -LiteralPath $adminPasswordOutPath -Value $adminPassword -Encoding ASCII -NoNewline
-
-New-Item -ItemType Directory -Force -Path `
-    (Join-Path $Script:SecretGroundsRoot "config"),
-    (Join-Path $Script:SecretGroundsRoot "data"),
-    (Join-Path $Script:SecretGroundsRoot "backups"),
-    (Join-Path $Script:SecretGroundsRoot "logs") | Out-Null
 
 $config = @"
 SECRET_GROUNDS_APP_MODE=production
