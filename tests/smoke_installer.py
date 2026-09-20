@@ -377,6 +377,26 @@ def test_dashboard_auto_opens_at_cashier_logon() -> None:
     assert '"Secret Grounds Cashier Stack"' in remover
     assert '"Secret Grounds Dashboard AutoOpen"' in remover
 
+    # Reported live: this task fired at logon and failed with Windows' own
+    # generic Task Scheduler result code (0x1), with zero trace in
+    # server.log -- the failure happened before Import-SgEnv even finished,
+    # so nothing that depends on it (including Write-SgLine) was available
+    # yet to record what went wrong. A short delay guards against the most
+    # plausible cause (profile/network still settling right at sign-in);
+    # the try/catch guarantees a future failure leaves an actual message.
+    assert 'autoOpenTrigger.Delay = "PT20S"' in autostart
+
+    dashboard_script = read("scripts/open-dashboard.ps1")
+    assert "fallbackErrorLog" in dashboard_script
+    assert "GetTempPath()" in dashboard_script
+    assert "dashboard-autoopen-error.log" in dashboard_script
+    # The whole body -- including the dot-source and Import-SgEnv that were
+    # the actual failure point live -- must be inside the try, not just the
+    # health-check logic underneath it.
+    try_index = dashboard_script.index("try {")
+    dot_source_index = dashboard_script.index("secret-grounds-common.ps1")
+    assert try_index < dot_source_index
+
 
 def test_installer_cashier_role_safety() -> None:
     source = read("installer/SecretGroundsSetup.iss")

@@ -74,6 +74,14 @@ $autoOpenTaskName = "Secret Grounds Dashboard AutoOpen"
 $autoOpenScriptPath = Join-Path $PSScriptRoot "open-dashboard.ps1"
 $autoOpenAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$autoOpenScriptPath`"" -WorkingDirectory $Script:SecretGroundsRoot
 $autoOpenTrigger = New-ScheduledTaskTrigger -AtLogOn
+# Reported live: this failed at logon with no diagnosable error (see
+# open-dashboard.ps1's new try/catch for the logging half of that fix). A
+# small delay right at sign-in -- profile/network/drives still settling --
+# is a plausible enough cause on its own to guard against regardless of
+# whether it was the actual one, and costs nothing since this task's only
+# job is convenience (a manual "Secret Grounds Dashboard" shortcut click
+# still works immediately with no delay).
+$autoOpenTrigger.Delay = "PT20S"
 $autoOpenPrincipal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive
 $autoOpenSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
 
