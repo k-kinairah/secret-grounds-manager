@@ -234,7 +234,7 @@ def test_reminder_threshold_signals_the_hud_not_the_sidebar_notice() -> None:
         (240, "4 minutes left", "You have 4 minutes remaining."),
         (180, "3 minutes left", "You have 3 minutes remaining."),
         (120, "2 minutes left", "You have 2 minutes remaining."),
-        (60, "1 minute left", "Your session will end in 1 minute. Please save your work."),
+        (60, "1 minute left", "Your session will end in 1 minute."),
     ]
     expected_token = 1
     for threshold, hud_text, log_message in expected_crossings:
@@ -294,7 +294,7 @@ def test_resync_of_an_already_active_session_does_not_eat_reminder_crossings() -
         (240, "4 minutes left", "You have 4 minutes remaining."),
         (180, "3 minutes left", "You have 3 minutes remaining."),
         (120, "2 minutes left", "You have 2 minutes remaining."),
-        (60, "1 minute left", "Your session will end in 1 minute. Please save your work."),
+        (60, "1 minute left", "Your session will end in 1 minute."),
     ]
     for index, (threshold, hud_text, log_message) in enumerate(expected_crossings):
         assert overlay.update_time(threshold + 1) == []  # still above -- no crossing yet

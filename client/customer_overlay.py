@@ -439,7 +439,7 @@ class CustomerOverlayController:
         if threshold == 15 * 60:
             return "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
         if threshold == 60:
-            return "Your session will end in 1 minute. Please save your work."
+            return "Your session will end in 1 minute."
         if threshold <= 0:
             return "Your time has ended. Please proceed to the cashier."
         minutes = threshold // 60
