@@ -361,6 +361,72 @@ def test_collapsed_pill_gets_taskbar_presence_and_starts_minimized() -> None:
         webview_ui_module.restore_native_window = original_restore
 
 
+def test_pill_geometry_is_not_reapplied_every_tick() -> None:
+    # Reported live: the pill felt "choppy" specifically while restored on
+    # screen (clicked from the taskbar) and when it dropped back down.
+    # show_collapsed_control() runs on every refresh tick (~1s) for as long
+    # as the session stays collapsed, and it was calling
+    # apply_pill_native_geometry() -- resize, move, and re-cut the rounded
+    # window region, which forces a repaint -- unconditionally every single
+    # tick, including while the customer had the pill open on screen. The
+    # pill's content never changes (logo + pc_name, no countdown text), so
+    # there was nothing to actually reapply after the first tick.
+    import client.webview_ui as webview_ui_module
+
+    class FakeWindow:
+        def show(self) -> None:
+            pass
+
+        def hide(self) -> None:
+            pass
+
+        def resize(self, width: int, height: int) -> None:
+            pass
+
+        def move(self, x: int, y: int) -> None:
+            pass
+
+    geometry_calls: list[tuple[object, int, int]] = []
+    original_geometry = webview_ui_module.apply_pill_native_geometry
+    original_taskbar_presence = webview_ui_module.set_native_taskbar_presence
+    original_minimize = webview_ui_module.minimize_native_window
+    original_restore = webview_ui_module.restore_native_window
+    webview_ui_module.apply_pill_native_geometry = lambda window, width, height: geometry_calls.append(
+        (window, width, height)
+    )
+    webview_ui_module.set_native_taskbar_presence = lambda window, visible: True
+    webview_ui_module.minimize_native_window = lambda window: True
+    webview_ui_module.restore_native_window = lambda window: True
+    try:
+        host = SecretGroundsWebViewHost()
+        pill_window = FakeWindow()
+        host.windows = {"pill": pill_window}  # type: ignore[dict-item]
+        host.loaded = {"pill"}
+        host.window_visibility = {"pill": False}
+        host.last_pill_size = (132, 38)
+
+        host.show_collapsed_control()
+        assert geometry_calls == [(pill_window, 132, 38)]
+
+        # Repeated ticks with the same (unchanged) content size: no more
+        # geometry calls, and thus no more forced repaints, while the pill
+        # sits minimized -- or while the customer has it open on screen.
+        host.show_collapsed_control()
+        host.show_collapsed_control()
+        assert geometry_calls == [(pill_window, 132, 38)]
+
+        # A genuine size change (content actually different) must still be
+        # picked up.
+        host.last_pill_size = (150, 38)
+        host.show_collapsed_control()
+        assert geometry_calls == [(pill_window, 132, 38), (pill_window, 150, 38)]
+    finally:
+        webview_ui_module.apply_pill_native_geometry = original_geometry
+        webview_ui_module.set_native_taskbar_presence = original_taskbar_presence
+        webview_ui_module.minimize_native_window = original_minimize
+        webview_ui_module.restore_native_window = original_restore
+
+
 def test_pill_auto_minimizes_when_it_loses_focus() -> None:
     import client.webview_ui as webview_ui_module
 
@@ -417,6 +483,7 @@ def main() -> None:
     test_window_visibility_changes_are_idempotent()
     test_webview_collapse_shows_desktop_control()
     test_collapsed_pill_gets_taskbar_presence_and_starts_minimized()
+    test_pill_geometry_is_not_reapplied_every_tick()
     test_pill_auto_minimizes_when_it_loses_focus()
     test_screen_geometry_reconciliation_only_acts_on_a_real_change()
     test_native_visibility_returns_false_without_a_loaded_winforms_host()

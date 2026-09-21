@@ -544,6 +544,28 @@ def set_native_window_visibility(
         return False
 
 
+def apply_native_background_color(window: webview.Window, hex_color: str) -> bool:
+    """Set the underlying WinForms Form's own BackColor, not just the
+    WebView2 control's background_color (a create_window() param that only
+    takes effect once WebView2 itself has painted). Without this, restoring
+    the pill from a taskbar-click minimized state showed a brief flash of
+    the Form's own default background (WinForms' light grey/white
+    SystemColors.Control) before WebView2's dark content caught up."""
+    try:
+        native = getattr(window, "native", None)
+        if native is None:
+            return False
+        from System.Drawing import Color
+
+        value = hex_color.lstrip("#")
+        red, green, blue = (int(value[i : i + 2], 16) for i in (0, 2, 4))
+        native.BackColor = Color.FromArgb(red, green, blue)
+        return True
+    except Exception as error:
+        _diagnostic(f"native background color failed: {error}")
+        return False
+
+
 def minimize_native_window(window: webview.Window) -> bool:
     """Minimize a loaded WinForms host to the taskbar without blocking on
     Control.Invoke. Used to send the collapsed-session pill back down to a
@@ -871,6 +893,11 @@ class SecretGroundsWebViewHost:
         self.lock_loaded = Event()
         self.last_overlay_size = (0, 0)
         self.last_pill_size = (132, 38)
+        # Distinct from last_pill_size: tracks what geometry was actually
+        # *applied* to the native window, so show_collapsed_control can tell
+        # a real content-size change (rare -- the pill's content is static)
+        # from just another refresh tick with nothing new to apply.
+        self._last_applied_pill_size: tuple[int, int] | None = None
         self.last_action: tuple[str, dict[str, Any]] | None = None
         self.ui_errors: list[dict[str, Any]] = []
         self.window_visibility: dict[str, bool] = {}
@@ -1175,6 +1202,8 @@ class SecretGroundsWebViewHost:
             else:
                 self.refresh_overlay()
         elif key == "pill":
+            if window is not None:
+                apply_native_background_color(window, "#101a29")
             if self.overlay_controller is not None:
                 self.request_overlay_refresh()
             else:
@@ -1409,7 +1438,18 @@ class SecretGroundsWebViewHost:
             restore_native_window(pill)
         self.render_pill()
         width, height = self.last_pill_size
-        apply_pill_native_geometry(pill, width, height)
+        # Same idea as the taskbar-presence/minimize gate above, and just as
+        # important: the pill's content is static (logo + pc_name, no
+        # countdown text), so its size never actually changes tick to tick.
+        # Reapplying resize/move/rounded-region/opacity every ~1s regardless
+        # -- including while the customer has it open on screen, having just
+        # clicked it to check their time -- is exactly what read as choppy:
+        # SetWindowRgn in particular forces a repaint, which is unnecessary
+        # churn on a window that hasn't actually moved, resized, or changed
+        # content since the last tick.
+        if not was_already_collapsed or (width, height) != self._last_applied_pill_size:
+            apply_pill_native_geometry(pill, width, height)
+            self._last_applied_pill_size = (width, height)
         self._set_window_visible("pill", True)
         self._set_window_on_top("pill", pill, False)
         if not was_already_collapsed:
