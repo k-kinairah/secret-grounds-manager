@@ -2420,6 +2420,14 @@ async def client_websocket(websocket: WebSocket, pc_name: str) -> None:
 
     activation_task = asyncio.create_task(activate_after_receive_loop_starts())
 
+    async def send_periodic_keepalive() -> None:
+        while True:
+            await asyncio.sleep(20)
+            if not await connection_manager.send_keepalive(cleaned_pc_name):
+                return
+
+    keepalive_task = asyncio.create_task(send_periodic_keepalive())
+
     try:
         # The WebSocket endpoint owns all incoming acknowledgement reads, which
         # lets FastAPI detect disconnects and keeps HTTP command routes simple.
@@ -2501,6 +2509,7 @@ async def client_websocket(websocket: WebSocket, pc_name: str) -> None:
         pass
     finally:
         activation_task.cancel()
+        keepalive_task.cancel()
         connection_manager.disconnect(cleaned_pc_name, websocket)
 
 

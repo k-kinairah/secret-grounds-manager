@@ -1236,6 +1236,14 @@ class SecretGroundsClient:
 
     def handle_command(self, websocket: SimpleWebSocketClient) -> None:
         command = websocket.receive_json()
+        if command.get("event_type") == "keepalive":
+            # A tiny app-level frame the server sends periodically purely to
+            # keep this connection from sitting idle long enough for a
+            # NAT/router/firewall to silently kill it -- no command_id, no
+            # acknowledgement, nothing to do here but let receive_json's
+            # blocking wait reset. See server/connection_manager.py's
+            # send_keepalive for why this exists.
+            return
         if command.get("event_type") == "session_completion_recorded":
             self.handle_session_completion_confirmation(command)
             return
