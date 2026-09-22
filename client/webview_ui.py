@@ -1598,12 +1598,24 @@ class SecretGroundsWebViewHost:
         thread (a .NET event, not the webview refresh thread) --
         set_native_window_visibility is explicitly safe to call cross-thread
         (ShowWindowAsync), so no marshaling back onto the refresh thread is
-        needed here."""
+        needed here.
+
+        Deliberately does NOT pass activate=True (no SetForegroundWindow).
+        Confirmed live: a quick sequence of tray clicks calls
+        SetForegroundWindow repeatedly in a short window, which is exactly
+        what trips Windows' own anti-focus-stealing throttle -- the call
+        gets silently ignored, the popup ends up visible and topmost but
+        never actually the foreground window, and a window that was never
+        truly foreground can't later fire Deactivate to leave. The popup
+        only needs to be glanced at, not interacted with, so there's
+        nothing to gain from stealing focus in the first place -- it shows
+        topmost via SW_SHOWNOACTIVATE and the auto-hide timer below is the
+        sole, reliable mechanism that dismisses it again."""
         pill = self.windows.get("pill")
         if pill is None:
             return
         self._pill_popup_visible = True
-        set_native_window_visibility(pill, True, activate=True, on_top=True)
+        set_native_window_visibility(pill, True, activate=False, on_top=True)
         self._arm_pill_popup_auto_hide_timer()
 
     def _hide_pill_popup(self) -> None:
