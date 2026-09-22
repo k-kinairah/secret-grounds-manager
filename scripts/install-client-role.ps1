@@ -14,6 +14,12 @@ param(
 . "$PSScriptRoot\secret-grounds-common.ps1"
 Import-SgEnv
 
+# The directory-permissions fix (see install-client-autostart.ps1, which
+# this and the GUI installer both call) lives there instead of here --
+# install-client-role.ps1 is not actually invoked by the GUI installer,
+# which calls configure-client.ps1 and install-client-autostart.ps1
+# directly, so a fix placed only here would never run for a real install.
+
 & "$PSScriptRoot\configure-client.ps1" `
     -ServerHost $ServerHost `
     -ServerPort $ServerPort `

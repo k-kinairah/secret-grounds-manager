@@ -207,6 +207,37 @@ def test_client_autostart_task_supervises_and_watchdogs_the_client() -> None:
     assert "-RepetitionInterval (New-TimeSpan -Minutes 1)" in client
     assert "-MultipleInstances IgnoreNew" in client
 
+
+def test_client_autostart_grants_write_access_on_data_folders() -> None:
+    # Reported live: the supervised client task failed silently at logon
+    # even on an admin account -- Task Scheduler logged "process terminated
+    # unexpectedly" and client.log showed nothing at all, because
+    # run-client-supervised.ps1 throws Access Denied writing
+    # secret-grounds-pids.json under {app}\logs before it ever reaches its
+    # first log line. "RunLevel Highest" on an *Interactive* logon trigger
+    # does not reliably carry the full elevated token the way a
+    # SYSTEM/ServiceAccount task does (same root cause as the cashier's
+    # matching fix, confirmed there too).
+    client = read("scripts/install-client-autostart.ps1")
+    assert "icacls" in client
+    assert "*S-1-5-32-545" in client  # BUILTIN\Users, locale-independent
+    assert "(OI)(CI)M" in client
+    # Must run every time this script does, not behind any "already
+    # configured" check -- a reinstall that first gets this fix must have
+    # it applied to whatever's already on disk, not just a brand-new
+    # install. There's no such early-return in this script to check
+    # against, so just confirm it runs before the task is (re)registered.
+    icacls_index = client.index("icacls")
+    register_index = client.index("Register-ScheduledTask -TaskName $taskName")
+    assert icacls_index < register_index
+
+    # install-client-role.ps1 is NOT invoked by the GUI installer (which
+    # calls configure-client.ps1 and install-client-autostart.ps1
+    # directly) -- a fix placed only there would never run for a real
+    # install. Confirm the fix lives in the script that's actually called.
+    role_script = read("scripts/install-client-role.ps1")
+    assert "icacls" not in role_script
+
     # Upgrades must replace a stale task, never leave a duplicate.
     assert "Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue" in client
     assert "Unregister-ScheduledTask -TaskName $taskName -Confirm:$false" in client
@@ -355,6 +386,7 @@ def main() -> None:
         test_cashier_autostart_task_supervises_and_watchdogs_the_stack,
         test_cashier_supervisor_relaunches_and_is_stoppable,
         test_client_autostart_task_supervises_and_watchdogs_the_client,
+        test_client_autostart_grants_write_access_on_data_folders,
         test_client_task_launches_through_a_hidden_vbs_wrapper_no_console_flash,
         test_client_supervisor_relaunches_and_is_stoppable,
         test_config_examples_are_secret_safe,

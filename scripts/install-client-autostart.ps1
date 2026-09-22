@@ -1,6 +1,30 @@
 . "$PSScriptRoot\secret-grounds-common.ps1"
 Import-SgEnv
 
+# Reported live: the supervised client task (LogonType Interactive, RunLevel
+# Highest) failed silently at logon -- Task Scheduler logged "process
+# terminated unexpectedly" and client.log showed nothing at all, because
+# run-client-supervised.ps1 throws Access Denied writing
+# secret-grounds-pids.json under {app}\logs before it ever reaches its
+# first log line. Same root cause as the cashier's matching fix: Program
+# Files' default ACL only grants BUILTIN\Users read/execute, not write --
+# confirmed live even on this machine's admin account, since "RunLevel
+# Highest" on an *Interactive* logon trigger does not reliably carry the
+# full elevated token the way a SYSTEM/ServiceAccount task does. This runs
+# every time (not gated behind any "already configured" check), so a
+# reinstall that hits this fix for the first time actually gets it applied
+# to whatever is already on disk, not just a brand-new install.
+New-Item -ItemType Directory -Force -Path `
+    (Join-Path $Script:SecretGroundsRoot "client"),
+    (Join-Path $Script:SecretGroundsRoot "logs") | Out-Null
+foreach ($writableDir in @("client", "logs")) {
+    $writablePath = Join-Path $Script:SecretGroundsRoot $writableDir
+    & icacls $writablePath /grant "*S-1-5-32-545:(OI)(CI)M" /T /Q 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Could not grant write access on $writablePath (icacls exit $LASTEXITCODE)."
+    }
+}
+
 $taskName = "Secret Grounds Client"
 # The task action is the supervisor loop, not a one-shot launcher: it keeps
 # the customer client alive so ending it in Task Manager just re-locks the
