@@ -228,16 +228,20 @@ def test_webview_collapse_shows_desktop_control() -> None:
     host = SecretGroundsWebViewHost()
     overlay_window = FakeWindow()
     pill_window = FakeWindow()
+    tray_icon = FakeTrayIcon()
     host.windows = {
         "overlay": overlay_window,  # type: ignore[dict-item]
         "pill": pill_window,  # type: ignore[dict-item]
     }
     host.loaded = {"overlay", "pill"}
     host.window_visibility = {"overlay": True, "pill": False}
+    host.tray_icon = tray_icon
     host.collapse_overlay()
     assert overlay_window.hide_calls == 1
-    assert pill_window.show_calls == 1
-    assert pill_window.on_top is False
+    # The pill itself is never shown here -- only its tray icon. The
+    # customer shows the pill by clicking that icon (_show_pill_popup).
+    assert pill_window.show_calls == 0
+    assert tray_icon.visible_history == [True]
     assert host.window_visibility["pill"] is True
 
 
@@ -282,12 +286,25 @@ def test_screen_geometry_reconciliation_only_acts_on_a_real_change() -> None:
         webview_ui_module.current_screen_size = original_screen_size
 
 
-def test_collapsed_pill_gets_taskbar_presence_and_starts_minimized() -> None:
-    # The customer's own request: the pill must not float on top of whatever
-    # they're doing. It should be a real taskbar button, minimized by
-    # default, that they click to check their remaining time -- and the
-    # Deactivate guard (bound in _bind_pill_auto_minimize_guard) sends it
-    # back down the moment they click back into their game.
+class FakeTrayIcon:
+    def __init__(self) -> None:
+        self.Visible = False
+        self.visible_history: list[bool] = []
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "Visible" and hasattr(self, "visible_history"):
+            self.visible_history.append(value)  # type: ignore[arg-type]
+        super().__setattr__(name, value)
+
+
+def test_collapsed_pill_shows_tray_icon_and_stays_hidden() -> None:
+    # The customer's own request: the pill should live in the system tray
+    # (like volume/battery), not as a taskbar button competing for space in
+    # the main row. It stays hidden; only its tray icon appears, and the
+    # customer clicks that icon to check their remaining time
+    # (_show_pill_popup, wired in _handle_loaded) -- the Deactivate guard
+    # bound in _bind_pill_auto_hide_guard hides it again the moment they
+    # click back into their game.
     import client.webview_ui as webview_ui_module
 
     class FakeWindow:
@@ -303,74 +320,51 @@ def test_collapsed_pill_gets_taskbar_presence_and_starts_minimized() -> None:
         def move(self, x: int, y: int) -> None:
             pass
 
-    order: list[str] = []
-    taskbar_calls: list[tuple[object, bool]] = []
-    minimize_calls: list[object] = []
-    restore_calls: list[object] = []
-    original_taskbar_presence = webview_ui_module.set_native_taskbar_presence
-    original_minimize = webview_ui_module.minimize_native_window
-    original_restore = webview_ui_module.restore_native_window
-
-    def fake_taskbar_presence(window: object, visible: bool) -> bool:
-        order.append("taskbar")
-        taskbar_calls.append((window, visible))
-        return True
-
-    def fake_minimize(window: object) -> bool:
-        order.append("minimize")
-        minimize_calls.append(window)
-        return True
-
-    def fake_restore(window: object) -> bool:
-        restore_calls.append(window)
-        return True
-
-    webview_ui_module.set_native_taskbar_presence = fake_taskbar_presence
-    webview_ui_module.minimize_native_window = fake_minimize
-    webview_ui_module.restore_native_window = fake_restore
+    visibility_calls: list[tuple[object, bool]] = []
+    original_visibility = webview_ui_module.set_native_window_visibility
+    webview_ui_module.set_native_window_visibility = lambda window, visible, **kwargs: visibility_calls.append(
+        (window, visible)
+    ) or True
     try:
         host = SecretGroundsWebViewHost()
         pill_window = FakeWindow()
+        tray_icon = FakeTrayIcon()
         host.windows = {"pill": pill_window}  # type: ignore[dict-item]
         host.loaded = {"pill"}
         host.window_visibility = {"pill": False}
+        host.tray_icon = tray_icon
+        host._pill_popup_visible = True  # simulate it being shown already
         host.show_collapsed_control()
-        assert taskbar_calls == [(pill_window, True)]
-        assert minimize_calls == [pill_window]
-        assert restore_calls == [pill_window]
-        # Taskbar presence and minimize must apply only after the pill is
-        # actually positioned/shown, in that order.
-        assert order == ["taskbar", "minimize"]
+        # The transition into collapsed hides any stray shown state and
+        # shows the tray icon -- the pill itself is never explicitly shown
+        # here, only ever hidden.
+        assert (pill_window, False) in visibility_calls
+        assert all(visible is False for _window, visible in visibility_calls)
+        assert tray_icon.visible_history == [True]
 
         # refresh_overlay() calls collapse_overlay() -> show_collapsed_control()
         # on every refresh tick (about once a second) for as long as the
         # session stays collapsed, not just on the transition into being
-        # collapsed -- window_visibility["pill"] is now True, exactly like a
-        # second tick while nothing has changed. None of these three calls
-        # may repeat: restore_native_window would pull the pill back out of
-        # its minimized state every second, and the taskbar toggle/minimize
-        # would force a visible redraw/re-animate every second -- together
-        # this is what actually read as "glitching" on screen.
+        # collapsed. The tray icon must not be re-toggled every tick, and a
+        # repeat tick must never force-hide a popup the customer has
+        # deliberately opened by clicking the tray icon.
+        host._pill_popup_visible = True
         host.show_collapsed_control()
-        assert taskbar_calls == [(pill_window, True)]
-        assert minimize_calls == [pill_window]
-        assert restore_calls == [pill_window]
+        assert tray_icon.visible_history == [True]
     finally:
-        webview_ui_module.set_native_taskbar_presence = original_taskbar_presence
-        webview_ui_module.minimize_native_window = original_minimize
-        webview_ui_module.restore_native_window = original_restore
+        webview_ui_module.set_native_window_visibility = original_visibility
 
 
 def test_pill_geometry_is_not_reapplied_every_tick() -> None:
-    # Reported live: the pill felt "choppy" specifically while restored on
-    # screen (clicked from the taskbar) and when it dropped back down.
-    # show_collapsed_control() runs on every refresh tick (~1s) for as long
-    # as the session stays collapsed, and it was calling
-    # apply_pill_native_geometry() -- resize, move, and re-cut the rounded
-    # window region, which forces a repaint -- unconditionally every single
-    # tick, including while the customer had the pill open on screen. The
-    # pill's content never changes (logo + pc_name, no countdown text), so
-    # there was nothing to actually reapply after the first tick.
+    # Reported live: the pill felt "choppy" specifically while shown on
+    # screen and when it hid again. show_collapsed_control() runs on every
+    # refresh tick (~1s) for as long as the session stays collapsed, and it
+    # was calling apply_pill_native_geometry() -- resize, move, and re-cut
+    # the rounded window region, which forces a repaint -- unconditionally
+    # every single tick, including while the customer had the pill open on
+    # screen. The pill's content never changes (logo + pc_name, no
+    # countdown text), so there was nothing to actually reapply after the
+    # first tick.
     import client.webview_ui as webview_ui_module
 
     class FakeWindow:
@@ -388,15 +382,11 @@ def test_pill_geometry_is_not_reapplied_every_tick() -> None:
 
     geometry_calls: list[tuple[object, int, int]] = []
     original_geometry = webview_ui_module.apply_pill_native_geometry
-    original_taskbar_presence = webview_ui_module.set_native_taskbar_presence
-    original_minimize = webview_ui_module.minimize_native_window
-    original_restore = webview_ui_module.restore_native_window
+    original_visibility = webview_ui_module.set_native_window_visibility
     webview_ui_module.apply_pill_native_geometry = lambda window, width, height: geometry_calls.append(
         (window, width, height)
     )
-    webview_ui_module.set_native_taskbar_presence = lambda window, visible: True
-    webview_ui_module.minimize_native_window = lambda window: True
-    webview_ui_module.restore_native_window = lambda window: True
+    webview_ui_module.set_native_window_visibility = lambda window, visible, **kwargs: True
     try:
         host = SecretGroundsWebViewHost()
         pill_window = FakeWindow()
@@ -409,8 +399,8 @@ def test_pill_geometry_is_not_reapplied_every_tick() -> None:
         assert geometry_calls == [(pill_window, 132, 38)]
 
         # Repeated ticks with the same (unchanged) content size: no more
-        # geometry calls, and thus no more forced repaints, while the pill
-        # sits minimized -- or while the customer has it open on screen.
+        # geometry calls, and thus no more forced repaints, whether the
+        # pill is hidden or the customer has it open on screen.
         host.show_collapsed_control()
         host.show_collapsed_control()
         assert geometry_calls == [(pill_window, 132, 38)]
@@ -422,12 +412,10 @@ def test_pill_geometry_is_not_reapplied_every_tick() -> None:
         assert geometry_calls == [(pill_window, 132, 38), (pill_window, 150, 38)]
     finally:
         webview_ui_module.apply_pill_native_geometry = original_geometry
-        webview_ui_module.set_native_taskbar_presence = original_taskbar_presence
-        webview_ui_module.minimize_native_window = original_minimize
-        webview_ui_module.restore_native_window = original_restore
+        webview_ui_module.set_native_window_visibility = original_visibility
 
 
-def test_pill_auto_minimizes_when_it_loses_focus() -> None:
+def test_pill_auto_hides_when_it_loses_focus() -> None:
     import client.webview_ui as webview_ui_module
 
     class FakeEvent:
@@ -446,22 +434,26 @@ def test_pill_auto_minimizes_when_it_loses_focus() -> None:
         def __init__(self) -> None:
             self.native = FakeNative()
 
-    minimize_calls: list[object] = []
-    original_minimize = webview_ui_module.minimize_native_window
-    webview_ui_module.minimize_native_window = lambda window: minimize_calls.append(window) or True
+    visibility_calls: list[tuple[object, bool]] = []
+    original_visibility = webview_ui_module.set_native_window_visibility
+    webview_ui_module.set_native_window_visibility = lambda window, visible, **kwargs: visibility_calls.append(
+        (window, visible)
+    ) or True
     try:
         host = SecretGroundsWebViewHost()
         pill_window = FakeWindow()
         host.windows = {"pill": pill_window}  # type: ignore[dict-item]
-        host._bind_pill_auto_minimize_guard()
+        host._pill_popup_visible = True  # simulate the popup already being shown
+        host._bind_pill_auto_hide_guard()
         assert len(pill_window.native.Deactivate.handlers) == 1
 
         # Simulate the customer clicking back into their game: the window
         # loses focus, .NET fires Deactivate.
         pill_window.native.Deactivate.handlers[0](pill_window.native, None)
-        assert minimize_calls == [pill_window]
+        assert visibility_calls == [(pill_window, False)]
+        assert host._pill_popup_visible is False
     finally:
-        webview_ui_module.minimize_native_window = original_minimize
+        webview_ui_module.set_native_window_visibility = original_visibility
 
 
 def test_native_visibility_returns_false_without_a_loaded_winforms_host() -> None:
@@ -482,9 +474,9 @@ def main() -> None:
     test_webview_startup_failure_uses_tk_fallback()
     test_window_visibility_changes_are_idempotent()
     test_webview_collapse_shows_desktop_control()
-    test_collapsed_pill_gets_taskbar_presence_and_starts_minimized()
+    test_collapsed_pill_shows_tray_icon_and_stays_hidden()
     test_pill_geometry_is_not_reapplied_every_tick()
-    test_pill_auto_minimizes_when_it_loses_focus()
+    test_pill_auto_hides_when_it_loses_focus()
     test_screen_geometry_reconciliation_only_acts_on_a_real_change()
     test_native_visibility_returns_false_without_a_loaded_winforms_host()
     test_javascript_errors_are_recorded_by_the_bridge()
