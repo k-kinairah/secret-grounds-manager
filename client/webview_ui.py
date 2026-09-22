@@ -1260,7 +1260,6 @@ class SecretGroundsWebViewHost:
         _diagnostic("webview host on_start")
         self.started.set()
         self._bind_native_lock_guard()
-        self._bind_pill_auto_hide_guard()
         try:
             self._last_screen_size = current_screen_size()
         except Exception as error:
@@ -1297,6 +1296,13 @@ class SecretGroundsWebViewHost:
         elif key == "pill":
             if window is not None:
                 apply_native_background_color(window, "#101a29")
+                # Bound here, not from _on_start -- _on_start fires before
+                # this window's native handle exists (unlike the lock
+                # window's, which is ready by then), so the guard was
+                # silently binding to nothing. Confirmed live: the popup
+                # showed on a tray click but never hid again on click-away,
+                # because nothing was ever listening for it losing focus.
+                self._bind_pill_auto_hide_guard()
                 # NOT set_native_taskbar_presence(..., False) here -- the
                 # pill does need it suppressed (confirmed live: without it,
                 # the pill still shows as an ordinary taskbar button, a
@@ -1850,9 +1856,11 @@ class SecretGroundsWebViewHost:
         # taskbar button, so there's nothing to minimize *to*.
         pill_window = self.windows.get("pill")
         if pill_window is None:
+            _diagnostic("pill auto-hide guard skipped: window missing")
             return
         native = getattr(pill_window, "native", None)
         if native is None:
+            _diagnostic("pill auto-hide guard skipped: native missing")
             return
 
         def auto_hide(sender: Any, _args: Any) -> None:
@@ -1864,6 +1872,7 @@ class SecretGroundsWebViewHost:
         self._native_pill_deactivate_handler = auto_hide
         try:
             native.Deactivate += auto_hide
+            _diagnostic("pill auto-hide guard bound")
         except Exception as error:
             _diagnostic(f"native pill auto-hide guard failed: {error}")
 
