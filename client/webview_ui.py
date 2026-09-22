@@ -1615,6 +1615,7 @@ class SecretGroundsWebViewHost:
         if pill is None:
             return
         self._pill_popup_visible = True
+        _diagnostic(f"pill popup show {_thread_label()}")
         set_native_window_visibility(pill, True, activate=False, on_top=True)
         self._arm_pill_popup_auto_hide_timer()
 
@@ -1636,6 +1637,7 @@ class SecretGroundsWebViewHost:
         if pill is None:
             return
         self._pill_popup_visible = False
+        _diagnostic(f"pill popup hide {_thread_label()}")
         set_native_window_visibility(pill, False)
 
     def _arm_pill_popup_auto_hide_timer(self) -> None:
@@ -1650,10 +1652,16 @@ class SecretGroundsWebViewHost:
         # hides it regardless, a few seconds after any show, independent
         # of whether focus events ever cooperate.
         self._cancel_pill_popup_auto_hide_timer()
-        timer = Timer(6.0, self._hide_pill_popup)
+
+        def fire() -> None:
+            _diagnostic(f"pill popup auto-hide timer fired {_thread_label()}")
+            self._hide_pill_popup()
+
+        timer = Timer(6.0, fire)
         timer.daemon = True
         self._pill_popup_auto_hide_timer = timer
         timer.start()
+        _diagnostic("pill popup auto-hide timer armed")
 
     def _cancel_pill_popup_auto_hide_timer(self) -> None:
         timer = self._pill_popup_auto_hide_timer
