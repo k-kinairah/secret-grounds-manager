@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Event, Lock, Thread, current_thread
+from threading import Event, Lock, Thread, Timer, current_thread
 from typing import TYPE_CHECKING, Any, Callable
 
 import webview
@@ -1013,6 +1013,7 @@ class SecretGroundsWebViewHost:
         # the refresh tick loop.
         self.tray_icon: Any | None = None
         self._pill_popup_visible = False
+        self._pill_popup_auto_hide_timer: Timer | None = None
         if self.lock_controller is not None:
             self.lock_controller.set_presentation_refresh(self.request_lock_refresh)
         if self.overlay_controller is not None:
@@ -1599,17 +1600,54 @@ class SecretGroundsWebViewHost:
         (ShowWindowAsync), so no marshaling back onto the refresh thread is
         needed here."""
         pill = self.windows.get("pill")
-        if pill is None or self._pill_popup_visible:
+        if pill is None:
             return
         self._pill_popup_visible = True
         set_native_window_visibility(pill, True, activate=True, on_top=True)
+        self._arm_pill_popup_auto_hide_timer()
 
     def _hide_pill_popup(self) -> None:
+        # Deliberately unconditional (no "already hidden, skip" guard):
+        # confirmed live, clicking the tray icon can fire a burst of
+        # rapid, genuine Activate/Deactivate pairs from Windows itself (not
+        # a bug in this code -- a real WinForms/shell focus-stealing quirk
+        # right after a NotifyIcon click), all landing on the same thread
+        # in quick succession. A "skip if our own bookkeeping already says
+        # hidden" guard here is exactly the kind of check that goes stale
+        # first in a fast back-to-back sequence like that, and a stale
+        # skip here means the popup never actually goes away -- it just
+        # silently sits on top of whatever the customer is doing. Calling
+        # SetWindowPos/ShowWindow on an already-hidden window is a cheap,
+        # harmless no-op, so there's no cost to always asserting it.
+        self._cancel_pill_popup_auto_hide_timer()
         pill = self.windows.get("pill")
-        if pill is None or not self._pill_popup_visible:
+        if pill is None:
             return
         self._pill_popup_visible = False
         set_native_window_visibility(pill, False)
+
+    def _arm_pill_popup_auto_hide_timer(self) -> None:
+        # Belt-and-braces on top of the Deactivate guard: a tray click that
+        # lands as a rapid burst of Activate/Deactivate (confirmed live --
+        # Windows itself can generate several in under two seconds right
+        # after a NotifyIcon click) can burn through Windows' own
+        # SetForegroundWindow anti-focus-stealing allowance, so the final
+        # Activate silently never truly takes -- the popup ends up visible
+        # and topmost forever, since a window that was never really
+        # foreground can't later fire Deactivate to leave it. This timer
+        # hides it regardless, a few seconds after any show, independent
+        # of whether focus events ever cooperate.
+        self._cancel_pill_popup_auto_hide_timer()
+        timer = Timer(6.0, self._hide_pill_popup)
+        timer.daemon = True
+        self._pill_popup_auto_hide_timer = timer
+        timer.start()
+
+    def _cancel_pill_popup_auto_hide_timer(self) -> None:
+        timer = self._pill_popup_auto_hide_timer
+        if timer is not None:
+            timer.cancel()
+            self._pill_popup_auto_hide_timer = None
 
     def collapse_overlay(self) -> None:
         _diagnostic("collapse_overlay invoked")
@@ -1909,6 +1947,7 @@ class SecretGroundsWebViewHost:
 
     def shutdown(self) -> None:
         self.allow_close = True
+        self._cancel_pill_popup_auto_hide_timer()
         self.refresh_stop.set()
         self.refresh_event.set()
         if (
