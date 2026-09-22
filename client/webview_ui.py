@@ -615,6 +615,31 @@ def dispose_native_tray_icon(tray_icon: Any | None) -> None:
         _diagnostic(f"native tray icon disposal failed: {error}")
 
 
+def _invoke_on_gui_thread(window: webview.Window, action: Callable[[], None]) -> bool:
+    """Marshal a callable onto pywebview's single WinForms message-loop
+    thread (the dedicated STA thread its winforms backend spins up for the
+    master window and creates every other window on via Control.Invoke --
+    see webview/platforms/winforms.py's create_window). Every callback this
+    module hangs code off (window.events.loaded, the refresh-loop thread)
+    runs on a throwaway Python thread instead, which is fine for the raw
+    ctypes Win32 calls used elsewhere here (thread-agnostic by design), but
+    not for a real WinForms component like NotifyIcon: its Click/MouseClick
+    events only ever fire if the thread that constructed it is actually
+    pumping Windows messages. Confirmed live -- without this, the tray icon
+    rendered in the system tray but never responded to a click."""
+    native = getattr(window, "native", None)
+    if native is None:
+        return False
+    try:
+        from System import Action
+
+        native.Invoke(Action(action))
+        return True
+    except Exception as error:
+        _diagnostic(f"invoke on gui thread failed: {error}")
+        return False
+
+
 def minimize_native_window(window: webview.Window) -> bool:
     """Minimize a loaded WinForms host to the taskbar without blocking on
     Control.Invoke. Used to send the collapsed-session pill back down to a
@@ -1283,12 +1308,22 @@ class SecretGroundsWebViewHost:
                 # startup).
                 if self.tray_icon is None:
                     ico_path = get_logo_ico_path()
+                    _diagnostic(f"tray icon path resolved={ico_path}")
                     if ico_path is not None:
-                        self.tray_icon = create_native_tray_icon(
-                            str(ico_path),
-                            "Secret Grounds",
-                            self._show_pill_popup,
-                        )
+
+                        def create_tray_icon() -> None:
+                            self.tray_icon = create_native_tray_icon(
+                                str(ico_path),
+                                "Secret Grounds",
+                                self._show_pill_popup,
+                            )
+                            _diagnostic(f"tray icon created={self.tray_icon is not None}")
+
+                        # Must be built on pywebview's own WinForms thread,
+                        # not this window-loaded callback's throwaway Python
+                        # thread -- see _invoke_on_gui_thread.
+                        if not _invoke_on_gui_thread(window, create_tray_icon):
+                            _diagnostic("tray icon creation invoke failed")
             if self.overlay_controller is not None:
                 self.request_overlay_refresh()
             else:
@@ -1538,11 +1573,18 @@ class SecretGroundsWebViewHost:
             if not set_native_taskbar_presence(pill, False):
                 _diagnostic("pill taskbar suppression failed")
             self._hide_pill_popup()
+            _diagnostic(f"tray icon show attempt, tray_icon present={self.tray_icon is not None}")
             if self.tray_icon is not None:
-                try:
-                    self.tray_icon.Visible = True
-                except Exception as error:
-                    _diagnostic(f"tray icon show failed: {error}")
+
+                def show_tray_icon() -> None:
+                    try:
+                        self.tray_icon.Visible = True
+                        _diagnostic(f"tray icon show succeeded visible={self.tray_icon.Visible}")
+                    except Exception as error:
+                        _diagnostic(f"tray icon show failed: {error}")
+
+                if not _invoke_on_gui_thread(pill, show_tray_icon):
+                    _diagnostic("tray icon show invoke failed")
 
     def _show_pill_popup(self) -> None:
         """The tray icon's click handler. Runs on the WinForms message-loop
@@ -1580,10 +1622,15 @@ class SecretGroundsWebViewHost:
         if pill is not None:
             self._hide_pill_popup()
             if self.tray_icon is not None:
-                try:
-                    self.tray_icon.Visible = False
-                except Exception as error:
-                    _diagnostic(f"tray icon hide failed: {error}")
+
+                def hide_tray_icon() -> None:
+                    try:
+                        self.tray_icon.Visible = False
+                    except Exception as error:
+                        _diagnostic(f"tray icon hide failed: {error}")
+
+                if not _invoke_on_gui_thread(pill, hide_tray_icon):
+                    _diagnostic("tray icon hide invoke failed")
             with self.lock:
                 self.window_visibility["pill"] = False
         if overlay is not None:

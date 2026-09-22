@@ -205,6 +205,10 @@ def test_window_visibility_changes_are_idempotent() -> None:
 
 
 def test_webview_collapse_shows_desktop_control() -> None:
+    class FakeNative:
+        def Invoke(self, action: Any) -> None:
+            action()
+
     class FakeWindow:
         def __init__(self) -> None:
             self.show_calls = 0
@@ -212,6 +216,7 @@ def test_webview_collapse_shows_desktop_control() -> None:
             self.on_top = True
             self.size = (0, 0)
             self.position = (0, 0)
+            self.native = FakeNative()
 
         def show(self) -> None:
             self.show_calls += 1
@@ -307,7 +312,14 @@ def test_collapsed_pill_shows_tray_icon_and_stays_hidden() -> None:
     # click back into their game.
     import client.webview_ui as webview_ui_module
 
+    class FakeNative:
+        def Invoke(self, action: Any) -> None:
+            action()
+
     class FakeWindow:
+        def __init__(self) -> None:
+            self.native = FakeNative()
+
         def show(self) -> None:
             pass
 
