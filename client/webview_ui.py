@@ -747,9 +747,18 @@ def set_native_taskbar_presence(window: webview.Window, is_visible: bool) -> boo
         _diagnostic(f"native taskbar presence before frame refresh visible={is_visible} {_thread_label()}")
         set_window_pos(hwnd, None, 0, 0, 0, 0, flags)
         _diagnostic(f"native taskbar presence after frame refresh visible={is_visible} {_thread_label()}")
-        _diagnostic(f"native taskbar presence before ShowInTaskbar visible={is_visible} {_thread_label()}")
-        native.ShowInTaskbar = is_visible
-        _diagnostic(f"native taskbar presence after ShowInTaskbar visible={is_visible} {_thread_label()}")
+        # NOT native.ShowInTaskbar = is_visible: confirmed live, repeatedly,
+        # that this managed WinForms property setter deadlocks the process,
+        # regardless of which thread or how long after startup it's called
+        # from. The raw SetWindowLongPtrW + SetWindowPos(SWP_FRAMECHANGED)
+        # above already is the actual, complete mechanism Windows uses to
+        # add/remove a window's taskbar button -- ShowInTaskbar is just a
+        # higher-level WinForms wrapper around the same extended style, and
+        # setting it *after* that style was already changed directly
+        # underneath it (bypassing the property) is what very likely
+        # triggers WinForms' internal RecreateHandle() to "reconcile" its
+        # now-stale cached state, which needs the window's own UI thread
+        # and safely available message pump -- neither guaranteed here.
         _describe_window_state("native taskbar presence after", hwnd_value)
         return True
     except Exception as error:
@@ -1263,16 +1272,15 @@ class SecretGroundsWebViewHost:
         elif key == "pill":
             if window is not None:
                 apply_native_background_color(window, "#101a29")
-                # No set_native_taskbar_presence(..., False) call needed --
-                # confirmed the pill never had a taskbar entry by default in
-                # the first place (only the old design's ...(pill, True)
-                # call, now gone, ever granted one). Calling it here with
-                # False was a real hang: Form.ShowInTaskbar's setter forces
-                # a window-handle recreation, which deadlocked on this
-                # per-window WebView2 event thread instead of the thread
-                # that's actually safe for it (confirmed live -- the
-                # production flow test hung indefinitely at exactly that
-                # line until this call was removed).
+                # NOT set_native_taskbar_presence(..., False) here -- the
+                # pill does need it suppressed (confirmed live: without it,
+                # the pill still shows as an ordinary taskbar button, a
+                # shown/frameless/owner-less top-level window's default),
+                # but this fires on a per-window WebView2 event thread
+                # while the window is still mid-load. See
+                # show_collapsed_control, which does this once the pill has
+                # actually settled (on first real collapse, well after
+                # startup).
                 if self.tray_icon is None:
                     ico_path = get_logo_ico_path()
                     if ico_path is not None:
@@ -1522,6 +1530,13 @@ class SecretGroundsWebViewHost:
             # _handle_loaded), and the Deactivate guard bound in
             # _bind_pill_auto_hide_guard hides it again the moment they
             # click back into whatever they were doing.
+            #
+            # Called here (on first real collapse) rather than from
+            # _handle_loaded because the pill's own load event fires too
+            # early to matter for this -- there's no visible taskbar button
+            # to hide until the customer actually collapses into it.
+            if not set_native_taskbar_presence(pill, False):
+                _diagnostic("pill taskbar suppression failed")
             self._hide_pill_popup()
             if self.tray_icon is not None:
                 try:
