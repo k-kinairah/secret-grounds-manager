@@ -481,10 +481,52 @@ def apply_click_through(window: webview.Window) -> None:
         _diagnostic(f"native click-through failed: {error}")
 
 
+def resize_window_exact(window: webview.Window, width: int, height: int) -> None:
+    """Resize a WinForms host in place WITHOUT showing it.
+
+    pywebview's own window.resize() calls SetWindowPos with SWP_SHOWWINDOW
+    (and does so again a few hundred milliseconds later from its worker
+    thread), so using it on the collapsed pill made the pill pop onto the
+    screen every time its geometry was applied, and no single hide call
+    could win that race. Confirmed with a real-window test: skipping
+    resize() alone kept the pill hidden. Width/height are logical pixels,
+    converted to physical the same way apply_rounded_window_region does."""
+    try:
+        from ctypes import wintypes
+
+        hwnd = wintypes.HWND(int(window.native.Handle.ToInt64()))
+        dpi = ctypes.windll.user32.GetDpiForWindow(hwnd) or 96
+        scale = dpi / 96.0
+        set_window_pos = ctypes.windll.user32.SetWindowPos
+        set_window_pos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        set_window_pos.restype = wintypes.BOOL
+        flags = 0x0002 | 0x0004 | 0x0010  # NOMOVE | NOZORDER | NOACTIVATE
+        if not set_window_pos(
+            hwnd,
+            None,
+            0,
+            0,
+            max(1, int(round(width * scale))),
+            max(1, int(round(height * scale))),
+            flags,
+        ):
+            raise ctypes.WinError()
+    except Exception as error:
+        _diagnostic(f"exact native resize failed: {error}")
+
+
 def apply_pill_native_geometry(pill: webview.Window, content_width: int, content_height: int) -> None:
     """Size/position the pill host snug to its CSS content, clipped to match."""
     x, y = bottom_right_geometry(content_width, content_height)
-    pill.resize(content_width, content_height)
+    resize_window_exact(pill, content_width, content_height)
     move_window_exact(pill, x, y)
     apply_rounded_window_region(pill, content_width, content_height, 19)
     apply_window_opacity(pill, 1.0)
