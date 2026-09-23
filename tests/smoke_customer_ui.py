@@ -12,10 +12,16 @@ os.environ["SECRET_GROUNDS_TEST_MODE"] = "true"
 os.environ["SECRET_GROUNDS_AUTOMATIC_SHUTDOWN_ON_EXPIRATION"] = "false"
 
 import client.client as client_module
+import client.customer_overlay as customer_overlay_module
 from client.client import SecretGroundsClient
 from client.customer_overlay import CustomerOverlayController
 from client.lock_screen import LockScreenController
 from client.session_recovery import SessionRecoveryStore
+
+# REMINDER_VOICE_ENABLED already defaults off under TEST_MODE (set above),
+# so no test here spawns a real PowerShell text-to-speech process -- this
+# is belt-and-braces in case that default is ever revisited.
+customer_overlay_module.announce_reminder = lambda *_a, **_kw: None
 
 
 class CapturingWebSocket:
@@ -228,7 +234,7 @@ def test_reminder_threshold_signals_the_hud_not_the_sidebar_notice() -> None:
         (240, "4 minutes left", "You have 4 minutes remaining."),
         (180, "3 minutes left", "You have 3 minutes remaining."),
         (120, "2 minutes left", "You have 2 minutes remaining."),
-        (60, "1 minute left", "Your session will end in 1 minute. Please save your work."),
+        (60, "1 minute left", "Your session will end in 1 minute."),
     ]
     expected_token = 1
     for threshold, hud_text, log_message in expected_crossings:
@@ -265,6 +271,124 @@ def test_reminder_hud_does_not_disturb_the_time_added_confirmation() -> None:
     assert "Time added" in (vm.notice or "")
     assert vm.reminder_hud_text == "5 minutes left"
     assert vm.reminder_hud_token == 1
+
+
+def test_resync_of_an_already_active_session_does_not_eat_reminder_crossings() -> None:
+    # Reported live: 15 and 5 minutes fired, but 10, 4, 3, and 2 (the newly
+    # added thresholds) silently never appeared, while 1 minute fired again.
+    # Root cause: show_session(is_new_session=False) -- called for a routine
+    # resync of a session that never actually changed (reconnect, a
+    # duplicate start_session for the session already running) -- was
+    # unconditionally wiping fired_thresholds and last_seconds_value. The
+    # very next update_time() call after such a resync then had
+    # previous_seconds=None, which can never satisfy the crossing check, so
+    # whatever threshold that tick would have crossed was silently skipped.
+    overlay = CustomerOverlayController("PC-RESYNC", enable_gui=False)
+    overlay.show_session("Prepaid")
+    overlay.update_time(901)
+
+    expected_crossings = [
+        (900, "15 minutes left", "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."),
+        (600, "10 minutes left", "You have 10 minutes remaining."),
+        (300, "5 minutes left", "You have 5 minutes remaining."),
+        (240, "4 minutes left", "You have 4 minutes remaining."),
+        (180, "3 minutes left", "You have 3 minutes remaining."),
+        (120, "2 minutes left", "You have 2 minutes remaining."),
+        (60, "1 minute left", "Your session will end in 1 minute."),
+    ]
+    for index, (threshold, hud_text, log_message) in enumerate(expected_crossings):
+        assert overlay.update_time(threshold + 1) == []  # still above -- no crossing yet
+        if index % 2 == 0:
+            # A resync of the SAME still-running session right before the
+            # crossing -- e.g. initialize_local_session()'s "already
+            # active" branch, or a reconnect -- must not disturb it.
+            overlay.show_session("Prepaid", is_new_session=False)
+        assert overlay.update_time(threshold) == [log_message]
+        vm = overlay.build_view_model()
+        assert vm.reminder_hud_text == hud_text, threshold
+        assert vm.reminder_hud_token == index + 1, threshold
+
+    # A genuinely NEW session (is_new_session defaults to True) still clears
+    # fired_thresholds/last_seconds_value/reminder_hud_text, as before --
+    # unlike a resync, a real new session starts with a clean slate, so a
+    # threshold that already fired above can fire again from scratch.
+    overlay.show_session("Prepaid")
+    assert overlay.build_view_model().reminder_hud_text is None
+    overlay.update_time(901)
+    assert overlay.update_time(900) == [
+        "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
+    ]
+
+
+def test_reminders_refire_after_time_is_added_mid_grace() -> None:
+    # Reported live: a customer top-up (₱1 added while a session was near
+    # expiration) never showed 15/10-minute banners again even though the
+    # countdown legitimately re-crossed them. Root cause: client.py used to
+    # call reset_reminders_after_add_time() BEFORE computing the freshly
+    # extended remaining_seconds, so it read the function's old signature's
+    # self.state.seconds_value -- still the stale, near-zero pre-top-up
+    # value. Every threshold satisfies "stale_near_zero <= threshold", so
+    # every already-fired threshold stayed marked fired forever, and could
+    # never cross (and fire) again for the rest of that session.
+    overlay = CustomerOverlayController("PC-ADD-TIME", enable_gui=False)
+    overlay.show_session("Prepaid")
+    overlay.update_time(901)
+    assert overlay.update_time(900) == [
+        "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
+    ]
+    assert overlay.update_time(600) == ["You have 10 minutes remaining."]
+
+    # Top-up extends the session back past both already-fired thresholds.
+    overlay.reset_reminders_after_add_time(901)
+    overlay.show_time_added_confirmation(1000, 901)
+
+    # The tick that lands exactly on the new remaining time never "crosses"
+    # anything (it's a jump up, not a countdown); the real countdown resuming
+    # from there is what re-crosses each threshold, same as any fresh count.
+    assert overlay.update_time(901) == []
+    assert overlay.update_time(900) == [
+        "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
+    ]
+    assert overlay.update_time(600) == ["You have 10 minutes remaining."]
+
+
+def test_reminder_crossings_are_announced_by_voice_when_enabled() -> None:
+    announced: list[str] = []
+    original = customer_overlay_module.announce_reminder
+    original_flag = customer_overlay_module.REMINDER_VOICE_ENABLED
+    customer_overlay_module.announce_reminder = lambda text: announced.append(text)
+    customer_overlay_module.REMINDER_VOICE_ENABLED = True
+    try:
+        overlay = CustomerOverlayController("PC-VOICE", enable_gui=False)
+        overlay.show_session("Prepaid")
+        overlay.update_time(901)
+        messages = overlay.update_time(900)
+        assert announced == messages == [
+            "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
+        ]
+    finally:
+        customer_overlay_module.announce_reminder = original
+        customer_overlay_module.REMINDER_VOICE_ENABLED = original_flag
+
+
+def test_reminder_crossings_are_not_announced_when_voice_disabled() -> None:
+    announced: list[str] = []
+    original = customer_overlay_module.announce_reminder
+    original_flag = customer_overlay_module.REMINDER_VOICE_ENABLED
+    customer_overlay_module.announce_reminder = lambda text: announced.append(text)
+    customer_overlay_module.REMINDER_VOICE_ENABLED = False
+    try:
+        overlay = CustomerOverlayController("PC-NO-VOICE", enable_gui=False)
+        overlay.show_session("Prepaid")
+        overlay.update_time(901)
+        messages = overlay.update_time(900)
+        assert messages == [
+            "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
+        ]
+        assert announced == []
+    finally:
+        customer_overlay_module.announce_reminder = original
+        customer_overlay_module.REMINDER_VOICE_ENABLED = original_flag
 
 
 def test_add_time_confirmation_and_countdown_update() -> None:
@@ -567,6 +691,10 @@ def main() -> None:
     test_reminders_fire_once_and_do_not_replay_after_reconnect()
     test_reminder_threshold_signals_the_hud_not_the_sidebar_notice()
     test_reminder_hud_does_not_disturb_the_time_added_confirmation()
+    test_resync_of_an_already_active_session_does_not_eat_reminder_crossings()
+    test_reminders_refire_after_time_is_added_mid_grace()
+    test_reminder_crossings_are_announced_by_voice_when_enabled()
+    test_reminder_crossings_are_not_announced_when_voice_disabled()
     test_add_time_confirmation_and_countdown_update()
     test_grace_screen_uses_shutdown_countdown_and_final_warning_once()
     test_original_timer_never_negative()

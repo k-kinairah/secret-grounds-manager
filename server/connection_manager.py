@@ -15,6 +15,16 @@ class ClientConnectionManager:
     def __init__(self) -> None:
         self.active_connections: dict[str, WebSocket] = {}
         self.pending_acknowledgements: dict[str, asyncio.Queue[CommandAcknowledgement]] = {}
+        self._send_locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, pc_name: str) -> asyncio.Lock:
+        # One lock per connection, not one for the whole manager -- a
+        # command send for PC A must never block a keepalive send for PC B.
+        lock = self._send_locks.get(pc_name)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._send_locks[pc_name] = lock
+        return lock
 
     def normalize_pc_name(self, pc_name: str) -> str:
         return pc_name.strip()
@@ -45,6 +55,7 @@ class ClientConnectionManager:
         normalized_pc_name = self.normalize_pc_name(pc_name)
         if self.active_connections.get(normalized_pc_name) is websocket:
             self.active_connections.pop(normalized_pc_name, None)
+            self._send_locks.pop(normalized_pc_name, None)
             self.log_active_connections("disconnected", normalized_pc_name)
             return
 
@@ -69,7 +80,8 @@ class ClientConnectionManager:
             f"pc_name={normalized_pc_name}, command_id={command.command_id}, "
             f"type={command.type}"
         )
-        await websocket.send_json(command.model_dump(mode="json"))
+        async with self._lock_for(normalized_pc_name):
+            await websocket.send_json(command.model_dump(mode="json"))
 
         acknowledgements: list[CommandAcknowledgement] = []
         try:
@@ -90,6 +102,33 @@ class ClientConnectionManager:
             return acknowledgements
         finally:
             self.pending_acknowledgements.pop(command.command_id, None)
+
+    async def send_keepalive(self, pc_name: str) -> bool:
+        """A tiny app-level frame so this connection can never sit idle long
+        enough for a NAT/router/firewall to silently kill it. Confirmed
+        live: an otherwise-healthy LAN link between a customer PC and the
+        cashier server still saw the command WebSocket drop with a
+        "connection aborted" error after stretches with no real command
+        traffic -- ordinary idle-connection timeout behavior, not an app
+        bug, and not something this app's separate HTTP heartbeat (a
+        different connection entirely) does anything to prevent.
+
+        Deliberately independent of whatever WebSocket-protocol-level ping
+        uvicorn's own default configuration may or may not be sending --
+        this doesn't rely on that being active. Returns False (never
+        raises) if the connection is already gone, so the periodic caller
+        can just stop rather than crash its own loop."""
+        normalized_pc_name = self.normalize_pc_name(pc_name)
+        websocket = self.active_connections.get(normalized_pc_name)
+        if websocket is None:
+            return False
+        try:
+            async with self._lock_for(normalized_pc_name):
+                await websocket.send_json({"event_type": "keepalive"})
+            return True
+        except Exception as error:
+            print(f"Command WebSocket keepalive send failed: pc_name={normalized_pc_name}, error={error}")
+            return False
 
     async def record_acknowledgement(self, raw_acknowledgement: dict[str, object]) -> None:
         acknowledgement = CommandAcknowledgement.model_validate(raw_acknowledgement)

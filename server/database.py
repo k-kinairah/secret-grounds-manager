@@ -31,6 +31,19 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
     connection = sqlite3.connect(database_path)
     connection.row_factory = sqlite3.Row
+    # Audited before go-live: every request opens its own connection (no
+    # pooling), and the default rollback-journal mode makes writers and
+    # readers block each other database-wide. With ~15 client PCs
+    # heartbeating every 5s plus the dashboard polling sales figures every
+    # 4s, that's a real "database is locked" risk as payments/sessions grow
+    # -- not hypothetical, just a matter of time. WAL lets readers and a
+    # writer proceed concurrently; busy_timeout makes a genuine collision
+    # wait and retry instead of raising immediately. WAL mode is persisted
+    # in the database file itself (this only needs to run once per file,
+    # but PRAGMA is cheap and idempotent, so setting it on every connection
+    # is simpler than tracking whether it's already been done).
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA busy_timeout=5000")
 
     try:
         yield connection
@@ -2359,6 +2372,12 @@ def initialize_database() -> None:
             CREATE INDEX IF NOT EXISTS idx_payments_pending_attribution
             ON payments (attribution_status)
             WHERE attribution_status = 'pending'
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payments_operator_created
+            ON payments (recorded_by_user_id, created_at)
             """
         )
         connection.execute(

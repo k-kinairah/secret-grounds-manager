@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Event, Lock, Thread, current_thread
+from threading import Event, Lock, Thread, Timer, current_thread
 from typing import TYPE_CHECKING, Any, Callable
 
 import webview
@@ -481,10 +481,52 @@ def apply_click_through(window: webview.Window) -> None:
         _diagnostic(f"native click-through failed: {error}")
 
 
+def resize_window_exact(window: webview.Window, width: int, height: int) -> None:
+    """Resize a WinForms host in place WITHOUT showing it.
+
+    pywebview's own window.resize() calls SetWindowPos with SWP_SHOWWINDOW
+    (and does so again a few hundred milliseconds later from its worker
+    thread), so using it on the collapsed pill made the pill pop onto the
+    screen every time its geometry was applied, and no single hide call
+    could win that race. Confirmed with a real-window test: skipping
+    resize() alone kept the pill hidden. Width/height are logical pixels,
+    converted to physical the same way apply_rounded_window_region does."""
+    try:
+        from ctypes import wintypes
+
+        hwnd = wintypes.HWND(int(window.native.Handle.ToInt64()))
+        dpi = ctypes.windll.user32.GetDpiForWindow(hwnd) or 96
+        scale = dpi / 96.0
+        set_window_pos = ctypes.windll.user32.SetWindowPos
+        set_window_pos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        set_window_pos.restype = wintypes.BOOL
+        flags = 0x0002 | 0x0004 | 0x0010  # NOMOVE | NOZORDER | NOACTIVATE
+        if not set_window_pos(
+            hwnd,
+            None,
+            0,
+            0,
+            max(1, int(round(width * scale))),
+            max(1, int(round(height * scale))),
+            flags,
+        ):
+            raise ctypes.WinError()
+    except Exception as error:
+        _diagnostic(f"exact native resize failed: {error}")
+
+
 def apply_pill_native_geometry(pill: webview.Window, content_width: int, content_height: int) -> None:
     """Size/position the pill host snug to its CSS content, clipped to match."""
     x, y = bottom_right_geometry(content_width, content_height)
-    pill.resize(content_width, content_height)
+    resize_window_exact(pill, content_width, content_height)
     move_window_exact(pill, x, y)
     apply_rounded_window_region(pill, content_width, content_height, 19)
     apply_window_opacity(pill, 1.0)
@@ -541,6 +583,148 @@ def set_native_window_visibility(
         return True
     except Exception as error:
         _diagnostic(f"native window visibility failed: {error}")
+        return False
+
+
+def apply_native_background_color(window: webview.Window, hex_color: str) -> bool:
+    """Set the underlying WinForms Form's own BackColor, not just the
+    WebView2 control's background_color (a create_window() param that only
+    takes effect once WebView2 itself has painted). Without this, restoring
+    the pill from a taskbar-click minimized state showed a brief flash of
+    the Form's own default background (WinForms' light grey/white
+    SystemColors.Control) before WebView2's dark content caught up."""
+    try:
+        native = getattr(window, "native", None)
+        if native is None:
+            return False
+        from System.Drawing import Color
+
+        value = hex_color.lstrip("#")
+        red, green, blue = (int(value[i : i + 2], 16) for i in (0, 2, 4))
+        native.BackColor = Color.FromArgb(red, green, blue)
+        return True
+    except Exception as error:
+        _diagnostic(f"native background color failed: {error}")
+        return False
+
+
+def create_native_tray_icon(icon_path: str, tooltip: str, on_click: Callable[[], None]) -> Any | None:
+    """A real system tray icon (System.Windows.Forms.NotifyIcon), not a
+    taskbar button -- the customer's own request: check remaining time from
+    the tray next to the clock, not from a window competing for space in
+    the main taskbar row. Starts hidden; the caller shows/hides it as the
+    session collapses/expands. Returns None (never raises) if construction
+    fails for any reason, so a broken icon never blocks the collapsed
+    control's actual job (the pill popup still works, just without a tray
+    entry to trigger it -- callers should treat a None return as "no tray
+    icon available" and fall back gracefully)."""
+    try:
+        import System.Windows.Forms as Forms
+        from System.Drawing import Icon
+
+        tray_icon = Forms.NotifyIcon()
+        tray_icon.Icon = Icon(icon_path)
+        # NotifyIcon.Text silently truncates past 63 characters in older
+        # .NET but throws in newer ones -- keep it safely short regardless.
+        tray_icon.Text = tooltip[:63]
+        tray_icon.Visible = False
+
+        def handle_click(_sender: Any, args: Any) -> None:
+            # NotifyIcon fires Click for both left and right buttons (right
+            # normally reserved for a context menu, which this icon doesn't
+            # have) -- only react to the left button, matching a normal
+            # left-click-to-check-time gesture.
+            try:
+                if getattr(args, "Button", None) == Forms.MouseButtons.Left:
+                    on_click()
+            except Exception as error:
+                _diagnostic(f"tray icon click handler failed: {error}")
+
+        tray_icon.MouseClick += handle_click
+        return tray_icon
+    except Exception as error:
+        _diagnostic(f"native tray icon creation failed: {error}")
+        return None
+
+
+def dispose_native_tray_icon(tray_icon: Any | None) -> None:
+    if tray_icon is None:
+        return
+    try:
+        tray_icon.Visible = False
+        tray_icon.Dispose()
+    except Exception as error:
+        _diagnostic(f"native tray icon disposal failed: {error}")
+
+
+def _invoke_on_gui_thread(window: webview.Window, action: Callable[[], None]) -> bool:
+    """Marshal a callable onto pywebview's single WinForms message-loop
+    thread (the dedicated STA thread its winforms backend spins up for the
+    master window and creates every other window on via Control.Invoke --
+    see webview/platforms/winforms.py's create_window). Every callback this
+    module hangs code off (window.events.loaded, the refresh-loop thread)
+    runs on a throwaway Python thread instead, which is fine for the raw
+    ctypes Win32 calls used elsewhere here (thread-agnostic by design), but
+    not for a real WinForms component like NotifyIcon: its Click/MouseClick
+    events only ever fire if the thread that constructed it is actually
+    pumping Windows messages. Confirmed live -- without this, the tray icon
+    rendered in the system tray but never responded to a click."""
+    native = getattr(window, "native", None)
+    if native is None:
+        return False
+    try:
+        from System import Action
+
+        native.Invoke(Action(action))
+        return True
+    except Exception as error:
+        _diagnostic(f"invoke on gui thread failed: {error}")
+        return False
+
+
+def minimize_native_window(window: webview.Window) -> bool:
+    """Minimize a loaded WinForms host to the taskbar without blocking on
+    Control.Invoke. Used to send the collapsed-session pill back down to a
+    taskbar button instead of leaving it floating over whatever the customer
+    is doing."""
+    try:
+        from ctypes import wintypes
+
+        hwnd_value = _taskbar_hwnd(window)
+        if hwnd_value is None:
+            return False
+        hwnd = wintypes.HWND(hwnd_value)
+        show_window = ctypes.windll.user32.ShowWindowAsync
+        show_window.argtypes = [wintypes.HWND, ctypes.c_int]
+        show_window.restype = wintypes.BOOL
+        _diagnostic(f"native minimize before {_thread_label()}")
+        show_window(hwnd, 6)  # SW_MINIMIZE
+        _diagnostic(f"native minimize after {_thread_label()}")
+        return True
+    except Exception as error:
+        _diagnostic(f"native minimize failed: {error}")
+        return False
+
+
+def restore_native_window(window: webview.Window) -> bool:
+    """Undo a prior SW_MINIMIZE. A minimized WinForms window ignores
+    SetWindowPos bounds changes until it is back in the Normal state, so this
+    must run before repositioning a pill that was minimized on a previous
+    collapse."""
+    try:
+        from ctypes import wintypes
+
+        hwnd_value = _taskbar_hwnd(window)
+        if hwnd_value is None:
+            return False
+        hwnd = wintypes.HWND(hwnd_value)
+        show_window = ctypes.windll.user32.ShowWindowAsync
+        show_window.argtypes = [wintypes.HWND, ctypes.c_int]
+        show_window.restype = wintypes.BOOL
+        show_window(hwnd, 9)  # SW_RESTORE
+        return True
+    except Exception as error:
+        _diagnostic(f"native restore failed: {error}")
         return False
 
 
@@ -630,9 +814,18 @@ def set_native_taskbar_presence(window: webview.Window, is_visible: bool) -> boo
         _diagnostic(f"native taskbar presence before frame refresh visible={is_visible} {_thread_label()}")
         set_window_pos(hwnd, None, 0, 0, 0, 0, flags)
         _diagnostic(f"native taskbar presence after frame refresh visible={is_visible} {_thread_label()}")
-        _diagnostic(f"native taskbar presence before ShowInTaskbar visible={is_visible} {_thread_label()}")
-        native.ShowInTaskbar = is_visible
-        _diagnostic(f"native taskbar presence after ShowInTaskbar visible={is_visible} {_thread_label()}")
+        # NOT native.ShowInTaskbar = is_visible: confirmed live, repeatedly,
+        # that this managed WinForms property setter deadlocks the process,
+        # regardless of which thread or how long after startup it's called
+        # from. The raw SetWindowLongPtrW + SetWindowPos(SWP_FRAMECHANGED)
+        # above already is the actual, complete mechanism Windows uses to
+        # add/remove a window's taskbar button -- ShowInTaskbar is just a
+        # higher-level WinForms wrapper around the same extended style, and
+        # setting it *after* that style was already changed directly
+        # underneath it (bypassing the property) is what very likely
+        # triggers WinForms' internal RecreateHandle() to "reconcile" its
+        # now-stale cached state, which needs the window's own UI thread
+        # and safely available message pump -- neither guaranteed here.
         _describe_window_state("native taskbar presence after", hwnd_value)
         return True
     except Exception as error:
@@ -825,6 +1018,11 @@ class SecretGroundsWebViewHost:
         self.lock_loaded = Event()
         self.last_overlay_size = (0, 0)
         self.last_pill_size = (132, 38)
+        # Distinct from last_pill_size: tracks what geometry was actually
+        # *applied* to the native window, so show_collapsed_control can tell
+        # a real content-size change (rare -- the pill's content is static)
+        # from just another refresh tick with nothing new to apply.
+        self._last_applied_pill_size: tuple[int, int] | None = None
         self.last_action: tuple[str, dict[str, Any]] | None = None
         self.ui_errors: list[dict[str, Any]] = []
         self.window_visibility: dict[str, bool] = {}
@@ -846,6 +1044,18 @@ class SecretGroundsWebViewHost:
         # unnecessary resize.
         self._last_screen_size: tuple[int, int] | None = None
         self._native_lock_deactivate_handler: Callable[..., None] | None = None
+        self._native_pill_deactivate_handler: Callable[..., None] | None = None
+        # The collapsed-session control lives in the system tray (a
+        # NotifyIcon), not as a taskbar button. tray_icon is created once
+        # the pill window first loads (see _handle_loaded); its own
+        # Visible state tracks whether a session is currently collapsed.
+        # _pill_popup_visible tracks the separate, click-driven question of
+        # whether the small popup itself is currently on screen -- shown by
+        # a tray click, hidden again when it loses focus -- independent of
+        # the refresh tick loop.
+        self.tray_icon: Any | None = None
+        self._pill_popup_visible = False
+        self._pill_popup_auto_hide_timer: Timer | None = None
         if self.lock_controller is not None:
             self.lock_controller.set_presentation_refresh(self.request_lock_refresh)
         if self.overlay_controller is not None:
@@ -1127,6 +1337,42 @@ class SecretGroundsWebViewHost:
             else:
                 self.refresh_overlay()
         elif key == "pill":
+            if window is not None:
+                apply_native_background_color(window, "#101a29")
+                # Bound here, not from _on_start -- _on_start fires before
+                # this window's native handle exists (unlike the lock
+                # window's, which is ready by then), so the guard was
+                # silently binding to nothing. Confirmed live: the popup
+                # showed on a tray click but never hid again on click-away,
+                # because nothing was ever listening for it losing focus.
+                self._bind_pill_auto_hide_guard()
+                # NOT set_native_taskbar_presence(..., False) here -- the
+                # pill does need it suppressed (confirmed live: without it,
+                # the pill still shows as an ordinary taskbar button, a
+                # shown/frameless/owner-less top-level window's default),
+                # but this fires on a per-window WebView2 event thread
+                # while the window is still mid-load. See
+                # show_collapsed_control, which does this once the pill has
+                # actually settled (on first real collapse, well after
+                # startup).
+                if self.tray_icon is None:
+                    ico_path = get_logo_ico_path()
+                    _diagnostic(f"tray icon path resolved={ico_path}")
+                    if ico_path is not None:
+
+                        def create_tray_icon() -> None:
+                            self.tray_icon = create_native_tray_icon(
+                                str(ico_path),
+                                "Secret Grounds",
+                                self._show_pill_popup,
+                            )
+                            _diagnostic(f"tray icon created={self.tray_icon is not None}")
+
+                        # Must be built on pywebview's own WinForms thread,
+                        # not this window-loaded callback's throwaway Python
+                        # thread -- see _invoke_on_gui_thread.
+                        if not _invoke_on_gui_thread(window, create_tray_icon):
+                            _diagnostic("tray icon creation invoke failed")
             if self.overlay_controller is not None:
                 self.request_overlay_refresh()
             else:
@@ -1341,11 +1587,129 @@ class SecretGroundsWebViewHost:
         pill = self.windows.get("pill")
         if pill is None:
             return
+        # refresh_overlay() calls collapse_overlay() -> here on every refresh
+        # tick (about once a second) for as long as the session stays
+        # collapsed, not just on the transition into being collapsed. Only
+        # the actual transition should touch the tray icon or the popup's
+        # own shown/hidden state below -- repeat ticks just keep the
+        # content fresh for whenever the customer next clicks the tray icon.
+        was_already_collapsed = self.window_visibility.get("pill") is True
         self.render_pill()
         width, height = self.last_pill_size
-        apply_pill_native_geometry(pill, width, height)
-        self._set_window_visible("pill", True)
-        self._set_window_on_top("pill", pill, False)
+        # The pill's content is static (logo + pc_name, no countdown text),
+        # so its size never actually changes tick to tick -- reapplying
+        # resize/move/rounded-region/opacity every ~1s regardless (in
+        # particular SetWindowRgn, which forces a repaint) was unnecessary
+        # churn on a window that hadn't actually moved, resized, or changed.
+        if not was_already_collapsed or (width, height) != self._last_applied_pill_size:
+            apply_pill_native_geometry(pill, width, height)
+            self._last_applied_pill_size = (width, height)
+        with self.lock:
+            self.window_visibility["pill"] = True
+        if not was_already_collapsed:
+            # Lives in the system tray now, not as a taskbar button: the
+            # pill itself starts hidden, and only its tray icon appears.
+            # The customer clicks the tray icon to check their remaining
+            # time (_show_pill_popup, wired as the icon's click handler in
+            # _handle_loaded), and the Deactivate guard bound in
+            # _bind_pill_auto_hide_guard hides it again the moment they
+            # click back into whatever they were doing.
+            #
+            # Called here (on first real collapse) rather than from
+            # _handle_loaded because the pill's own load event fires too
+            # early to matter for this -- there's no visible taskbar button
+            # to hide until the customer actually collapses into it.
+            if not set_native_taskbar_presence(pill, False):
+                _diagnostic("pill taskbar suppression failed")
+            self._hide_pill_popup()
+            _diagnostic(f"tray icon show attempt, tray_icon present={self.tray_icon is not None}")
+            if self.tray_icon is not None:
+
+                def show_tray_icon() -> None:
+                    try:
+                        self.tray_icon.Visible = True
+                        _diagnostic(f"tray icon show succeeded visible={self.tray_icon.Visible}")
+                    except Exception as error:
+                        _diagnostic(f"tray icon show failed: {error}")
+
+                if not _invoke_on_gui_thread(pill, show_tray_icon):
+                    _diagnostic("tray icon show invoke failed")
+
+    def _show_pill_popup(self) -> None:
+        """The tray icon's click handler. Runs on the WinForms message-loop
+        thread (a .NET event, not the webview refresh thread) --
+        set_native_window_visibility is explicitly safe to call cross-thread
+        (ShowWindowAsync), so no marshaling back onto the refresh thread is
+        needed here.
+
+        Deliberately does NOT pass activate=True (no SetForegroundWindow).
+        Confirmed live: a quick sequence of tray clicks calls
+        SetForegroundWindow repeatedly in a short window, which is exactly
+        what trips Windows' own anti-focus-stealing throttle -- the call
+        gets silently ignored, the popup ends up visible and topmost but
+        never actually the foreground window, and a window that was never
+        truly foreground can't later fire Deactivate to leave. The popup
+        only needs to be glanced at, not interacted with, so there's
+        nothing to gain from stealing focus in the first place -- it shows
+        topmost via SW_SHOWNOACTIVATE and the auto-hide timer below is the
+        sole, reliable mechanism that dismisses it again."""
+        pill = self.windows.get("pill")
+        if pill is None:
+            return
+        self._pill_popup_visible = True
+        _diagnostic(f"pill popup show {_thread_label()}")
+        set_native_window_visibility(pill, True, activate=False, on_top=True)
+        self._arm_pill_popup_auto_hide_timer()
+
+    def _hide_pill_popup(self) -> None:
+        # Deliberately unconditional (no "already hidden, skip" guard):
+        # confirmed live, clicking the tray icon can fire a burst of
+        # rapid, genuine Activate/Deactivate pairs from Windows itself (not
+        # a bug in this code -- a real WinForms/shell focus-stealing quirk
+        # right after a NotifyIcon click), all landing on the same thread
+        # in quick succession. A "skip if our own bookkeeping already says
+        # hidden" guard here is exactly the kind of check that goes stale
+        # first in a fast back-to-back sequence like that, and a stale
+        # skip here means the popup never actually goes away -- it just
+        # silently sits on top of whatever the customer is doing. Calling
+        # SetWindowPos/ShowWindow on an already-hidden window is a cheap,
+        # harmless no-op, so there's no cost to always asserting it.
+        self._cancel_pill_popup_auto_hide_timer()
+        pill = self.windows.get("pill")
+        if pill is None:
+            return
+        self._pill_popup_visible = False
+        _diagnostic(f"pill popup hide {_thread_label()}")
+        set_native_window_visibility(pill, False)
+
+    def _arm_pill_popup_auto_hide_timer(self) -> None:
+        # Belt-and-braces on top of the Deactivate guard: a tray click that
+        # lands as a rapid burst of Activate/Deactivate (confirmed live --
+        # Windows itself can generate several in under two seconds right
+        # after a NotifyIcon click) can burn through Windows' own
+        # SetForegroundWindow anti-focus-stealing allowance, so the final
+        # Activate silently never truly takes -- the popup ends up visible
+        # and topmost forever, since a window that was never really
+        # foreground can't later fire Deactivate to leave it. This timer
+        # hides it regardless, a few seconds after any show, independent
+        # of whether focus events ever cooperate.
+        self._cancel_pill_popup_auto_hide_timer()
+
+        def fire() -> None:
+            _diagnostic(f"pill popup auto-hide timer fired {_thread_label()}")
+            self._hide_pill_popup()
+
+        timer = Timer(6.0, fire)
+        timer.daemon = True
+        self._pill_popup_auto_hide_timer = timer
+        timer.start()
+        _diagnostic("pill popup auto-hide timer armed")
+
+    def _cancel_pill_popup_auto_hide_timer(self) -> None:
+        timer = self._pill_popup_auto_hide_timer
+        if timer is not None:
+            timer.cancel()
+            self._pill_popup_auto_hide_timer = None
 
     def collapse_overlay(self) -> None:
         _diagnostic("collapse_overlay invoked")
@@ -1362,7 +1726,19 @@ class SecretGroundsWebViewHost:
         pill = self.windows.get("pill")
         overlay = self.windows.get("overlay")
         if pill is not None:
-            self._set_window_visible("pill", False)
+            self._hide_pill_popup()
+            if self.tray_icon is not None:
+
+                def hide_tray_icon() -> None:
+                    try:
+                        self.tray_icon.Visible = False
+                    except Exception as error:
+                        _diagnostic(f"tray icon hide failed: {error}")
+
+                if not _invoke_on_gui_thread(pill, hide_tray_icon):
+                    _diagnostic("tray icon hide invoke failed")
+            with self.lock:
+                self.window_visibility["pill"] = False
         if overlay is not None:
             self.render_overlay()
             self._set_window_visible("overlay", True)
@@ -1571,6 +1947,35 @@ class SecretGroundsWebViewHost:
         except Exception as error:
             _diagnostic(f"native lock focus guard failed: {error}")
 
+    def _bind_pill_auto_hide_guard(self) -> None:
+        # Mirror image of the lock guard above: the pill pops up from the
+        # tray icon so a customer can check their remaining time while
+        # playing a game in fullscreen, but it must not just sit floating
+        # on top afterward. As soon as it loses focus again (they clicked
+        # back into the game), hide it -- it's tray-triggered now, not a
+        # taskbar button, so there's nothing to minimize *to*.
+        pill_window = self.windows.get("pill")
+        if pill_window is None:
+            _diagnostic("pill auto-hide guard skipped: window missing")
+            return
+        native = getattr(pill_window, "native", None)
+        if native is None:
+            _diagnostic("pill auto-hide guard skipped: native missing")
+            return
+
+        def auto_hide(sender: Any, _args: Any) -> None:
+            try:
+                self._hide_pill_popup()
+            except Exception as error:
+                _diagnostic(f"pill auto-hide failed: {error}")
+
+        self._native_pill_deactivate_handler = auto_hide
+        try:
+            native.Deactivate += auto_hide
+            _diagnostic("pill auto-hide guard bound")
+        except Exception as error:
+            _diagnostic(f"native pill auto-hide guard failed: {error}")
+
     def _open_setup(self) -> None:
         action = (
             self.lock_controller.open_setup_wizard
@@ -1604,6 +2009,7 @@ class SecretGroundsWebViewHost:
 
     def shutdown(self) -> None:
         self.allow_close = True
+        self._cancel_pill_popup_auto_hide_timer()
         self.refresh_stop.set()
         self.refresh_event.set()
         if (
@@ -1613,6 +2019,12 @@ class SecretGroundsWebViewHost:
         ):
             self.refresh_thread.join(timeout=2)
         self.detach_controllers()
+        # Without this, a NotifyIcon can linger as a "ghost" tray icon
+        # (visible until the taskbar/Explorer notices the owning process is
+        # gone and clears it, sometimes only after the next mouse-over)
+        # instead of disappearing cleanly the moment the client exits.
+        dispose_native_tray_icon(self.tray_icon)
+        self.tray_icon = None
         for window in tuple(self.windows.values()):
             try:
                 window.destroy()

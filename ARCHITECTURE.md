@@ -99,7 +99,7 @@ Crash recovery needs a small durable client state file, but adding it separately
 
 ## Development warning
 
-The lock screen currently supports ENABLE_DEV_ESCAPE for development. Disable it before deployment.
+The lock screen supports an `ENABLE_DEV_ESCAPE` bypass for development, defaulting to **disabled**. Only ever enable it locally (`ENABLE_DEV_ESCAPE=true`) for development/testing -- never on a customer-facing install.
 
 ---
 

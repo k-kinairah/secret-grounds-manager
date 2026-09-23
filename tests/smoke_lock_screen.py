@@ -20,7 +20,7 @@ class CapturingWebSocket:
         self.sent_messages.append(payload)
 
 
-def create_client() -> SecretGroundsClient:
+def create_client(enable_dev_escape: bool = False) -> SecretGroundsClient:
     client_module.AUTOMATIC_SHUTDOWN_ON_EXPIRATION = False
     temp_directory = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
     recovery_store = SessionRecoveryStore(Path(temp_directory.name) / "recovery.json")
@@ -31,6 +31,7 @@ def create_client() -> SecretGroundsClient:
         request_timeout=1,
         recovery_store=recovery_store,
         enable_lock_screen=False,
+        enable_dev_escape=enable_dev_escape,
     )
     client._test_temp_directory = temp_directory
     return client
@@ -174,7 +175,11 @@ def test_disconnect_while_idle_remains_locked() -> None:
 
 
 def test_development_escape_hides_locked_screen() -> None:
-    client = create_client()
+    # ENABLE_DEV_ESCAPE now defaults to False (audited before go-live: the
+    # lock-screen bypass shipped active on every customer PC with nothing
+    # disabling it) -- this test exercises the escape itself, so it must
+    # opt in explicitly rather than relying on the old implicit default.
+    client = create_client(enable_dev_escape=True)
     try:
         assert client.lock_screen.is_locked()
         client.lock_screen.use_development_escape()

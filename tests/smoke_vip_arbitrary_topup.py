@@ -165,6 +165,54 @@ def test_vip_multiplier_one_is_noop(temp: str) -> None:
     assert start_amount(service, "PC-VIP", "5") == 1200, "multiplier 1 => VIP priced like Standard"
 
 
+def test_add_prepaid_time_racing_client_expiration_does_not_lose_added_time(temp: str) -> None:
+    # Pre-deployment audit finding: add_prepaid_time's non-promo branch built
+    # its final database write from a snapshot taken before awaiting the
+    # client's command ack, exactly like add_time (see
+    # smoke_expiration_grace.py's matching regression test). If the client's
+    # own expiration message independently pushed the session into grace_period
+    # during that await -- the common "rescue" scenario, a top-up racing the
+    # session's own timer -- add_prepaid_time's write would blindly revert it,
+    # even though the payment was already recorded.
+    service, session_repository = create_service(Path(temp) / "prepaid-race.sqlite3")
+    started = asyncio.run(
+        service.start_prepaid_session("PC-STD", cash("5"), amount=Decimal("5"))
+    )
+    session_id = started.session.session_id
+
+    triggered = {"done": False}
+    original_send = service.send_required_command
+
+    async def racing_send(*args: object, **kwargs: object) -> list[object]:
+        if not triggered["done"]:
+            triggered["done"] = True
+            from server.time_utils import current_utc_time
+
+            service.begin_expiration_grace(session_id, current_utc_time())
+        return await original_send(*args, **kwargs)
+
+    service.send_required_command = racing_send  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        service.add_prepaid_time(session_id, cash("10"), amount=Decimal("10"))
+    )
+
+    assert triggered["done"], "race setup did not actually interleave begin_expiration_grace"
+    # P5 (1200s) + P10 (2400s) at the seeded Standard rate, unaffected by
+    # this being a race -- the paid time must not be silently dropped.
+    assert result.session.total_seconds == 1200 + 2400
+    # And the grace-period transition that raced it must be correctly
+    # recognized (fresh re-read) and cancelled, not left half-applied.
+    assert result.session.status == "active"
+    assert result.session.grace_started_at is None
+    assert result.session.shutdown_at is None
+
+    persisted = session_repository.get_session(session_id)
+    assert persisted is not None
+    assert persisted.total_seconds == 1200 + 2400
+    assert persisted.status == "active"
+
+
 def main() -> None:
     tests = [
         test_standard_pc_arbitrary_amount_unchanged,
@@ -172,6 +220,7 @@ def main() -> None:
         test_vip_pc_add_time_arbitrary_amount_uses_2x,
         test_vip_multiplier_setting_is_respected,
         test_vip_multiplier_one_is_noop,
+        test_add_prepaid_time_racing_client_expiration_does_not_lose_added_time,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp:

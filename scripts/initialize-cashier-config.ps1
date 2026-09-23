@@ -23,6 +23,34 @@ if ($BackendPort -eq 8000 -or $DashboardPort -eq 3000) {
     throw "Installer production defaults must not use development ports 8000 or 3000."
 }
 
+# Reported live: the interactive cashier operator, signed in normally (not
+# elevated), got "Access to the path '...\logs\server.log' is denied" the
+# moment anything they ran (the AutoOpen task, or the plain "Secret Grounds
+# Dashboard" shortcut) tried to log a line -- {app}\data\{app}\logs are
+# created by the SYSTEM-run Cashier Stack task, and Program Files' default
+# ACL only grants BUILTIN\Users read/execute, not write. This must run
+# every time, not just on a fresh config (below), since an *existing*
+# install reinstalled with this fix would otherwise keep its
+# already-broken folder permissions forever -- config being preserved has
+# nothing to do with whether these folders are already writable.
+New-Item -ItemType Directory -Force -Path `
+    (Join-Path $Script:SecretGroundsRoot "config"),
+    (Join-Path $Script:SecretGroundsRoot "data"),
+    (Join-Path $Script:SecretGroundsRoot "backups"),
+    (Join-Path $Script:SecretGroundsRoot "logs") | Out-Null
+foreach ($writableDir in @("config", "data", "backups", "logs")) {
+    $writablePath = Join-Path $Script:SecretGroundsRoot $writableDir
+    # *S-1-5-32-545 = the well-known SID for BUILTIN\Users, used instead of
+    # the literal name so this works regardless of the OS's display
+    # language. (OI)(CI)M = Modify, inherited by files and subfolders
+    # created later too (the whole point -- server.log itself doesn't
+    # exist yet the first time this runs).
+    & icacls $writablePath /grant "*S-1-5-32-545:(OI)(CI)M" /T /Q 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Could not grant write access on $writablePath (icacls exit $LASTEXITCODE). The cashier operator may need to run as Administrator to start Secret Grounds manually."
+    }
+}
+
 if ((Test-Path $Script:ConfigPath) -and !$Force) {
     Import-SgEnv -RequireConfig
     Assert-SgDeploymentConfig
@@ -46,11 +74,28 @@ try {
 }
 $secret = [Convert]::ToBase64String($secretBytes)
 
-New-Item -ItemType Directory -Force -Path `
-    (Join-Path $Script:SecretGroundsRoot "config"),
-    (Join-Path $Script:SecretGroundsRoot "data"),
-    (Join-Path $Script:SecretGroundsRoot "backups"),
-    (Join-Path $Script:SecretGroundsRoot "logs") | Out-Null
+# Audited before go-live: the System Admin account (full system access --
+# backups, PC power control, settings, everything) used to seed with a
+# hardcoded "admin12345" fallback whenever this env var wasn't set, and
+# nothing ever set it. Generate a real one per install instead, the same
+# way the deployment secret above already is. Unlike the deployment secret,
+# a human actually needs to read this one once to log in the first time --
+# the installer (RunCashierPostInstall) shows it in a message box right
+# after this script runs, sourced from $adminPasswordOutPath below. It's a
+# one-time bootstrap value: the dashboard's Staff page already has a
+# "Change Password" action on the Admin account (OperatorsManager.tsx) for
+# setting something memorable afterward.
+$adminPasswordChars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789".ToCharArray()
+$adminPasswordBytes = [byte[]]::new(16)
+$adminPasswordRandomNumberGenerator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    $adminPasswordRandomNumberGenerator.GetBytes($adminPasswordBytes)
+} finally {
+    $adminPasswordRandomNumberGenerator.Dispose()
+}
+$adminPassword = -join ($adminPasswordBytes | ForEach-Object { $adminPasswordChars[$_ % $adminPasswordChars.Length] })
+$adminPasswordOutPath = Join-Path ([System.IO.Path]::GetTempPath()) "secret-grounds-admin-password.txt"
+Set-Content -LiteralPath $adminPasswordOutPath -Value $adminPassword -Encoding ASCII -NoNewline
 
 $config = @"
 SECRET_GROUNDS_APP_MODE=production
@@ -81,6 +126,7 @@ SECRET_GROUNDS_CORS_ORIGINS=$CorsOrigins
 SECRET_GROUNDS_AUTH_SECURE_COOKIE=false
 SECRET_GROUNDS_AUTH_SECONDS=28800
 SECRET_GROUNDS_DEPLOYMENT_SECRET=$secret
+SECRET_GROUNDS_ADMIN_PASSWORD=$adminPassword
 NEXT_PUBLIC_FASTAPI_BASE_URL=$DashboardApiUrl
 NEXT_PUBLIC_POLL_INTERVAL_MS=4000
 "@

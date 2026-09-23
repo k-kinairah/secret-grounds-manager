@@ -3,12 +3,14 @@ import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from client.client import run_client_with_production_ui
+import client.customer_overlay as customer_overlay_module
 from client.customer_overlay import CustomerOverlayController
 from client.lock_screen import LockScreenController
 from client.webview_ui import (
@@ -18,6 +20,11 @@ from client.webview_ui import (
     set_native_window_visibility,
     web_ui_index_path,
 )
+
+# Reminder crossings would otherwise spawn a real, audible PowerShell
+# text-to-speech process (client/voice_announcer.py) -- silence it for the
+# whole file regardless of REMINDER_VOICE_ENABLED's default.
+customer_overlay_module.announce_reminder = lambda *_a, **_kw: None
 
 
 def test_web_ui_assets_are_local() -> None:
@@ -198,6 +205,10 @@ def test_window_visibility_changes_are_idempotent() -> None:
 
 
 def test_webview_collapse_shows_desktop_control() -> None:
+    class FakeNative:
+        def Invoke(self, action: Any) -> None:
+            action()
+
     class FakeWindow:
         def __init__(self) -> None:
             self.show_calls = 0
@@ -205,6 +216,7 @@ def test_webview_collapse_shows_desktop_control() -> None:
             self.on_top = True
             self.size = (0, 0)
             self.position = (0, 0)
+            self.native = FakeNative()
 
         def show(self) -> None:
             self.show_calls += 1
@@ -221,16 +233,20 @@ def test_webview_collapse_shows_desktop_control() -> None:
     host = SecretGroundsWebViewHost()
     overlay_window = FakeWindow()
     pill_window = FakeWindow()
+    tray_icon = FakeTrayIcon()
     host.windows = {
         "overlay": overlay_window,  # type: ignore[dict-item]
         "pill": pill_window,  # type: ignore[dict-item]
     }
     host.loaded = {"overlay", "pill"}
     host.window_visibility = {"overlay": True, "pill": False}
+    host.tray_icon = tray_icon
     host.collapse_overlay()
     assert overlay_window.hide_calls == 1
-    assert pill_window.show_calls == 1
-    assert pill_window.on_top is False
+    # The pill itself is never shown here -- only its tray icon. The
+    # customer shows the pill by clicking that icon (_show_pill_popup).
+    assert pill_window.show_calls == 0
+    assert tray_icon.visible_history == [True]
     assert host.window_visibility["pill"] is True
 
 
@@ -275,6 +291,183 @@ def test_screen_geometry_reconciliation_only_acts_on_a_real_change() -> None:
         webview_ui_module.current_screen_size = original_screen_size
 
 
+class FakeTrayIcon:
+    def __init__(self) -> None:
+        self.Visible = False
+        self.visible_history: list[bool] = []
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "Visible" and hasattr(self, "visible_history"):
+            self.visible_history.append(value)  # type: ignore[arg-type]
+        super().__setattr__(name, value)
+
+
+def test_collapsed_pill_shows_tray_icon_and_stays_hidden() -> None:
+    # The customer's own request: the pill should live in the system tray
+    # (like volume/battery), not as a taskbar button competing for space in
+    # the main row. It stays hidden; only its tray icon appears, and the
+    # customer clicks that icon to check their remaining time
+    # (_show_pill_popup, wired in _handle_loaded) -- the Deactivate guard
+    # bound in _bind_pill_auto_hide_guard hides it again the moment they
+    # click back into their game.
+    import client.webview_ui as webview_ui_module
+
+    class FakeNative:
+        def Invoke(self, action: Any) -> None:
+            action()
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.native = FakeNative()
+
+        def show(self) -> None:
+            pass
+
+        def hide(self) -> None:
+            pass
+
+        def resize(self, width: int, height: int) -> None:
+            pass
+
+        def move(self, x: int, y: int) -> None:
+            pass
+
+    visibility_calls: list[tuple[object, bool]] = []
+    original_visibility = webview_ui_module.set_native_window_visibility
+    webview_ui_module.set_native_window_visibility = lambda window, visible, **kwargs: visibility_calls.append(
+        (window, visible)
+    ) or True
+    try:
+        host = SecretGroundsWebViewHost()
+        pill_window = FakeWindow()
+        tray_icon = FakeTrayIcon()
+        host.windows = {"pill": pill_window}  # type: ignore[dict-item]
+        host.loaded = {"pill"}
+        host.window_visibility = {"pill": False}
+        host.tray_icon = tray_icon
+        host._pill_popup_visible = True  # simulate it being shown already
+        host.show_collapsed_control()
+        # The transition into collapsed hides any stray shown state and
+        # shows the tray icon -- the pill itself is never explicitly shown
+        # here, only ever hidden.
+        assert (pill_window, False) in visibility_calls
+        assert all(visible is False for _window, visible in visibility_calls)
+        assert tray_icon.visible_history == [True]
+
+        # refresh_overlay() calls collapse_overlay() -> show_collapsed_control()
+        # on every refresh tick (about once a second) for as long as the
+        # session stays collapsed, not just on the transition into being
+        # collapsed. The tray icon must not be re-toggled every tick, and a
+        # repeat tick must never force-hide a popup the customer has
+        # deliberately opened by clicking the tray icon.
+        host._pill_popup_visible = True
+        host.show_collapsed_control()
+        assert tray_icon.visible_history == [True]
+    finally:
+        webview_ui_module.set_native_window_visibility = original_visibility
+
+
+def test_pill_geometry_is_not_reapplied_every_tick() -> None:
+    # Reported live: the pill felt "choppy" specifically while shown on
+    # screen and when it hid again. show_collapsed_control() runs on every
+    # refresh tick (~1s) for as long as the session stays collapsed, and it
+    # was calling apply_pill_native_geometry() -- resize, move, and re-cut
+    # the rounded window region, which forces a repaint -- unconditionally
+    # every single tick, including while the customer had the pill open on
+    # screen. The pill's content never changes (logo + pc_name, no
+    # countdown text), so there was nothing to actually reapply after the
+    # first tick.
+    import client.webview_ui as webview_ui_module
+
+    class FakeWindow:
+        def show(self) -> None:
+            pass
+
+        def hide(self) -> None:
+            pass
+
+        def resize(self, width: int, height: int) -> None:
+            pass
+
+        def move(self, x: int, y: int) -> None:
+            pass
+
+    geometry_calls: list[tuple[object, int, int]] = []
+    original_geometry = webview_ui_module.apply_pill_native_geometry
+    original_visibility = webview_ui_module.set_native_window_visibility
+    webview_ui_module.apply_pill_native_geometry = lambda window, width, height: geometry_calls.append(
+        (window, width, height)
+    )
+    webview_ui_module.set_native_window_visibility = lambda window, visible, **kwargs: True
+    try:
+        host = SecretGroundsWebViewHost()
+        pill_window = FakeWindow()
+        host.windows = {"pill": pill_window}  # type: ignore[dict-item]
+        host.loaded = {"pill"}
+        host.window_visibility = {"pill": False}
+        host.last_pill_size = (132, 38)
+
+        host.show_collapsed_control()
+        assert geometry_calls == [(pill_window, 132, 38)]
+
+        # Repeated ticks with the same (unchanged) content size: no more
+        # geometry calls, and thus no more forced repaints, whether the
+        # pill is hidden or the customer has it open on screen.
+        host.show_collapsed_control()
+        host.show_collapsed_control()
+        assert geometry_calls == [(pill_window, 132, 38)]
+
+        # A genuine size change (content actually different) must still be
+        # picked up.
+        host.last_pill_size = (150, 38)
+        host.show_collapsed_control()
+        assert geometry_calls == [(pill_window, 132, 38), (pill_window, 150, 38)]
+    finally:
+        webview_ui_module.apply_pill_native_geometry = original_geometry
+        webview_ui_module.set_native_window_visibility = original_visibility
+
+
+def test_pill_auto_hides_when_it_loses_focus() -> None:
+    import client.webview_ui as webview_ui_module
+
+    class FakeEvent:
+        def __init__(self) -> None:
+            self.handlers: list[Any] = []
+
+        def __iadd__(self, handler: Any) -> "FakeEvent":
+            self.handlers.append(handler)
+            return self
+
+    class FakeNative:
+        def __init__(self) -> None:
+            self.Deactivate = FakeEvent()
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.native = FakeNative()
+
+    visibility_calls: list[tuple[object, bool]] = []
+    original_visibility = webview_ui_module.set_native_window_visibility
+    webview_ui_module.set_native_window_visibility = lambda window, visible, **kwargs: visibility_calls.append(
+        (window, visible)
+    ) or True
+    try:
+        host = SecretGroundsWebViewHost()
+        pill_window = FakeWindow()
+        host.windows = {"pill": pill_window}  # type: ignore[dict-item]
+        host._pill_popup_visible = True  # simulate the popup already being shown
+        host._bind_pill_auto_hide_guard()
+        assert len(pill_window.native.Deactivate.handlers) == 1
+
+        # Simulate the customer clicking back into their game: the window
+        # loses focus, .NET fires Deactivate.
+        pill_window.native.Deactivate.handlers[0](pill_window.native, None)
+        assert visibility_calls == [(pill_window, False)]
+        assert host._pill_popup_visible is False
+    finally:
+        webview_ui_module.set_native_window_visibility = original_visibility
+
+
 def test_native_visibility_returns_false_without_a_loaded_winforms_host() -> None:
     window = SimpleNamespace(native=None)
     assert not set_native_window_visibility(window, True)  # type: ignore[arg-type]
@@ -293,6 +486,9 @@ def main() -> None:
     test_webview_startup_failure_uses_tk_fallback()
     test_window_visibility_changes_are_idempotent()
     test_webview_collapse_shows_desktop_control()
+    test_collapsed_pill_shows_tray_icon_and_stays_hidden()
+    test_pill_geometry_is_not_reapplied_every_tick()
+    test_pill_auto_hides_when_it_loses_focus()
     test_screen_geometry_reconciliation_only_acts_on_a_real_change()
     test_native_visibility_returns_false_without_a_loaded_winforms_host()
     test_javascript_errors_are_recorded_by_the_bridge()

@@ -1,3 +1,4 @@
+import ctypes
 import os
 import sys
 import time
@@ -8,9 +9,15 @@ from threading import Event, Thread
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import client.customer_overlay as customer_overlay_module
 from client.customer_overlay import CustomerOverlayController
 from client.lock_screen import LockScreenController
 from client.webview_ui import SecretGroundsWebViewHost
+
+# Reminder crossings would otherwise spawn a real, audible PowerShell
+# text-to-speech process (client/voice_announcer.py) -- silence it for the
+# whole file regardless of REMINDER_VOICE_ENABLED's default.
+customer_overlay_module.announce_reminder = lambda *_a, **_kw: None
 
 
 def main() -> None:
@@ -59,7 +66,30 @@ def main() -> None:
             overlay.update_time(5025)
             time.sleep(0.5)
             overlay.handle_minimize_clicked()
-            time.sleep(0.3)
+            # Regression: pywebview's window.resize() calls SetWindowPos with
+            # SWP_SHOWWINDOW, so re-applying the pill's geometry once its real
+            # content size is measured used to leave it visible on screen for
+            # the whole collapsed session -- it must only ever be on screen
+            # while the customer has deliberately opened it from the tray.
+            time.sleep(2.5)
+            from client.webview_ui import _taskbar_hwnd
+
+            pill_hwnd = _taskbar_hwnd(host.windows["pill"])
+            if pill_hwnd is None:
+                raise RuntimeError("pill has no native window handle")
+            if ctypes.windll.user32.IsWindowVisible(pill_hwnd):
+                raise RuntimeError("collapsed pill is visible on screen without a tray click")
+            print("FLOW pill hidden while collapsed", flush=True)
+            # A tray click must show it, and it must go away again.
+            host._show_pill_popup()
+            time.sleep(0.6)
+            if not ctypes.windll.user32.IsWindowVisible(pill_hwnd):
+                raise RuntimeError("tray click did not show the pill popup")
+            host._hide_pill_popup()
+            time.sleep(0.6)
+            if ctypes.windll.user32.IsWindowVisible(pill_hwnd):
+                raise RuntimeError("pill popup did not hide again")
+            print("FLOW pill popup shows and hides", flush=True)
             overlay.handle_restore_clicked()
             time.sleep(0.3)
             host.handle_action("overlay", "logout", {})

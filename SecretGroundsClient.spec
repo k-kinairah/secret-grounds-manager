@@ -6,7 +6,11 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules, get_
 
 hiddenimports = []
 hiddenimports += collect_submodules('client')
-hiddenimports += collect_submodules('server')
+# Not collect_submodules('server') -- nothing under client/*.py imports
+# anything from server (confirmed by grep before removing this): the whole
+# server package was being bundled into the customer-facing client exe for
+# no reason, just adding dead weight to bundle size and PyInstaller's
+# frozen-importer bootstrap at every startup.
 hiddenimports += collect_submodules('webview')
 hiddenimports += collect_submodules('webview.platforms')
 hiddenimports += collect_submodules('pythonnet')

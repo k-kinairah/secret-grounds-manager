@@ -8,6 +8,13 @@ from threading import Event
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Reminder crossings would otherwise spawn a real, audible PowerShell
+# text-to-speech process (client/voice_announcer.py) -- silence it for the
+# whole file regardless of REMINDER_VOICE_ENABLED's default.
+import client.customer_overlay as _customer_overlay_module
+
+_customer_overlay_module.announce_reminder = lambda *_a, **_kw: None
+
 
 class NoOpRecoveryStore:
     def save(self, **kwargs) -> None:

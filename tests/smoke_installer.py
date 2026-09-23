@@ -29,6 +29,78 @@ def test_inno_installer_has_role_selection() -> None:
     assert "IsClient" in source
 
 
+def test_cashier_data_folders_are_writable_by_the_interactive_operator() -> None:
+    # Reported live: the interactive cashier operator (signed in normally,
+    # not elevated) got "Access to the path '...\logs\server.log' is
+    # denied" from both the AutoOpen task and the plain "Secret Grounds
+    # Dashboard" shortcut -- {app}\data\{app}\logs are created by the
+    # SYSTEM-run Cashier Stack task, and Program Files' default ACL only
+    # grants BUILTIN\Users read/execute, not write.
+    config_script = read("scripts/initialize-cashier-config.ps1")
+    assert "icacls" in config_script
+    assert "*S-1-5-32-545" in config_script  # BUILTIN\Users, locale-independent
+    assert "(OI)(CI)M" in config_script
+    # Must run unconditionally, before the "existing config preserved"
+    # early return -- an existing install reinstalled with this fix must
+    # still get its folder permissions corrected, since config being
+    # preserved has nothing to do with whether those folders are already
+    # writable.
+    icacls_index = config_script.index("icacls")
+    preserved_index = config_script.index("Existing cashier config preserved")
+    assert icacls_index < preserved_index
+
+
+def test_cashier_gets_a_generated_admin_password_not_a_hardcoded_default() -> None:
+    # Pre-deployment audit finding: the System Admin account (full system
+    # access -- backups, PC power control, settings) seeded with a
+    # hardcoded "admin12345" fallback whenever SECRET_GROUNDS_ADMIN_PASSWORD
+    # wasn't set, and nothing in the install flow ever set it -- anyone on
+    # the shop LAN who tried the well-known default got full control.
+    config_script = read("scripts/initialize-cashier-config.ps1")
+    assert "SECRET_GROUNDS_ADMIN_PASSWORD=$adminPassword" in config_script
+    assert "RandomNumberGenerator" in config_script
+    # Written for the installer to read back and show once -- not left
+    # sitting around afterward (the .iss side must delete it).
+    assert "secret-grounds-admin-password.txt" in config_script
+
+    iss_source = read("installer/SecretGroundsSetup.iss")
+    assert "ShowGeneratedAdminPasswordIfPresent" in iss_source
+    assert "secret-grounds-admin-password.txt" in iss_source
+    assert "DeleteFile(PasswordPath)" in iss_source
+    # Must resolve to the same directory PowerShell's
+    # [System.IO.Path]::GetTempPath() writes to, not Inno's own
+    # install-session-specific {tmp} subfolder -- the PowerShell script has
+    # no way to know that subfolder's randomly-generated name.
+    assert "{localappdata}" in iss_source
+    password_path_line = next(
+        line for line in iss_source.splitlines() if "PasswordPath :=" in line
+    )
+    assert "{tmp}" not in password_path_line
+    # The generated-password call site must run right after the config is
+    # actually created, and the shop owner must be told where to change it.
+    init_index = iss_source.index("initialize-cashier-config.ps1")
+    show_index = iss_source.index("ShowGeneratedAdminPasswordIfPresent;")
+    assert init_index < show_index
+    assert "Change Password" in iss_source
+
+
+def test_installer_and_uninstall_entry_have_a_real_app_icon() -> None:
+    # Reported live: Windows Settings -> Installed apps showed Secret Grounds
+    # with a blank/generic icon. UninstallDisplayIcon pointed at {app}\VERSION
+    # -- a plain text file, not an icon-bearing one, so Windows had nothing to
+    # extract an icon from and fell back to generic. Setup.exe itself was
+    # never given a branded icon either.
+    source = read("installer/SecretGroundsSetup.iss")
+    assert "UninstallDisplayIcon={app}\\VERSION" not in source
+    assert "UninstallDisplayIcon={app}\\secret-grounds-logo.ico" in source
+    assert "SetupIconFile=..\\client\\assets\\secret-grounds-logo.ico" in source
+    # The icon file itself must actually be installed (unconditionally --
+    # Settings shows the uninstall entry regardless of which role was
+    # chosen), not just referenced.
+    assert 'Source: "..\\client\\assets\\secret-grounds-logo.ico"; DestDir: "{app}"' in source
+    assert (PROJECT_ROOT / "client" / "assets" / "secret-grounds-logo.ico").is_file()
+
+
 def test_installer_separates_cashier_and_client_payloads() -> None:
     source = read("installer/SecretGroundsSetup.iss")
     assert 'Source: "..\\server\\*.py"' in source
@@ -297,6 +369,54 @@ def test_installer_dashboard_shortcuts_ensure_services_running() -> None:
     assert "start-secret-grounds.ps1" in open_dashboard
     assert "Wait-SgHttpReady" in open_dashboard
     assert "Start-Process $dashboardUrl" in open_dashboard
+
+
+def test_dashboard_shortcuts_use_the_sg_logo_not_a_generic_shell_icon() -> None:
+    source = read("installer/SecretGroundsSetup.iss")
+    assert "{sys}\\shell32.dll" not in source
+    assert 'IconFilename: "{app}\\secret-grounds-logo.ico"' in source
+
+
+def test_dashboard_auto_opens_at_cashier_logon() -> None:
+    # The cashier PC boots and starts the backend/dashboard as SYSTEM before
+    # anyone signs in (see install-cashier-autostart.ps1's -AtStartup
+    # branch) -- a session-0 task cannot show a browser window on anyone's
+    # desktop. So opening the dashboard automatically, rather than waiting
+    # for a manual shortcut click, needs its own logon-triggered task that
+    # runs in the cashier's own interactive session.
+    autostart = read("scripts/install-cashier-autostart.ps1")
+    assert 'taskName = "Secret Grounds Cashier Stack"' in autostart
+    assert '$autoOpenTaskName = "Secret Grounds Dashboard AutoOpen"' in autostart
+    assert "open-dashboard.ps1" in autostart
+    assert "New-ScheduledTaskTrigger -AtLogOn" in autostart
+    # Registering the stack task must not clobber a previously-registered
+    # auto-open task, or vice versa -- each guards only its own task name.
+    autoopen_index = autostart.index('$autoOpenTaskName = "Secret Grounds Dashboard AutoOpen"')
+    assert 'Unregister-ScheduledTask -TaskName $autoOpenTaskName' in autostart[autoopen_index:]
+
+    remover = read("scripts/remove-cashier-autostart.ps1")
+    assert '"Secret Grounds Cashier Stack"' in remover
+    assert '"Secret Grounds Dashboard AutoOpen"' in remover
+
+    # Reported live: this task fired at logon and failed with Windows' own
+    # generic Task Scheduler result code (0x1), with zero trace in
+    # server.log -- the failure happened before Import-SgEnv even finished,
+    # so nothing that depends on it (including Write-SgLine) was available
+    # yet to record what went wrong. A short delay guards against the most
+    # plausible cause (profile/network still settling right at sign-in);
+    # the try/catch guarantees a future failure leaves an actual message.
+    assert 'autoOpenTrigger.Delay = "PT20S"' in autostart
+
+    dashboard_script = read("scripts/open-dashboard.ps1")
+    assert "fallbackErrorLog" in dashboard_script
+    assert "GetTempPath()" in dashboard_script
+    assert "dashboard-autoopen-error.log" in dashboard_script
+    # The whole body -- including the dot-source and Import-SgEnv that were
+    # the actual failure point live -- must be inside the try, not just the
+    # health-check logic underneath it.
+    try_index = dashboard_script.index("try {")
+    dot_source_index = dashboard_script.index("secret-grounds-common.ps1")
+    assert try_index < dot_source_index
 
 
 def test_installer_cashier_role_safety() -> None:
@@ -625,6 +745,9 @@ def test_client_post_install_script_uses_scheduled_task_as_launch_mechanism() ->
 def main() -> None:
     tests = [
         test_inno_installer_has_role_selection,
+        test_cashier_data_folders_are_writable_by_the_interactive_operator,
+        test_cashier_gets_a_generated_admin_password_not_a_hardcoded_default,
+        test_installer_and_uninstall_entry_have_a_real_app_icon,
         test_installer_separates_cashier_and_client_payloads,
         test_installer_preserves_cashier_data_by_default,
         test_installer_client_validation_is_present,
@@ -645,6 +768,8 @@ def main() -> None:
         test_installer_cashier_autostart_checkbox_defaults_and_preserves_choice,
         test_installer_does_not_pass_boolean_literals_to_external_powershell,
         test_installer_dashboard_shortcuts_ensure_services_running,
+        test_dashboard_shortcuts_use_the_sg_logo_not_a_generic_shell_icon,
+        test_dashboard_auto_opens_at_cashier_logon,
         test_installer_cashier_role_safety,
         test_no_developer_specific_absolute_paths_are_tracked,
         test_installer_ships_bundled_runtime_not_dev_venv,

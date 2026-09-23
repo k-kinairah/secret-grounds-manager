@@ -37,7 +37,7 @@ Runtime files belong in `data/`, `backups/`, `logs/`, and private `config/.env`.
 
 1. Install Python and Node.js, or copy a prepared portable folder that already includes `.venv` and dashboard dependencies.
 2. Copy `config/.env.example` to `config/.env`.
-3. Edit `config/.env`; set ports, `SECRET_GROUNDS_DB_PATH`, `SECRET_GROUNDS_BACKUP_DIR`, `NEXT_PUBLIC_FASTAPI_BASE_URL`, CORS origins, and a real `SECRET_GROUNDS_DEPLOYMENT_SECRET`.
+3. Edit `config/.env`; set ports, `SECRET_GROUNDS_DB_PATH`, `SECRET_GROUNDS_BACKUP_DIR`, `NEXT_PUBLIC_FASTAPI_BASE_URL`, CORS origins, a real `SECRET_GROUNDS_DEPLOYMENT_SECRET`, and a real `SECRET_GROUNDS_ADMIN_PASSWORD` -- this seeds the System Admin account (full system access) on first boot, and falls back to a well-known default if left unset. (The GUI installer's Cashier setup does this for you automatically and shows the generated password once; this manual path does not, so set it yourself.)
 4. Keep `SECRET_GROUNDS_TEST_MODE=false` for shop use.
 5. Run `powershell -ExecutionPolicy Bypass -File scripts\install-dependencies.ps1`.
 6. Run `powershell -ExecutionPolicy Bypass -File scripts\build-dashboard.ps1`.
@@ -50,9 +50,9 @@ The production dashboard can be opened on the cashier PC at `http://127.0.0.1:30
 
 ## Cashier Auto-Start
 
-Supported scheduled task name: `Secret Grounds Cashier Stack`.
+Supported scheduled task names: `Secret Grounds Cashier Stack` and `Secret Grounds Dashboard AutoOpen`.
 
-The GUI installer's "Start Secret Grounds automatically when this computer starts" option registers this task with the **at-startup** trigger, running as **SYSTEM** (RunLevel Highest), so the backend and dashboard come up on boot without anyone signing in. The at-sign-in variant instead runs as the interactive user, who has a session by then.
+The GUI installer's "Start Secret Grounds automatically when this computer starts" option registers the Cashier Stack task with the **at-startup** trigger, running as **SYSTEM** (RunLevel Highest), so the backend and dashboard come up on boot without anyone signing in. The at-sign-in variant instead runs as the interactive user, who has a session by then. Either way, `install-cashier-autostart.ps1` also registers Dashboard AutoOpen with an **at-logon** trigger for the interactive user: a SYSTEM/session-0 task cannot show a browser window on anyone's desktop, so opening the dashboard automatically (rather than waiting for a manual shortcut click) has to happen from the cashier's own session once they sign in.
 
 - Install at system startup (installer default): `powershell -ExecutionPolicy Bypass -File scripts\install-cashier-autostart.ps1 -AtStartup`
 - Install after sign-in instead: `powershell -ExecutionPolicy Bypass -File scripts\install-cashier-autostart.ps1`

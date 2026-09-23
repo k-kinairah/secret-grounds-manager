@@ -848,11 +848,11 @@ class SecretGroundsClient:
                 state="active",
                 session_mode=self.active_session.session_mode,
             )
-            self.customer_overlay.reset_reminders_after_add_time()
             remaining_seconds = max(
                 0,
                 int(self.active_session.deadline_monotonic - time.monotonic()),
             )
+            self.customer_overlay.reset_reminders_after_add_time(remaining_seconds)
             if was_in_grace:
                 self.lock_screen.hide_for_session()
                 self.customer_overlay.show_session(
@@ -973,7 +973,15 @@ class SecretGroundsClient:
                     return
                 continue
 
-            stop_event.wait(min(5, remaining_seconds))
+            # Ticking at most once a second (not every 5s, the original
+            # interval): reminder-threshold crossings are only detected on
+            # this loop's own ticks, so a coarser interval directly delays
+            # the on-screen banner and the spoken announcement behind the
+            # real-time minute mark by up to that whole interval. The extra
+            # tick rate costs nothing real (an in-memory state update, no
+            # I/O) and by this point in the loop remaining_seconds is
+            # already >= 1 (<= 0 was handled and continue'd above).
+            stop_event.wait(min(1, remaining_seconds))
 
     def enter_expiration_grace(self, session_id: str) -> bool:
         with self.active_session_lock:
@@ -1228,6 +1236,14 @@ class SecretGroundsClient:
 
     def handle_command(self, websocket: SimpleWebSocketClient) -> None:
         command = websocket.receive_json()
+        if command.get("event_type") == "keepalive":
+            # A tiny app-level frame the server sends periodically purely to
+            # keep this connection from sitting idle long enough for a
+            # NAT/router/firewall to silently kill it -- no command_id, no
+            # acknowledgement, nothing to do here but let receive_json's
+            # blocking wait reset. See server/connection_manager.py's
+            # send_keepalive for why this exists.
+            return
         if command.get("event_type") == "session_completion_recorded":
             self.handle_session_completion_confirmation(command)
             return

@@ -24,6 +24,7 @@ SCRIPT_NAMES = {
     "status-secret-grounds.ps1",
     "install-cashier-autostart.ps1",
     "remove-cashier-autostart.ps1",
+    "run-cashier-supervised.ps1",
     "start-client.ps1",
     "install-client-autostart.ps1",
     "remove-client-autostart.ps1",
@@ -122,14 +123,67 @@ def test_cashier_autostart_task_runs_at_boot_as_system() -> None:
     register_index = cashier.index("Register-ScheduledTask -TaskName $taskName")
     assert unregister_index < register_index
 
-    # At most one automatic restart beyond the initial attempt, and a hard
-    # cap so a stuck instance cannot run indefinitely.
-    assert "-RestartCount 2" in cashier
-    assert "-ExecutionTimeLimit (New-TimeSpan -Minutes 10)" in cashier
-
-    # The action itself (hidden PowerShell, -NoBrowser, start-secret-grounds.ps1)
-    # must be unchanged by the principal/settings fix.
+    # The action itself (hidden PowerShell, -NoBrowser) must be unchanged by
+    # the principal/settings fix.
     assert '-WindowStyle Hidden -File `"$scriptPath`" -NoBrowser' in cashier
+
+
+def test_cashier_autostart_task_supervises_and_watchdogs_the_stack() -> None:
+    # Reported live: the cashier reinstall replaced this task, but since
+    # -AtStartup only fires on an actual boot, the stack silently never came
+    # up until someone ran the start scripts by hand. Even once running,
+    # there was previously no ongoing supervision -- if the backend or
+    # dashboard crashed mid-day, nothing brought it back. The action is now a
+    # polling supervisor loop, matching the client's supervised pattern.
+    cashier = read("scripts/install-cashier-autostart.ps1")
+
+    # The action is now the supervisor loop, not a one-shot launcher.
+    assert "run-cashier-supervised.ps1" in cashier
+    # The supervisor must be allowed to run for the whole session...
+    assert "-ExecutionTimeLimit ([TimeSpan]::Zero)" in cashier
+    assert "New-TimeSpan -Minutes 10" not in cashier
+    # ...and a 1-minute repetition is the outer watchdog for a killed
+    # supervisor process (distinct from the supervisor's own inner health
+    # poll of the backend/dashboard processes).
+    assert "$trigger.Repetition" in cashier
+    assert "-RepetitionInterval (New-TimeSpan -Minutes 1)" in cashier
+    assert "-MultipleInstances IgnoreNew" in cashier
+
+
+def test_cashier_supervisor_relaunches_and_is_stoppable() -> None:
+    supervisor = read("scripts/run-cashier-supervised.ps1")
+    # The loop polls both processes and restarts the whole stack if either
+    # one has died...
+    assert 'Test-SgStartedProcess (Get-SgProcessRecord "backend")' in supervisor
+    assert 'Test-SgStartedProcess (Get-SgProcessRecord "dashboard")' in supervisor
+    assert "start-secret-grounds.ps1" in supervisor
+    assert "Start-Sleep -Seconds $PollSeconds" in supervisor
+    # ...but a stop sentinel makes it exit without relaunching, so teardown
+    # and uninstall can actually stop it.
+    assert "cashier-supervisor.stop" in supervisor
+    assert "Test-StopRequested" in supervisor
+    # It tracks its own PID for the stop scripts.
+    assert 'Set-SgProcessRecord "cashier-supervisor"' in supervisor
+    # Reported live: writing the sentinel under {app}\logs threw
+    # UnauthorizedAccessException for the non-admin cashier -- that
+    # directory is created by this SYSTEM-run supervisor, and Program
+    # Files' default ACL lets a standard user modify files they already
+    # made but not create a brand-new one there. Must live under
+    # %ProgramData% instead, which does not require elevation.
+    assert 'Join-Path $env:ProgramData "Secret Grounds"' in supervisor
+
+    stop = read("scripts/stop-secret-grounds.ps1")
+    assert "cashier-supervisor.stop" in stop
+    assert 'Stop-SgStartedProcess "cashier-supervisor"' in stop
+    assert "Disable-ScheduledTask" in stop
+    assert "KeepTaskEnabled" in stop
+    assert 'Join-Path $env:ProgramData "Secret Grounds"' in stop
+
+    # A manual restart must re-arm the watchdog rather than leave the stack
+    # unsupervised until someone remembers to reinstall the autostart task.
+    restart = read("scripts/restart-secret-grounds.ps1")
+    assert "stop-secret-grounds.ps1" in restart
+    assert "-KeepTaskEnabled" in restart
 
 
 def test_client_autostart_task_supervises_and_watchdogs_the_client() -> None:
@@ -152,6 +206,37 @@ def test_client_autostart_task_supervises_and_watchdogs_the_client() -> None:
     assert "$trigger.Repetition" in client
     assert "-RepetitionInterval (New-TimeSpan -Minutes 1)" in client
     assert "-MultipleInstances IgnoreNew" in client
+
+
+def test_client_autostart_grants_write_access_on_data_folders() -> None:
+    # Reported live: the supervised client task failed silently at logon
+    # even on an admin account -- Task Scheduler logged "process terminated
+    # unexpectedly" and client.log showed nothing at all, because
+    # run-client-supervised.ps1 throws Access Denied writing
+    # secret-grounds-pids.json under {app}\logs before it ever reaches its
+    # first log line. "RunLevel Highest" on an *Interactive* logon trigger
+    # does not reliably carry the full elevated token the way a
+    # SYSTEM/ServiceAccount task does (same root cause as the cashier's
+    # matching fix, confirmed there too).
+    client = read("scripts/install-client-autostart.ps1")
+    assert "icacls" in client
+    assert "*S-1-5-32-545" in client  # BUILTIN\Users, locale-independent
+    assert "(OI)(CI)M" in client
+    # Must run every time this script does, not behind any "already
+    # configured" check -- a reinstall that first gets this fix must have
+    # it applied to whatever's already on disk, not just a brand-new
+    # install. There's no such early-return in this script to check
+    # against, so just confirm it runs before the task is (re)registered.
+    icacls_index = client.index("icacls")
+    register_index = client.index("Register-ScheduledTask -TaskName $taskName")
+    assert icacls_index < register_index
+
+    # install-client-role.ps1 is NOT invoked by the GUI installer (which
+    # calls configure-client.ps1 and install-client-autostart.ps1
+    # directly) -- a fix placed only there would never run for a real
+    # install. Confirm the fix lives in the script that's actually called.
+    role_script = read("scripts/install-client-role.ps1")
+    assert "icacls" not in role_script
 
     # Upgrades must replace a stale task, never leave a duplicate.
     assert "Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue" in client
@@ -271,6 +356,7 @@ def test_check_deployment_covers_requested_safety_checks() -> None:
         "PRAGMA integrity_check",
         "legacy database",
         "Test-SgPortAvailable",
+        "SECRET_GROUNDS_ADMIN_PASSWORD",
     ]:
         assert expected in check
 
@@ -297,7 +383,10 @@ def main() -> None:
         test_cashier_scripts_use_production_startup_and_pid_identity,
         test_autostart_task_names_are_stable,
         test_cashier_autostart_task_runs_at_boot_as_system,
+        test_cashier_autostart_task_supervises_and_watchdogs_the_stack,
+        test_cashier_supervisor_relaunches_and_is_stoppable,
         test_client_autostart_task_supervises_and_watchdogs_the_client,
+        test_client_autostart_grants_write_access_on_data_folders,
         test_client_task_launches_through_a_hidden_vbs_wrapper_no_console_flash,
         test_client_supervisor_relaunches_and_is_stoppable,
         test_config_examples_are_secret_safe,

@@ -4,9 +4,10 @@ from threading import Event, Lock, Thread
 from typing import Callable
 
 from client import theme
-from client.config import APP_VERSION
+from client.config import APP_VERSION, REMINDER_VOICE_ENABLED
 from client.tk_runtime import create_tk_root, log_tk_startup_error
 from client.utils import get_logo_path
+from client.voice_announcer import announce as announce_reminder
 
 
 DEFAULT_REMINDER_THRESHOLDS_SECONDS = [15 * 60, 10 * 60, 5 * 60, 4 * 60, 3 * 60, 2 * 60, 60, 0]
@@ -204,18 +205,29 @@ class CustomerOverlayController:
             self.state.session_type = session_type
             self.state.customer_name = customer_name
             self.state.is_elapsed = is_elapsed
-            self.state.fired_thresholds.clear()
-            self.state.last_seconds_value = None
-            self.state.notice = None
-            self.state.notice_ticks_remaining = 0
-            self.state.reminder_hud_text = None
             if is_new_session:
-                # A genuinely new (or resumed-from-grace) session should be
-                # visible, not silently stuck in whatever collapsed state a
-                # *previous* session happened to leave behind. Refresh calls
-                # for an already-active session (reconnect resync, member
-                # login updating the display name) pass is_new_session=False
-                # so a deliberately minimized overlay stays minimized.
+                # A genuinely new (or resumed-from-grace) session starts with
+                # a clean slate: no reminders fired yet, no stale countdown
+                # value to compare against, no leftover notice from whatever
+                # came before, and not silently stuck in whatever collapsed
+                # state a *previous* session happened to leave behind.
+                # Refresh calls for an already-active session (reconnect
+                # resync, member login updating the display name, a
+                # duplicate start_session command for the session already
+                # running) pass is_new_session=False and must NOT touch any
+                # of this. This used to reset unconditionally: resetting
+                # last_seconds_value to None on a routine resync silently ate
+                # whatever threshold crossing update_time() would otherwise
+                # have detected on its very next call (previous_seconds is
+                # None short-circuits the crossing check) -- the reason the
+                # 10/4/3/2-minute reminders were going missing while 15/5/1
+                # (spaced far enough apart to usually dodge a resync) kept
+                # firing.
+                self.state.fired_thresholds.clear()
+                self.state.last_seconds_value = None
+                self.state.notice = None
+                self.state.notice_ticks_remaining = 0
+                self.state.reminder_hud_text = None
                 self.state.is_collapsed = False
                 self.state.session_started_monotonic = time.monotonic()
         self.ensure_gui()
@@ -300,6 +312,12 @@ class CustomerOverlayController:
                             self.state.reminder_hud_token += 1
         for message in messages:
             print(f"Customer reminder: {message}")
+            # Outside the lock deliberately: announce() spawns a detached,
+            # non-blocking process and returns immediately, but there is no
+            # reason to hold self.lock (which every other overlay operation
+            # needs) for even that long.
+            if REMINDER_VOICE_ENABLED:
+                announce_reminder(message)
         self.schedule_gui_refresh()
         return messages
 
@@ -321,13 +339,21 @@ class CustomerOverlayController:
         )
         self.schedule_gui_refresh()
 
-    def reset_reminders_after_add_time(self) -> None:
+    def reset_reminders_after_add_time(self, remaining_seconds: int) -> None:
+        # Takes the freshly-extended remaining time as a parameter rather
+        # than reading self.state.seconds_value: the caller (client.py)
+        # computes remaining_seconds from the new deadline *after* this used
+        # to run against the still-stale pre-top-up value (often near 0,
+        # e.g. mid-expiration-grace), which satisfied `seconds_value <=
+        # threshold` for every threshold and so cleared none of them --
+        # every reminder that had already fired earlier in the session
+        # stayed marked fired forever, even though the extended countdown
+        # would legitimately cross it again.
         with self.lock:
             self.state.fired_thresholds = {
                 threshold
                 for threshold in self.state.fired_thresholds
-                if self.state.seconds_value is not None
-                and self.state.seconds_value <= threshold
+                if remaining_seconds <= threshold
             }
 
     def build_view_model(self) -> CustomerOverlayViewModel:
@@ -413,7 +439,7 @@ class CustomerOverlayController:
         if threshold == 15 * 60:
             return "You have 15 minutes remaining. Please visit the cashier if you would like to add more time."
         if threshold == 60:
-            return "Your session will end in 1 minute. Please save your work."
+            return "Your session will end in 1 minute."
         if threshold <= 0:
             return "Your time has ended. Please proceed to the cashier."
         minutes = threshold // 60

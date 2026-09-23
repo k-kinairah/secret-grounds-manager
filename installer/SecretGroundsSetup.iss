@@ -20,7 +20,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 WizardStyle=modern
-UninstallDisplayIcon={app}\VERSION
+UninstallDisplayIcon={app}\secret-grounds-logo.ico
+SetupIconFile=..\client\assets\secret-grounds-logo.ico
 SetupLogging=yes
 VersionInfoVersion=1.0.0.0
 VersionInfoTextVersion={#AppVersion}
@@ -39,6 +40,7 @@ Name: "{app}\client"; Check: IsClient
 
 [Files]
 Source: "..\VERSION"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\client\assets\secret-grounds-logo.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\ARCHITECTURE.md"; DestDir: "{app}"; Flags: ignoreversion; Check: IsCashier
 Source: "..\config\.env.example"; DestDir: "{app}\config"; Flags: ignoreversion; Check: IsCashier
 Source: "..\server\*.py"; DestDir: "{app}\server"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: IsCashier
@@ -51,6 +53,7 @@ Source: "..\scripts\stop-all-for-uninstall.ps1"; DestDir: "{app}\scripts"; Flags
 Source: "..\scripts\start-secret-grounds.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\start-backend.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\start-dashboard.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
+Source: "..\scripts\run-cashier-supervised.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\stop-secret-grounds.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\restart-secret-grounds.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
 Source: "..\scripts\status-secret-grounds.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion; Check: IsCashier
@@ -82,12 +85,12 @@ Source: "..\scripts\read-client-config-status.ps1"; DestDir: "{tmp}"; Flags: don
 Source: "..\scripts\read-cashier-status.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
-Name: "{group}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14; Check: IsCashier
+Name: "{group}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\secret-grounds-logo.ico"; Check: IsCashier
 Name: "{group}\Start Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\start-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
 Name: "{group}\Stop Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\stop-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
 Name: "{group}\Restart Secret Grounds"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\restart-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
 Name: "{group}\Secret Grounds Status"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\status-secret-grounds.ps1"""; WorkingDir: "{app}"; Check: IsCashier
-Name: "{commondesktop}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14; Check: IsCashier
+Name: "{commondesktop}\Secret Grounds Dashboard"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\open-dashboard.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\secret-grounds-logo.ico"; Check: IsCashier
 Name: "{group}\Configure Secret Grounds Client"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\scripts\configure-client.ps1"""; WorkingDir: "{app}"; Check: IsClient
 
 [Run]
@@ -731,6 +734,35 @@ begin
     Result := '-DisableAutostart';
 end;
 
+procedure ShowGeneratedAdminPasswordIfPresent;
+var
+  PasswordPath, Password: String;
+  Lines: TArrayOfString;
+begin
+  // initialize-cashier-config.ps1 only writes this file when it actually
+  // generated a fresh config (first-ever setup on this machine) -- on a
+  // reinstall where the existing config.env is preserved, no file appears
+  // here and this is a silent no-op, which is correct: the admin password
+  // set during that earlier install (or changed since, via the dashboard's
+  // own Change Password action) is untouched.
+  //
+  // NOT {tmp}: that is Inno's own install-session-specific subfolder
+  // ({localappdata}\Temp\is-XXXXXXXX.tmp\), which the PowerShell script has
+  // no way to know the name of. [System.IO.Path]::GetTempPath() in that
+  // script resolves to {localappdata}\Temp\ itself (its parent) under a
+  // normal interactive install, so that is where this must look instead.
+  PasswordPath := ExpandConstant('{localappdata}') + '\Temp\secret-grounds-admin-password.txt';
+  if not FileExists(PasswordPath) then Exit;
+  if LoadStringsFromFile(PasswordPath, Lines) and (GetArrayLength(Lines) > 0) then begin
+    Password := Lines[0];
+    MsgBox('Secret Grounds System Admin password (write this down now -- it will not be shown again):' + #13#10#13#10 +
+      Password + #13#10#13#10 +
+      'Sign in with this password, then go to Staff -> Admin -> Change Password to set one you''ll remember.',
+      mbInformation, MB_OK);
+  end;
+  DeleteFile(PasswordPath);
+end;
+
 procedure RunCashierPostInstall;
 var
   Retry: Boolean;
@@ -744,6 +776,7 @@ begin
       CashierLogPathsMessage, mbError, MB_OK);
     Exit;
   end;
+  ShowGeneratedAdminPasswordIfPresent;
 
   if not RunCashierScript('install-backend-firewall-rule.ps1', '') then begin
     MsgBox('Secret Grounds could not install the Private-network firewall rule for the backend.' + #13#10#13#10 +

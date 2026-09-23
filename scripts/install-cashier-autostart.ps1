@@ -4,10 +4,24 @@ param([switch]$AtStartup)
 Import-SgEnv -RequireConfig
 
 $taskName = "Secret Grounds Cashier Stack"
-$scriptPath = Join-Path $PSScriptRoot "start-secret-grounds.ps1"
+# The task action is the supervisor loop, not a one-shot launcher: it polls
+# the backend and dashboard and restarts the whole stack if either one dies,
+# so a crash mid-day is back up within one poll interval instead of staying
+# down until someone notices and runs the start scripts by hand. See
+# run-cashier-supervised.ps1.
+$scriptPath = Join-Path $PSScriptRoot "run-cashier-supervised.ps1"
 $argument = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`" -NoBrowser"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argument -WorkingDirectory $Script:SecretGroundsRoot
 $trigger = if ($AtStartup) { New-ScheduledTaskTrigger -AtStartup } else { New-ScheduledTaskTrigger -AtLogOn }
+# The 1-minute repetition is the OUTER watchdog: if the supervisor process
+# itself is ever killed, Task Scheduler brings it back within a minute (the
+# backend/dashboard keep running in that gap -- only the supervisor died).
+# While the supervisor is alive the repeated trigger is a no-op
+# (MultipleInstances IgnoreNew below).
+$repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+        -RepetitionInterval (New-TimeSpan -Minutes 1) `
+        -RepetitionDuration (New-TimeSpan -Days 3650)).Repetition
+$trigger.Repetition = $repetition
 # Registering without an explicit principal defaults to RunLevel Limited, which
 # cannot write to {app}\data or {app}\logs under C:\Program Files\Secret
 # Grounds\ -- the task silently fails (LastTaskResult 1) even though the
@@ -33,14 +47,47 @@ $principal = if ($AtStartup) {
     New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
 }
 $principalLabel = if ($AtStartup) { "SYSTEM (LogonType ServiceAccount, at startup)" } else { "$currentUser (LogonType Interactive, at logon)" }
-# Cap retries so a genuinely broken install doesn't spin forever: at most one
-# automatic restart on top of the initial attempt (2 attempts total), and
-# Task Scheduler kills a hung instance after 10 minutes either way.
-$settings = New-ScheduledTaskSettingsSet -RestartCount 2 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew -StartWhenAvailable
+# ExecutionTimeLimit 0 = no limit: the supervisor is meant to run for the
+# whole cashier session (hours/days), not be killed after 10 minutes.
+# RestartCount is a belt-and-braces on-failure restart on top of the
+# repetition trigger's revival.
+$settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable
 
 if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
 }
 
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Starts the Secret Grounds backend and production dashboard." | Out-Null
-Write-SgLine "Installed scheduled task '$taskName' as $principalLabel, RunLevel Highest." "INFO" (Get-SgEnv "SECRET_GROUNDS_SERVER_LOG" ".\logs\server.log")
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Starts and supervises the Secret Grounds backend and production dashboard." | Out-Null
+Write-SgLine "Installed scheduled task '$taskName' as $principalLabel, RunLevel Highest, 1-minute watchdog." "INFO" (Get-SgEnv "SECRET_GROUNDS_SERVER_LOG" ".\logs\server.log")
+
+# Second task: open the dashboard in the cashier's own browser automatically
+# at logon, once the stack is healthy (open-dashboard.ps1 already knows how
+# to wait for that, and to start the stack itself as a fallback if it
+# somehow isn't up yet). This always targets the interactive signer,
+# regardless of whether the stack task above runs -AtStartup as SYSTEM or
+# -AtLogOn -- a SYSTEM/session-0 task cannot show a window on anyone's
+# desktop (Windows session isolation), so opening a browser has to happen
+# from the logged-on user's own session either way. Same non-elevated
+# identity as the existing manual "Secret Grounds Dashboard" shortcut, since
+# this is just that same action running automatically instead of on a click.
+$autoOpenTaskName = "Secret Grounds Dashboard AutoOpen"
+$autoOpenScriptPath = Join-Path $PSScriptRoot "open-dashboard.ps1"
+$autoOpenAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$autoOpenScriptPath`"" -WorkingDirectory $Script:SecretGroundsRoot
+$autoOpenTrigger = New-ScheduledTaskTrigger -AtLogOn
+# Reported live: this failed at logon with no diagnosable error (see
+# open-dashboard.ps1's new try/catch for the logging half of that fix). A
+# small delay right at sign-in -- profile/network/drives still settling --
+# is a plausible enough cause on its own to guard against regardless of
+# whether it was the actual one, and costs nothing since this task's only
+# job is convenience (a manual "Secret Grounds Dashboard" shortcut click
+# still works immediately with no delay).
+$autoOpenTrigger.Delay = "PT20S"
+$autoOpenPrincipal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive
+$autoOpenSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
+
+if (Get-ScheduledTask -TaskName $autoOpenTaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $autoOpenTaskName -Confirm:$false
+}
+
+Register-ScheduledTask -TaskName $autoOpenTaskName -Action $autoOpenAction -Trigger $autoOpenTrigger -Principal $autoOpenPrincipal -Settings $autoOpenSettings -Description "Opens the Secret Grounds dashboard automatically once the cashier signs in." | Out-Null
+Write-SgLine "Installed scheduled task '$autoOpenTaskName' for $currentUser (LogonType Interactive, at logon)." "INFO" (Get-SgEnv "SECRET_GROUNDS_SERVER_LOG" ".\logs\server.log")

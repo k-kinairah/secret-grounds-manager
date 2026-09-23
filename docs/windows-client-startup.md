@@ -48,6 +48,13 @@ CUSTOMER_OVERLAY_POSITION=top-right
 
 Supported positions are `top-left`, `top-right`, `bottom-left`, and `bottom-right`.
 
+Reminder banners fire once each at 15/10/5/4/3/2/1 minutes remaining. Alongside the on-screen banner, the client speaks the same reminder aloud (Windows' built-in text-to-speech, no internet required). Turn the spoken part off independently if it's too chatty over game audio without losing the plain 30-second expiration beep:
+
+```text
+SECRET_GROUNDS_REMINDER_VOICE_ENABLED=false
+SECRET_GROUNDS_EXPIRATION_SOUND_ENABLED=false
+```
+
 ## Deployment warning
 
 Before production deployment, set:
