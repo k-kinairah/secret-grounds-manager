@@ -52,6 +52,17 @@ const REFUND_REASON_OPTIONS: SecretSelectOption[] = [
   { value: "Other", label: "Other" }
 ];
 
+// What the member has left right now. The stored balance is only deducted when
+// a session ends, so while they are playing it still shows the start-of-session
+// figure; the server sends the live one alongside it.
+function liveStandardSeconds(member: MemberRecord): number {
+  return member.live_time_balance_seconds ?? member.time_balance_seconds;
+}
+
+function liveVipSeconds(member: MemberRecord): number {
+  return member.live_vip_balance_seconds ?? member.vip_balance_seconds;
+}
+
 function formatMemberBalance(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
   const minutes = Math.floor(seconds / 60);
@@ -520,6 +531,24 @@ export function MembersManager() {
     };
   }, [closeMemberMenu, openMemberMenu]);
 
+  const queryRef = useRef(query);
+  useEffect(() => {
+    queryRef.current = query;
+  }, [query]);
+
+  // The live balance moves while a member plays, so keep the list current.
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      fetchMembers(queryRef.current)
+        .then((nextMembers) => setMembers(nextMembers))
+        .catch(() => undefined);
+    }, 30000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
   async function refresh(search = query) {
     const [nextMembers, nextProducts] = await Promise.all([
       fetchMembers(search),
@@ -836,6 +865,11 @@ export function MembersManager() {
     ...(canManagePins ? [{ id: "security" as MemberDetailTab, label: "Security" }] : []),
     { id: "activity", label: "Activity" }
   ];
+  // selectedMember is a snapshot taken when the dialog opened; the polled list
+  // has the current live balance for the same member.
+  const detailMember = selectedMember
+    ? members.find((candidate) => candidate.member_id === selectedMember.member_id) ?? selectedMember
+    : null;
   const refundTimeSeconds = Math.abs(refundTarget?.seconds_delta ?? 0);
   const refundAmount = Math.abs(Number(refundTarget?.amount_paid ?? 0));
   const refundBalanceAfter =
@@ -999,12 +1033,12 @@ export function MembersManager() {
                       {getMemberAccountLabel(accountState)}
                     </span>
                     <span className={styles.memberRowMetric}>
-                      <span>Standard</span>
-                      <strong>{formatMemberBalance(member.time_balance_seconds)}</strong>
+                      <span>{member.in_session ? "Standard · in session" : "Standard"}</span>
+                      <strong>{formatMemberBalance(liveStandardSeconds(member))}</strong>
                     </span>
                     <span className={styles.memberRowMetric}>
                       <span>VIP</span>
-                      <strong>{formatMemberBalance(member.vip_balance_seconds)}</strong>
+                      <strong>{formatMemberBalance(liveVipSeconds(member))}</strong>
                     </span>
                     <span className={`${styles.memberRowMetric} ${styles.memberRowMetricText}`}>
                       <span>Joined</span>
@@ -1392,12 +1426,12 @@ export function MembersManager() {
                     </strong>
                   </div>
                   <div className={styles.detailRow}>
-                    <span>Standard Time</span>
-                    <strong>{formatMemberBalance(selectedMember.time_balance_seconds)}</strong>
+                    <span>{detailMember?.in_session ? "Standard Time (in session)" : "Standard Time"}</span>
+                    <strong>{formatMemberBalance(liveStandardSeconds(detailMember ?? selectedMember))}</strong>
                   </div>
                   <div className={styles.detailRow}>
                     <span>VIP Time</span>
-                    <strong>{formatMemberBalance(selectedMember.vip_balance_seconds)}</strong>
+                    <strong>{formatMemberBalance(liveVipSeconds(detailMember ?? selectedMember))}</strong>
                   </div>
                   <div className={styles.detailRow}>
                     <span>Last activity</span>
@@ -1430,12 +1464,12 @@ export function MembersManager() {
                 >
                   <div className={styles.memberBalanceHeroRow}>
                     <div className={styles.memberBalanceHero}>
-                      <span>Standard Time</span>
-                      <strong>{formatMemberBalance(selectedMember.time_balance_seconds)}</strong>
+                      <span>{detailMember?.in_session ? "Standard Time (in session)" : "Standard Time"}</span>
+                      <strong>{formatMemberBalance(liveStandardSeconds(detailMember ?? selectedMember))}</strong>
                     </div>
                     <div className={styles.memberBalanceHero}>
                       <span>VIP Time</span>
-                      <strong>{formatMemberBalance(selectedMember.vip_balance_seconds)}</strong>
+                      <strong>{formatMemberBalance(liveVipSeconds(detailMember ?? selectedMember))}</strong>
                     </div>
                   </div>
                   <div className={styles.memberProductGrid}>
@@ -1471,15 +1505,15 @@ export function MembersManager() {
                       <span>{selectedProduct.balance_type === "vip" ? "VIP" : "Standard"} balance preview</span>
                       <strong>
                         {selectedProduct.balance_type === "vip"
-                          ? `${formatMemberBalance(selectedMember.vip_balance_seconds)} + ${formatMemberBalance(
+                          ? `${formatMemberBalance(liveVipSeconds(detailMember ?? selectedMember))} + ${formatMemberBalance(
                               selectedProduct.time_seconds
                             )} = ${formatMemberBalance(
-                              selectedMember.vip_balance_seconds + selectedProduct.time_seconds
+                              liveVipSeconds(detailMember ?? selectedMember) + selectedProduct.time_seconds
                             )}`
-                          : `${formatMemberBalance(selectedMember.time_balance_seconds)} + ${formatMemberBalance(
+                          : `${formatMemberBalance(liveStandardSeconds(detailMember ?? selectedMember))} + ${formatMemberBalance(
                               selectedProduct.time_seconds
                             )} = ${formatMemberBalance(
-                              selectedMember.time_balance_seconds + selectedProduct.time_seconds
+                              liveStandardSeconds(detailMember ?? selectedMember) + selectedProduct.time_seconds
                             )}`}
                       </strong>
                       {selectedProduct.balance_type === "vip" ? (
