@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from client.lock_screen import LockScreenController
 from client.webview_ui import (
     SecretGroundsWebViewHost,
     WebOverlayState,
+    _diagnostic,
     js_set_state_script,
     set_native_window_visibility,
     web_ui_index_path,
@@ -473,6 +475,44 @@ def test_native_visibility_returns_false_without_a_loaded_winforms_host() -> Non
     assert not set_native_window_visibility(window, True)  # type: ignore[arg-type]
 
 
+def test_diagnostic_log_rotates_instead_of_growing_forever() -> None:
+    """Regression: this log had no size limit at all and reached 242 MB
+    after a few days on a machine left running for testing."""
+    import client.webview_ui as webview_ui_module
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp:
+        fake_exe = Path(temp) / "SecretGroundsClient.exe"
+        fake_exe.write_text("not a real exe, just needs to exist for resolve()")
+        log_path = Path(temp) / "client-webview-startup.log"
+        backup_path = Path(temp) / "client-webview-startup.log.1"
+
+        original_executable = webview_ui_module.sys.executable
+        webview_ui_module.sys.executable = str(fake_exe)
+        original_cap = webview_ui_module._DIAGNOSTIC_LOG_MAX_BYTES
+        webview_ui_module._DIAGNOSTIC_LOG_MAX_BYTES = 200
+        try:
+            for i in range(30):
+                _diagnostic(f"line {i} padded to push the file past the tiny test cap")
+            assert log_path.exists()
+            assert backup_path.exists(), "log never rotated once it passed the cap"
+            assert log_path.stat().st_size < original_cap * 3, (
+                "current log kept every line instead of rotating"
+            )
+            assert "line 29" in log_path.read_text(encoding="utf-8"), "most recent line must survive rotation"
+
+            # A rotation must never happen twice in a row for the same
+            # over-the-cap file -- once rotated, the new (empty-ish) current
+            # log starts back under the cap.
+            size_after_first_rotation = backup_path.stat().st_size
+            _diagnostic("one more line just after rotating")
+            assert backup_path.stat().st_size == size_after_first_rotation, (
+                "backup file must not be touched again until the new current log itself fills up"
+            )
+        finally:
+            webview_ui_module.sys.executable = original_executable
+            webview_ui_module._DIAGNOSTIC_LOG_MAX_BYTES = original_cap
+
+
 def test_javascript_errors_are_recorded_by_the_bridge() -> None:
     host = SecretGroundsWebViewHost()
     host.handle_action("lock", "ui_error", {"message": "test error", "line": 7})
@@ -491,6 +531,7 @@ def main() -> None:
     test_pill_auto_hides_when_it_loses_focus()
     test_screen_geometry_reconciliation_only_acts_on_a_real_change()
     test_native_visibility_returns_false_without_a_loaded_winforms_host()
+    test_diagnostic_log_rotates_instead_of_growing_forever()
     test_javascript_errors_are_recorded_by_the_bridge()
     print("WebView UI smoke tests passed.")
 
