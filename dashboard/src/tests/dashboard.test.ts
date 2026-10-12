@@ -1560,7 +1560,12 @@ async function runAsyncAssertions() {
     // The displayed duration always comes from the backend's response
     // (calculatedTime.duration_seconds), never a client-recomputed value.
     assert.match(sessionDialogSourceForOpenTimeRetirement, /calculatedTime\.duration_seconds/);
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /isStandardAmountMode = activeTab === "standard" && !pc\.is_vip/);
+    // The Standard tab's amount flow applies on every station, VIP PCs
+    // included (e022453: the backend prices a VIP-PC amount off the Standard
+    // metered rate scaled by the VIP multiplier), so it must not be gated on
+    // the PC being non-VIP.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /isStandardAmountMode = activeTab === "standard";/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /isStandardAmountMode = .*is_vip/);
     assert.match(sessionDialogSourceForOpenTimeRetirement, /onConfirm\(\{ amount: normalizedAmount, payment: buildPayment\(normalizedAmount\) \}\)/);
     // Invalid (blank/zero/negative/malformed) amounts never submit.
     assert.match(sessionDialogSourceForOpenTimeRetirement, /Enter a valid amount above/);
@@ -1573,9 +1578,12 @@ async function runAsyncAssertions() {
     // .rateOption cards, and the Standard-amount block never renders
     // .optionGrid/.rateOption at all.
     const standardAmountBlock = sessionDialogSourceForOpenTimeRetirement.slice(
-      sessionDialogSourceForOpenTimeRetirement.indexOf("isStandardAmountMode ? ("),
-      sessionDialogSourceForOpenTimeRetirement.indexOf(") : (\n          <div role=\"tabpanel\">")
+      sessionDialogSourceForOpenTimeRetirement.indexOf("<div className={styles.standardAmountPanel}>"),
+      sessionDialogSourceForOpenTimeRetirement.indexOf('{activeTab !== "member" ? (')
     );
+    // A missing anchor makes slice() return "" and every doesNotMatch below
+    // would then pass vacuously -- which is how stale anchors went unnoticed.
+    assert.ok(standardAmountBlock.length > 500, "Standard amount block anchors no longer match SessionDialog");
     assert.match(standardAmountBlock, /styles\.amountChip/);
     assert.match(standardAmountBlock, /styles\.amountChipRow/);
     assert.match(standardAmountBlock, /styles\.amountChipGrid/);
@@ -1588,29 +1596,18 @@ async function runAsyncAssertions() {
     assert.doesNotMatch(standardAmountBlock, /mode ===/);
     assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /isStandardAmountMode = .*mode/);
 
-    // VIP tab: compact rate-id buttons (reusing the exact same .amountChip
-    // styling as Standard's chips), never the old large .rateOption cards,
-    // and never a "Standard"/"Create Account" option for a VIP station.
-    const vipTabBlock = sessionDialogSourceForOpenTimeRetirement.slice(
-      sessionDialogSourceForOpenTimeRetirement.indexOf(") : (\n          <div role=\"tabpanel\">"),
-      sessionDialogSourceForOpenTimeRetirement.indexOf("{activeTab !== \"member\"")
-    );
-    assert.match(vipTabBlock, />VIP</);
-    assert.match(vipTabBlock, /vipModeHeading/);
-    assert.match(vipTabBlock, /packageRates\.map/);
-    assert.match(vipTabBlock, /setSelectedRateId\(rate\.rate_id\)/);
-    assert.match(vipTabBlock, /formatChipLabel\(rate\)/);
-    assert.match(vipTabBlock, /styles\.amountChip/);
-    assert.doesNotMatch(vipTabBlock, /styles\.rateOption/);
-    assert.doesNotMatch(vipTabBlock, /styles\.optionGrid/);
-    assert.doesNotMatch(vipTabBlock, /Create Account/);
-    assert.doesNotMatch(vipTabBlock, />Standard</);
-    // formatChipLabel formats a rate's price/duration for a compact chip
-    // (e.g. "₱30 — 1 hr", "₱250 — 10 hr promo") -- never a hardcoded
-    // per-hour multiplication in the dashboard; the promo suffix is driven
-    // by the rate's own name, not a hardcoded rate_id/price check.
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /function formatChipLabel/);
-    assert.match(sessionDialogSourceForOpenTimeRetirement, /rate\.name\.toLowerCase\(\)\.includes\("promo"\)/);
+    // The old VIP tab (rate-id chips, vipModeHeading, formatChipLabel, a
+    // separate "VIP" selection) was removed on purpose in e022453: a VIP PC
+    // now uses the same Standard amount flow, priced by the backend. Lock
+    // that in -- two tabs only, none of the old VIP-tab pieces -- and keep
+    // the rule that the dashboard never hardcodes per-hour math.
+    assert.match(sessionDialogSourceForOpenTimeRetirement, /type SelectionTab = "standard" \| "member"/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /vipModeHeading/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /function formatChipLabel/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /setActiveTab\("vip"\)/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /styles\.rateOption/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /styles\.optionGrid/);
+    assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /Create Account/);
     assert.doesNotMatch(sessionDialogSourceForOpenTimeRetirement, /price \* 30|30 \* rate|price \/ 30/);
 
     // Operator panel (display-only) is gone entirely -- the confirm-button

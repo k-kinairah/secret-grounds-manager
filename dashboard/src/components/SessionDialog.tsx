@@ -89,8 +89,8 @@ export function SessionDialog({
   const title = mode === "start" ? `Start ${pcDisplayName}` : `Add time to ${pcDisplayName}`;
   // Standard tab: the amount-based flow (chips + free amount) on every
   // station. On a VIP PC the backend prices that amount off the Standard
-  // metered rate scaled by the configured VIP multiplier; the live preview
-  // below passes pc_name so it shows the same VIP-scaled minutes.
+  // metered rate adjusted by the configured VIP rate factor; the live preview
+  // below passes pc_name so it shows the same VIP-adjusted minutes.
   const isStandardAmountMode = activeTab === "standard";
   const selectedPackage = packageRates.find((rate) => rate.rate_id === selectedRateId);
   const customAmountValue = Number(customAmount);
