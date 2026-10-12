@@ -1426,8 +1426,11 @@ export function MembersManager() {
                     </strong>
                   </div>
                   <div className={styles.detailRow}>
-                    <span>{detailMember?.in_session ? "Standard Time (in session)" : "Standard Time"}</span>
-                    <strong>{formatMemberBalance(liveStandardSeconds(detailMember ?? selectedMember))}</strong>
+                    <span>Standard Time</span>
+                    <strong>
+                      {formatMemberBalance(liveStandardSeconds(detailMember ?? selectedMember))}
+                      {detailMember?.in_session ? <small> · in session</small> : null}
+                    </strong>
                   </div>
                   <div className={styles.detailRow}>
                     <span>VIP Time</span>
@@ -1464,8 +1467,11 @@ export function MembersManager() {
                 >
                   <div className={styles.memberBalanceHeroRow}>
                     <div className={styles.memberBalanceHero}>
-                      <span>{detailMember?.in_session ? "Standard Time (in session)" : "Standard Time"}</span>
-                      <strong>{formatMemberBalance(liveStandardSeconds(detailMember ?? selectedMember))}</strong>
+                      <span>Standard Time</span>
+                      <strong>
+                        {formatMemberBalance(liveStandardSeconds(detailMember ?? selectedMember))}
+                        {detailMember?.in_session ? <small> · in session</small> : null}
+                      </strong>
                     </div>
                     <div className={styles.memberBalanceHero}>
                       <span>VIP Time</span>
