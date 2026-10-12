@@ -1,0 +1,1 @@
+- AI assistant (read-only MCP server, phase 1): see [assistant/README.md](assistant/README.md)
