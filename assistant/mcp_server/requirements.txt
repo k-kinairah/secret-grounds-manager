@@ -1,0 +1,7 @@
+# Secret Grounds MCP server -- its OWN venv, separate from server/requirements.txt.
+# mcp 2.x: FastMCP is now called MCPServer. Speaks MCP 2024-11-05 .. 2025-11-25
+# (initialize handshake) and 2026-07-28.
+mcp==2.3.0
+httpx==0.28.1
+# Windows has no IANA timezone database; zoneinfo needs this for Asia/Manila.
+tzdata==2026.3
