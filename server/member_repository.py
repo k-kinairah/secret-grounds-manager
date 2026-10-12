@@ -188,6 +188,66 @@ class MemberRepository:
             ).fetchone()
         return row_to_member(row) if row else None
 
+    def with_live_balances(self, members: list[MemberRecord]) -> list[MemberRecord]:
+        """Return copies of `members` with the display-only live_* fields set.
+
+        A member's stored balance is only deducted when their session ends
+        (finalize_reservation_usage), so while they are playing it still
+        shows what they had at the start. This subtracts what the session
+        has used so far, using the SAME consumption rules finalize applies at
+        the end (1:1 on a Standard PC; VIP first, then Standard at 2:1, on a
+        VIP PC, capped at the reservation), so the number shown now is the
+        number that will actually be left. Read-only: nothing is written and
+        the stored balances are left untouched.
+        """
+        if not members:
+            return members
+        now = current_utc_time()
+        with get_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT r.member_id, r.reserved_seconds, r.reserved_vip_seconds,
+                       s.started_at, s.station_type
+                FROM member_time_reservations r
+                JOIN sessions s ON s.session_id = r.session_id
+                WHERE r.status = 'active' AND s.ended_at IS NULL
+                """
+            ).fetchall()
+
+        used_standard: dict[str, int] = {}
+        used_vip: dict[str, int] = {}
+        for row in rows:
+            elapsed = max(0, int((now - datetime.fromisoformat(row["started_at"])).total_seconds()))
+            reserved_standard = int(row["reserved_seconds"])
+            reserved_vip = int(row["reserved_vip_seconds"])
+            if row["station_type"] == "vip":
+                reserved_effective = reserved_vip + reserved_standard // STANDARD_SECONDS_PER_VIP_SECOND
+                vip_consumed, standard_consumed = finalize_vip_usage(elapsed, reserved_effective, reserved_vip)
+            else:
+                vip_consumed = 0
+                standard_consumed = min(elapsed, reserved_standard)
+            member_id = row["member_id"]
+            used_standard[member_id] = used_standard.get(member_id, 0) + standard_consumed
+            used_vip[member_id] = used_vip.get(member_id, 0) + vip_consumed
+
+        live_members: list[MemberRecord] = []
+        for member in members:
+            in_session = member.member_id in used_standard
+            live_members.append(
+                member.model_copy(
+                    update={
+                        "live_time_balance_seconds": max(
+                            0, member.time_balance_seconds - used_standard.get(member.member_id, 0)
+                        ),
+                        "live_vip_balance_seconds": max(
+                            0, member.vip_balance_seconds - used_vip.get(member.member_id, 0)
+                        ),
+                        "in_session": in_session,
+                    }
+                )
+            )
+        return live_members
+
     def get_member_by_username(self, username: str) -> MemberRecord | None:
         username_normalized = normalize_username(username)
         with get_connection() as connection:

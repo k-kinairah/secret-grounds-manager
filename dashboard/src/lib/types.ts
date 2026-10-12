@@ -959,6 +959,12 @@ export interface MemberRecord {
   status: "active" | "inactive";
   time_balance_seconds: number;
   vip_balance_seconds: number;
+  // Display-only, from GET /members: the stored balance minus what a session
+  // in progress has already used. The stored balance is only deducted when the
+  // session ends. Absent on responses from other endpoints.
+  live_time_balance_seconds?: number | null;
+  live_vip_balance_seconds?: number | null;
+  in_session?: boolean;
   joined_at: string;
   expires_at: string | null;
   created_by_user_id: string | null;

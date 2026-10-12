@@ -117,10 +117,28 @@ _patch_pywebview_move_bug()
 MemberLoginAction = Callable[[str, str], str | None]
 
 
+_DIAGNOSTIC_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
 def _diagnostic(message: str) -> None:
     print(f"[webview-ui] {message}", flush=True)
     try:
         log_path = Path(sys.executable).resolve().with_name("client-webview-startup.log")
+        # This file has no other size limit and is written from many
+        # threads for as long as the client keeps running -- confirmed live,
+        # it reached 242 MB after a few days on a machine left running for
+        # testing. Rotate once it passes 10 MB, keeping exactly one previous
+        # file (the ".1" suffix) for recent history. Two threads racing to
+        # rotate at the same moment is harmless: whichever loses the rename
+        # just skips rotating this one time, and the next call over the cap
+        # catches it.
+        try:
+            if log_path.stat().st_size >= _DIAGNOSTIC_LOG_MAX_BYTES:
+                backup_path = log_path.with_name(log_path.name + ".1")
+                backup_path.unlink(missing_ok=True)
+                log_path.rename(backup_path)
+        except OSError:
+            pass
         timestamp = datetime.now(timezone.utc).isoformat()
         with log_path.open("a", encoding="utf-8") as log_file:
             log_file.write(f"{timestamp} [webview-ui] {message}\n")

@@ -10,7 +10,12 @@ param(
     [int]$RelaunchDelaySeconds = 2,
     # 0 = supervise forever (production). A positive value stops the loop
     # after that many relaunches (tests only).
-    [int]$MaxRelaunches = 0
+    [int]$MaxRelaunches = 0,
+    # Name of the machine-wide lock that keeps a second supervisor from
+    # running alongside this one. Production leaves this empty; tests pass a
+    # unique name so they neither collide with each other nor with a real
+    # supervisor running on the same machine.
+    [string]$InstanceMutexName = ""
 )
 
 # Keep the customer client alive. This script is the action of the
@@ -48,6 +53,40 @@ function Test-StopRequested {
         return $true
     }
     return $false
+}
+
+# --- single-instance guard ------------------------------------------------
+# Task Scheduler's own "MultipleInstances IgnoreNew" only knows about the
+# wscript.exe wrapper it launched. If that wrapper dies while this PowerShell
+# process keeps running (seen live: the wrapper was gone hours later, the
+# supervisor and its client were not), Task Scheduler believes nothing is
+# running and starts a second supervisor -- two clients, two tray icons, two
+# fighting WebSocket connections for the same PC name. So the supervisor
+# enforces "only one" itself with a machine-wide named mutex, no matter who
+# or what launched it. A duplicate exits immediately without touching the pid
+# records or the running client.
+$mutexName = if ($InstanceMutexName) {
+    $InstanceMutexName
+} elseif ($ClientCommandOverride) {
+    "Local\SecretGroundsClientSupervisorTest-$PID"
+} else {
+    "Global\SecretGroundsClientSupervisor"
+}
+$supervisorMutex = $null
+$ownsSupervisorMutex = $false
+try {
+    $createdNew = $false
+    $supervisorMutex = New-Object System.Threading.Mutex($true, $mutexName, [ref]$createdNew)
+    $ownsSupervisorMutex = $createdNew
+} catch [System.UnauthorizedAccessException] {
+    # The lock exists but was created by a differently-privileged token (the
+    # elevated scheduled task vs. a manual non-elevated run), which means
+    # another supervisor definitely holds it.
+}
+if (-not $ownsSupervisorMutex) {
+    Write-SgLine "Another Secret Grounds client supervisor is already running; this duplicate (PID $PID) is exiting." "WARN" $clientLog
+    if ($supervisorMutex) { $supervisorMutex.Dispose() }
+    exit 0
 }
 
 # --- resolve what to supervise -------------------------------------------
@@ -168,4 +207,6 @@ try {
 } finally {
     Remove-SgProcessRecord "client"
     Remove-SgProcessRecord "client-supervisor"
+    try { $supervisorMutex.ReleaseMutex() } catch { }
+    $supervisorMutex.Dispose()
 }

@@ -1322,6 +1322,14 @@ class MemberRecord(BaseModel):
     status: MemberStatus
     time_balance_seconds: int
     vip_balance_seconds: int = 0
+    # Display-only, filled in by GET /members and GET /members/{id} (see
+    # MemberRepository.with_live_balances): the stored balance minus what a
+    # session in progress has already used. The stored balance above is only
+    # deducted when the session ends, so during play it overstates what the
+    # member has left. Never used for billing -- None everywhere else.
+    live_time_balance_seconds: int | None = None
+    live_vip_balance_seconds: int | None = None
+    in_session: bool = False
     joined_at: datetime
     expires_at: datetime | None = None
     created_by_user_id: str | None = None

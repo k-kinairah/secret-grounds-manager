@@ -795,7 +795,7 @@ def list_members(
     q: str | None = None,
     _: object = Depends(require_role("cashier")),
 ) -> list[MemberRecord]:
-    return member_repository.list_members(q)
+    return member_repository.with_live_balances(member_repository.list_members(q))
 
 
 @app.get("/members/{member_id}", response_model=MemberRecord)
@@ -806,7 +806,7 @@ def get_member(
     member = member_repository.get_member(member_id)
     if member is None:
         raise HTTPException(status_code=404, detail="Member not found")
-    return member
+    return member_repository.with_live_balances([member])[0]
 
 
 @app.get("/members/{member_id}/vip-preview", response_model=MemberVipPlayablePreview)

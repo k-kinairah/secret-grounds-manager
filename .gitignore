@@ -16,6 +16,22 @@ logs/*
 data/*.db
 data/*.sqlite3
 backups/*.db
+# SQLite WAL mode writes -wal/-shm files beside every database, and they hold
+# the same real shop data (members, sales). Ignore every database artifact by
+# extension anywhere in the repo, and the whole backups folder, so a stray
+# "git add ." can never publish them.
+*.db
+*.db-wal
+*.db-shm
+backups/
+
+# Local Claude Code settings/launch configs -- per-machine, not project source.
+.claude/
+
+# Per-machine environment overrides. dashboard/.env.local used to be tracked;
+# copy dashboard/.env.example to it if you want local overrides.
+.env.local
+.env.*.local
 dist/
 build/
 *.spec
