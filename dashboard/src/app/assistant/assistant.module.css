@@ -464,6 +464,26 @@
   color: #fecdd3;
 }
 
+/* A power command was received -- not proof the PC is off. */
+.target_received {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #bae6fd;
+}
+
+.target_skipped {
+  border-color: rgba(251, 146, 60, 0.45);
+  color: #fed7aa;
+}
+
+.targetDetails {
+  color: var(--muted);
+  display: grid;
+  font-size: 12px;
+  gap: 2px;
+  margin: 0;
+  padding-left: 18px;
+}
+
 .actionButtons {
   display: flex;
   gap: 8px;

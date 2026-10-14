@@ -30,9 +30,53 @@ def _error(message: str) -> dict[str, str]:
     return {"error": message}
 
 
+_ONES = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+}
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50}
+# Speech-to-text often hears the number right after "PC" as a homophone.
+_HOMOPHONES_AFTER_PREFIX = {"to": 2, "too": 2, "for": 4, "won": 1, "ate": 8}
+_PC_PREFIXES = {"pc", "vip", "station", "computer"}
+_FILLER = {"number", "no", "num", "#"}
+
+
+def _words_to_digits(text: str) -> str:
+    """'pc twenty one' -> 'pc 21', 'PC number three' -> 'PC 3', 'pc to' -> 'pc 2'."""
+    tokens = re.findall(r"[a-z]+|\d+|[^a-z\d\s]", text.lower())
+    out: list[str] = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        prev = out[-1] if out else ""
+        if token in _FILLER and prev in _PC_PREFIXES:
+            i += 1
+            continue
+        if token in _TENS:
+            value = _TENS[token]
+            nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
+            nxt2 = tokens[i + 2] if i + 2 < len(tokens) else ""
+            if nxt == "-" and nxt2 in _ONES and 0 < _ONES[nxt2] < 10:
+                value += _ONES[nxt2]
+                i += 2
+            elif nxt in _ONES and 0 < _ONES[nxt] < 10:
+                value += _ONES[nxt]
+                i += 1
+            out.append(str(value))
+        elif token in _ONES:
+            out.append(str(_ONES[token]))
+        elif token in _HOMOPHONES_AFTER_PREFIX and prev in _PC_PREFIXES:
+            out.append(str(_HOMOPHONES_AFTER_PREFIX[token]))
+        else:
+            out.append(token)
+        i += 1
+    return " ".join(out)
+
+
 def _normalize_pc(name: str) -> str:
-    """'PC 3', 'pc-03', 'PC03' -> 'pc3' (digit groups lose leading zeros)."""
-    lowered = re.sub(r"[^a-z0-9]", "", name.lower())
+    """'PC 3', 'pc-03', 'PC03', 'pc three' -> 'pc3' (digit groups lose leading zeros)."""
+    lowered = re.sub(r"[^a-z0-9]", "", _words_to_digits(name))
     return re.sub(r"\d+", lambda match: str(int(match.group())), lowered)
 
 
@@ -333,4 +377,102 @@ async def propose_add_time(
             },
         },
         "status": "Waiting for the operator to confirm on screen. Nothing has been added yet.",
+    }
+
+
+# --- shut down idle PCs (Admin only, never forced) -------------------------------
+#
+# POST /pcs/{pc}/power/shutdown is restricted by the backend to the protected
+# Admin account. The proposal only ever sends {"force": false}: the backend then
+# refuses (409) any PC that has an active session, so a PC that becomes busy
+# between proposing and confirming is skipped, never shut down on a customer.
+
+_BUSY_SESSION_STATUSES = {"active", "grace_period", "shutting_down", "ending", "settlement_pending"}
+
+
+def _idle_reason(pc: dict[str, Any], busy_pcs: set[str]) -> str | None:
+    """None if the PC is idle and can take a shutdown; otherwise why not."""
+    if not pc.get("is_enabled", True):
+        return "disabled"
+    if pc.get("connection_status") != "online" or not pc.get("has_command_connection"):
+        return "offline"
+    if pc["pc_name"] in busy_pcs or pc.get("active_session_id") or pc.get("session_status") in _BUSY_SESSION_STATUSES:
+        return "in use"
+    if pc.get("startup_status") or pc.get("prepared_session_id"):
+        return "starting a session"
+    if pc.get("session_status") not in (None, "idle"):
+        return str(pc.get("session_status"))
+    return None
+
+
+async def propose_shutdown_idle_pcs(
+    client: BackendClient, pc_names: list[str] | None = None, exclude: list[str] | None = None
+) -> dict[str, Any]:
+    try:
+        pcs = await client.get("/pcs")
+        sessions = await client.get("/sessions/active")
+    except BackendError as error:
+        return _error(str(error))
+
+    busy_pcs = {s.get("pc_name") for s in sessions if s.get("status") in _BUSY_SESSION_STATUSES}
+
+    if pc_names:
+        candidates: list[dict[str, Any]] = []
+        for wanted in pc_names:
+            pc = _match_pc(pcs, wanted)
+            if pc is None:
+                return _error(f"There is no PC called {wanted!r}.")
+            if pc not in candidates:
+                candidates.append(pc)
+    else:
+        candidates = list(pcs)
+
+    excluded: set[str] = set()
+    for wanted in exclude or []:
+        pc = _match_pc(pcs, wanted)
+        if pc is None:
+            return _error(f"There is no PC called {wanted!r} to leave out.")
+        excluded.add(pc["pc_name"])
+
+    idle: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    for pc in sorted(candidates, key=lambda p: (p.get("layout_order", 0), str(p.get("pc_name")))):
+        if pc["pc_name"] in excluded:
+            skipped.append({"pc": _label(pc), "reason": "left out"})
+            continue
+        reason = _idle_reason(pc, busy_pcs)
+        if reason is None:
+            idle.append(pc)
+        elif pc_names:  # only explain skips for PCs the user named
+            skipped.append({"pc": _label(pc), "reason": reason})
+
+    if not idle:
+        if skipped:
+            listed = ", ".join(f"{s['pc']} ({s['reason']})" for s in skipped)
+            return _error(f"None of those PCs can be shut down right now: {listed}.")
+        return _error("There are no idle PCs online right now, so there is nothing to shut down.")
+
+    names = [pc["pc_name"] for pc in idle]
+    labels = ", ".join(_label(pc) for pc in idle)
+    count = f"{len(idle)} idle PC{'s' if len(idle) != 1 else ''}"
+    return {
+        "proposal": {
+            "kind": "shutdown_pcs",
+            "summary": f"Shut down {count}: {labels}?",
+            "targets": names,
+            "details": {
+                "power": "shutdown",
+                "admin_only": True,
+                "skipped": skipped,
+                "note": "Only idle PCs are included. A PC that starts a session before you confirm is skipped.",
+            },
+            "request": {
+                "method": "POST",
+                # One call per PC in each_pc, run by the dashboard after confirmation.
+                "path": "/pcs/{pc}/power/shutdown",
+                "body": {"force": False},
+                "each_pc": names,
+            },
+        },
+        "status": "Waiting for the Admin to confirm on screen. Nothing has been sent yet.",
     }

@@ -10,7 +10,8 @@ small set of actions, which only run after a staff member confirms them.
 - **Phase 2:** `assistant/agent`, a Strands agent service with a configurable model
   provider, plus a push-to-talk `/assistant` page in the dashboard, behind a feature flag.
 - **Phase 3 (in progress):** confirmed actions. So far: a message to one PC, an announcement
-  to several or all PCs, and adding time to a prepaid session (billed later).
+  to several or all PCs, adding time to a prepaid session (billed later), and shutting down
+  idle PCs (Admin only).
 
 ## Architecture
 
@@ -115,6 +116,27 @@ tools don't exist and the agent keeps its read-only prompt.
 | Message one PC | `propose_message_pc(pc_name, message, severity?)` | `POST /pcs/{pc}/message` | cashier+ |
 | Announcement to several or all online PCs | `propose_broadcast(message, pc_names?, severity?)` | `POST /commands/broadcast` with an explicit `pc_names` list | cashier+ |
 | Add time to a running **prepaid** session, billed later | `propose_add_time(pc_name, package \| minutes \| amount_pesos)` | `POST /sessions/{session_id}/add-time` with exactly one of `rate_id` or `amount` (≤ ₱2,000) | cashier+ |
+
+| Shut down **idle** PCs (online, no session, nothing starting) | `propose_shutdown_idle_pcs(pc_names?, exclude?)` | one `POST /pcs/{pc}/power/shutdown` per PC, body exactly `{"force": false}` | **protected Admin account only** (backend-enforced) |
+
+About shutting down idle PCs:
+- **Never forced.** The backend refuses (409) any PC that has a session. A PC that starts a
+  session between proposing and confirming is skipped, not powered off.
+- **Honest results.** A PC *receiving* the command is not proof it powered off, so the card
+  and the spoken reply say "received the shutdown command". A real PC adds "should power off
+  in a few seconds". A test-mode client (the demo PC) adds "(test mode: not powered off)":
+  in test mode the client acknowledges with `accepted (test mode: not powered off)` and never
+  runs the real shutdown.
+- **Admin only.** Anyone else's confirmation is refused by the backend, and the assistant says
+  "only the Admin account can shut down PCs". The dashboard also tells the agent who is
+  talking (name, role, whether it's the Admin account, as verified with the backend), so a
+  real model can say so before preparing anything.
+- **Audit.** The backend credits PC commands to the **on-duty** operator, as it does for
+  dashboard clicks.
+
+PC names can be spoken with **number words**: "pc one", "PC three", "PC number three", "pc
+twenty-one", "vip one". Common mishearings right after "PC" also work ("PC to" → 2, "PC for"
+→ 4, "PC won" → 1).
 
 About add time:
 - The price is added to that session's bill and paid later. The card shows the package or
@@ -346,7 +368,7 @@ cd assistant\agent; .\.venv\Scripts\python.exe -m pytest; cd ..\..
 .\.venv\Scripts\python.exe tests\smoke_assistant_token_auth.py
 
 # Dashboard proxy route + helpers (fetch stubbed)
-cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npm run typecheck; npm test
+cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npx tsx src\tests\assistantShutdown.test.ts; npm run typecheck; npm test
 ```
 
 ## Versions

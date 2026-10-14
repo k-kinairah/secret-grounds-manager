@@ -311,3 +311,87 @@ def test_actions_prompt_mentions_add_time_and_price():
 
     assert "propose_add_time" in ACTIONS_PROMPT
     assert "Never offer free time" in ACTIONS_PROMPT
+
+
+# --- shut down idle PCs (phase 3 step c) ------------------------------------------------
+
+SHUTDOWN_PROPOSAL = {
+    "kind": "shutdown_pcs",
+    "summary": "Shut down 3 idle PCs: PC 1, PC 3, PC 5?",
+    "targets": ["PC-01", "PC-03", "PC-05"],
+    "details": {"power": "shutdown", "admin_only": True, "skipped": []},
+    "request": {"method": "POST", "path": "/pcs/{pc}/power/shutdown", "body": {"force": False},
+                "each_pc": ["PC-01", "PC-03", "PC-05"]},
+}
+
+
+def _received(pc, message):
+    return {"pc": pc, "status_code": 200, "body": {
+        "command": {"pc_name": pc, "status": "completed", "client_response": message},
+        "acknowledgements": [{"status": "received", "message": "Command received"},
+                             {"status": "completed", "message": message}]}}
+
+
+def test_shutdown_outcome_is_honest_about_test_mode():
+    action = actions.new_pending_action(SHUTDOWN_PROPOSAL)
+    outcome = actions.describe_outcome(action, 200, {"results": [
+        _received("PC-01", "accepted (test mode: not powered off)"),
+        _received("PC-03", "accepted; expected disconnect may follow"),
+        {"pc": "PC-05", "status_code": 409,
+         "body": {"detail": "Active sessions require force=true, confirmation, and a reason before power control"}},
+    ]})
+    assert outcome["ok"] is True
+    assert outcome["reply"] == (
+        "PC-01 received the shutdown command (test mode: not powered off). "
+        "PC-03 received the shutdown command and should power off in a few seconds. "
+        "PC-05 was skipped because it is in use now."
+    )
+    assert "shut down." not in outcome["reply"] and "powered off." not in outcome["reply"].replace("not powered off", "")
+    by_pc = {t["pc"]: t for t in outcome["targets"]}
+    assert by_pc["PC-01"] == {"pc": "PC-01", "status": "received", "detail": "test mode: not powered off"}
+    assert by_pc["PC-03"]["status"] == "received"
+    assert by_pc["PC-05"]["status"] == "skipped"
+
+
+def test_shutdown_needs_admin_account():
+    action = actions.new_pending_action(SHUTDOWN_PROPOSAL)
+    denied = {"detail": "System administration is restricted to the protected Admin account."}
+    outcome = actions.describe_outcome(action, 200, {"results": [
+        {"pc": pc, "status_code": 403, "body": denied} for pc in ("PC-01", "PC-03", "PC-05")
+    ]})
+    assert outcome["ok"] is False
+    assert outcome["reply"] == (
+        "That didn't go through: only the Admin account can shut down PCs. Sign in as Admin and try again."
+    )
+    assert {t["detail"] for t in outcome["targets"]} == {"needs the Admin account"}
+
+
+def test_shutdown_failed_command_and_unreachable():
+    action = actions.new_pending_action(SHUTDOWN_PROPOSAL)
+    outcome = actions.describe_outcome(action, 200, {"results": [
+        {"pc": "PC-01", "status_code": 200, "body": {"command": {"status": "timed_out",
+                                                                  "failure_reason": "No acknowledgement"}}},
+        {"pc": "PC-03", "status_code": 0, "body": None},
+    ]})
+    assert outcome["ok"] is False
+    assert "PC-01 didn't get it: no acknowledgement." in outcome["reply"]
+    assert "PC-03 didn't get it: could not reach the shop system." in outcome["reply"]
+
+
+def test_operator_context_in_prompt(client_and_service):
+    client, _, model = client_and_service([{"text": "Hi Neil."}, {"text": "Hi Admin."}])
+    client.post("/chat", json={"session_id": "s1", "message": "hi",
+                               "operator": {"display_name": "Neil", "role": "cashier", "is_admin_account": False}})
+    client.post("/chat", json={"session_id": "s2", "message": "hi",
+                               "operator": {"display_name": "Admin", "role": "owner", "is_admin_account": True}})
+    cashier_prompt, admin_prompt = (r["system_prompt"] for r in model.requests)
+    assert "You are talking to Neil (cashier)." in cashier_prompt
+    assert "shutting down PCs will be refused" in cashier_prompt
+    assert "signed in as the Admin account" in admin_prompt
+    assert "will be refused" not in admin_prompt
+
+
+def test_chat_without_operator_still_works(client_and_service):
+    client, _, model = client_and_service([{"text": "ok"}])
+    assert client.post("/chat", json={"session_id": "s", "message": "hi"}).status_code == 200
+    assert "You are talking to" not in model.requests[0]["system_prompt"]

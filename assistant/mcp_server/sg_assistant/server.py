@@ -177,6 +177,28 @@ def build_server(client: BackendClient, tz: ZoneInfo, enable_actions: bool = Fal
         """
         return await proposals.propose_add_time(client, tz, pc_name, package, minutes, amount_pesos)
 
+    @mcp.tool(annotations=PROPOSE)
+    async def propose_shutdown_idle_pcs(
+        pc_names: Annotated[
+            list[str] | None,
+            Field(description="Only consider these PCs (as the user said them). Leave empty for every idle PC."),
+        ] = None,
+        exclude: Annotated[
+            list[str] | None, Field(description="PCs to leave on, e.g. ['PC 1'] for 'all except PC 1'.")
+        ] = None,
+    ) -> dict[str, Any]:
+        """PREPARE shutting down IDLE PCs: online PCs with no session and nothing starting. Use for
+        "shut down the idle PCs", "turn off the free computers except PC 2". ADMIN ONLY: only the
+        protected Admin account can run it; anyone else's confirmation is refused by the shop system.
+
+        This does NOT shut anything down. It lists which PCs are idle right now and returns a
+        `proposal` the Admin must confirm on screen. It never forces: a PC that starts a session
+        before confirmation is skipped. Afterwards say in one short sentence how many PCs (and
+        which) are ready to shut down and ask them to confirm. Never say they were shut down.
+        Returns {"error": ...} if no PC is idle.
+        """
+        return await proposals.propose_shutdown_idle_pcs(client, pc_names, exclude)
+
     return mcp
 
 

@@ -15,11 +15,19 @@ export type PendingAction = {
     added?: string;
     price?: string;
     new_end_time?: string;
+    // shutdown_pcs
+    admin_only?: boolean;
+    skipped?: { pc: string; reason: string }[];
   };
   expires_in_seconds: number;
 };
 
-export type ActionTargetResult = { pc: string; status: "done" | "offline" | "failed"; detail: string | null };
+// "received": the PC got a power command -- not proof it powered off.
+export type ActionTargetResult = {
+  pc: string;
+  status: "done" | "received" | "skipped" | "offline" | "failed";
+  detail: string | null;
+};
 
 export type ActionOutcome = {
   ok: boolean;
@@ -55,7 +63,8 @@ const TOOL_LABELS: Record<string, string> = {
   get_current_shift: "current shift",
   propose_message_pc: "a message",
   propose_broadcast: "an announcement",
-  propose_add_time: "time to add"
+  propose_add_time: "time to add",
+  propose_shutdown_idle_pcs: "PCs to shut down"
 };
 
 // Chip under a reply: "Checked: today's sales" for lookups, "Prepared: a

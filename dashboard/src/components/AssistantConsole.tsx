@@ -50,8 +50,18 @@ type Pending = { action: PendingAction; messageId: number };
 
 const ACTION_KIND_LABELS: Record<string, string> = {
   add_time: "Add time",
+  shutdown_pcs: "Shut down idle PCs",
   broadcast: "Announcement",
   message_pc: "Message to PC"
+};
+
+const TARGET_ICONS: Record<string, string> = { done: "✓", failed: "✕", offline: "○", received: "↯", skipped: "–" };
+const TARGET_WORDS: Record<string, string> = {
+  done: "done",
+  failed: "didn't get it",
+  offline: "offline",
+  received: "received the shutdown command",
+  skipped: "skipped, in use"
 };
 
 const NO_SPEECH_HINT =
@@ -568,7 +578,7 @@ function ActionCard({
               key={result.pc}
               title={result.detail ?? undefined}
             >
-              {result.status === "done" ? "✓" : result.status === "offline" ? "○" : "✕"} {result.pc}
+              {TARGET_ICONS[result.status] ?? "•"} {result.pc}
             </span>
           ))}
         </div>
@@ -581,6 +591,23 @@ function ActionCard({
           ))}
         </div>
       )}
+      {action.kind === "shutdown_pcs" && results.length > 0 ? (
+        <ul className={styles.targetDetails}>
+          {results.map((result) => (
+            <li key={result.pc}>
+              {`${result.pc}: ${TARGET_WORDS[result.status] ?? result.status}${result.detail ? ` (${result.detail})` : ""}`}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {action.details.admin_only && state === "pending" ? (
+        <p className={styles.actionNote}>Admin account only. Idle PCs only; never forced, so a PC that starts a session first is skipped.</p>
+      ) : null}
+      {action.kind === "shutdown_pcs" && (action.details.skipped ?? []).length > 0 && results.length === 0 ? (
+        <p className={styles.actionNote}>
+          {`Not included: ${(action.details.skipped ?? []).map((item) => `${item.pc} (${item.reason})`).join(", ")}`}
+        </p>
+      ) : null}
       {action.kind === "add_time" && action.details.price ? (
         <p className={styles.actionNote}>
           {`Billed later: ₱${action.details.price} added to this session's bill${

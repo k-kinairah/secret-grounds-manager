@@ -122,6 +122,8 @@ def _valid_proposal(proposal: Any) -> bool:
 
 def describe_outcome(action: PendingAction, status_code: int, body: Any) -> dict[str, Any]:
     """Turn the backend's real response into a spoken reply + per-PC results."""
+    if action.kind == "shutdown_pcs" and isinstance(body, dict) and isinstance(body.get("results"), list):
+        return _describe_shutdown(action, body["results"])
     if not 200 <= status_code < 300:
         detail = body.get("detail") if isinstance(body, dict) else None
         reason = detail if isinstance(detail, str) and detail else f"the shop system returned an error ({status_code})"
@@ -186,6 +188,84 @@ def describe_outcome(action: PendingAction, status_code: int, body: Any) -> dict
         "reply": "Done.",
         "targets": [{"pc": pc, "status": "done", "detail": None} for pc in action.targets],
     }
+
+
+TEST_MODE_NOTE = "test mode: not powered off"
+
+
+def _ack_message(body: Any) -> str:
+    """The client's own words for a power command, e.g. 'accepted (test mode: not powered off)'."""
+    if not isinstance(body, dict):
+        return ""
+    for ack in body.get("acknowledgements") or []:
+        if isinstance(ack, dict) and ack.get("status") == "completed" and ack.get("message"):
+            return str(ack["message"])
+    command = body.get("command") or {}
+    return str(command.get("client_response") or "") if isinstance(command, dict) else ""
+
+
+def _describe_shutdown(action: PendingAction, results: list[Any]) -> dict[str, Any]:
+    """One backend call per PC. Honest wording: a shutdown command being
+    *received* is not the PC being off -- and a test-mode client never powers off."""
+    targets: list[dict[str, Any]] = []
+    test_mode: list[str] = []
+    real: list[str] = []
+    skipped: list[str] = []
+    failed: list[tuple[str, str]] = []
+    forbidden = 0
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        pc = str(item.get("pc") or "?")
+        code = int(item.get("status_code") or 0)
+        body = item.get("body")
+        detail = body.get("detail") if isinstance(body, dict) and isinstance(body.get("detail"), str) else None
+        command = body.get("command") if isinstance(body, dict) and isinstance(body.get("command"), dict) else {}
+        if 200 <= code < 300 and command.get("status") not in _FAILED_STATUSES:
+            if "test mode" in _ack_message(body).lower():
+                test_mode.append(pc)
+                targets.append({"pc": pc, "status": "received", "detail": TEST_MODE_NOTE})
+            else:
+                real.append(pc)
+                targets.append({"pc": pc, "status": "received", "detail": "should power off in a few seconds"})
+        elif 200 <= code < 300:
+            reason = str(command.get("failure_reason") or command.get("status"))
+            failed.append((pc, reason))
+            targets.append({"pc": pc, "status": "failed", "detail": reason})
+        elif code == 409:
+            skipped.append(pc)
+            targets.append({"pc": pc, "status": "skipped", "detail": detail or "in use now"})
+        elif code in (401, 403):
+            forbidden += 1
+            targets.append({"pc": pc, "status": "failed", "detail": "needs the Admin account"})
+        else:
+            reason = (detail or f"error {code}") if code else "could not reach the shop system"
+            failed.append((pc, reason))
+            targets.append({"pc": pc, "status": "failed", "detail": reason})
+
+    if forbidden and forbidden == len(targets):
+        return {
+            "ok": False,
+            "reply": "That didn't go through: only the Admin account can shut down PCs. Sign in as Admin and try again.",
+            "targets": targets,
+        }
+
+    parts: list[str] = []
+    if test_mode:
+        parts.append(f"{_join(test_mode)} received the shutdown command ({TEST_MODE_NOTE}).")
+    if real:
+        parts.append(
+            f"{_join(real)} received the shutdown command and should power off in a few seconds."
+        )
+    if skipped:
+        parts.append(f"{_join(skipped)} {'was' if len(skipped) == 1 else 'were'} skipped because "
+                     f"{'it is' if len(skipped) == 1 else 'they are'} in use now.")
+    if failed:
+        parts.append("; ".join(f"{pc} didn't get it: {_sentence(reason)}" for pc, reason in failed))
+    if forbidden:
+        parts.append(f"{forbidden} PC{'s' if forbidden != 1 else ''} needed the Admin account.")
+    ok = bool(test_mode or real)
+    return {"ok": ok, "reply": " ".join(parts) or "Nothing was sent.", "targets": targets}
 
 
 def _clock(value: Any) -> str | None:

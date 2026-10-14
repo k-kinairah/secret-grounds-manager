@@ -21,9 +21,20 @@ from sg_agent.actions import ActionError
 from sg_agent.service import ChatService, ToolSource
 
 
+class Operator(BaseModel):
+    """Who is talking, as checked by the dashboard against the backend. Used
+    only to phrase replies (e.g. "that needs the Admin account"); the backend
+    still enforces every permission itself."""
+
+    display_name: str = Field(..., max_length=80)
+    role: str = Field(..., max_length=20)
+    is_admin_account: bool = False
+
+
 class ChatRequest(BaseModel):
     session_id: str = Field(..., min_length=1, max_length=100)
     message: str = Field(..., min_length=1, max_length=2000)
+    operator: Operator | None = None
 
 
 class ChatResponse(BaseModel):
@@ -72,7 +83,11 @@ def create_app(service: ChatService, settings: Settings) -> FastAPI:
 
     @app.post("/chat", response_model=ChatResponse, response_model_exclude_none=True)
     async def chat(request: ChatRequest) -> ChatResponse:
-        result = await service.chat(request.session_id.strip(), request.message.strip())
+        result = await service.chat(
+            request.session_id.strip(),
+            request.message.strip(),
+            operator=request.operator.model_dump() if request.operator else None,
+        )
         return ChatResponse(
             reply=result.reply,
             tools_used=result.tools_used,

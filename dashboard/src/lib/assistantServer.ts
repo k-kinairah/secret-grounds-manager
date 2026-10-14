@@ -16,7 +16,7 @@ const AGENT_TIMEOUT_MS = 90_000;
 const AUTH_TIMEOUT_MS = 10_000;
 
 type ProxyBody = { conversation_id?: unknown; message?: unknown; action_id?: unknown };
-type BackendUser = { user_id: string };
+type BackendUser = { user_id: string; display_name?: string; role?: string; is_protected?: boolean };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -76,7 +76,14 @@ async function currentUser(request: NextRequest): Promise<BackendUser | null> {
       return null;
     }
     const user = (await response.json()) as Partial<BackendUser>;
-    return typeof user.user_id === "string" ? { user_id: user.user_id } : null;
+    return typeof user.user_id === "string"
+      ? {
+          display_name: typeof user.display_name === "string" ? user.display_name : undefined,
+          is_protected: user.is_protected === true,
+          role: typeof user.role === "string" ? user.role : undefined,
+          user_id: user.user_id
+        }
+      : null;
   } catch {
     return null;
   }
@@ -136,9 +143,21 @@ export async function proxyChat(request: NextRequest): Promise<NextResponse> {
 
   let agentResponse: Response;
   try {
+    const { user } = checked;
     agentResponse = await callAgent("/chat", {
       message,
-      session_id: scopedSessionId(checked.user, checked.body.conversation_id as string)
+      // Who is talking, as verified with the backend above -- only used to
+      // phrase replies; the backend still enforces every permission.
+      ...(user.display_name
+        ? {
+            operator: {
+              display_name: user.display_name,
+              is_admin_account: user.is_protected === true,
+              role: user.role ?? "cashier"
+            }
+          }
+        : {}),
+      session_id: scopedSessionId(user, checked.body.conversation_id as string)
     });
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "TimeoutError";
@@ -295,6 +314,67 @@ export function allowedBackendCall(action: AgentAction): BackendCall | null {
   return null;
 }
 
+// Multi-call actions. Shutting down idle PCs is one backend call per PC,
+// always {"force": false}: the backend then refuses any PC that has an
+// active session (409), so nothing in use can be powered off from here.
+const SHUTDOWN_PATH_TEMPLATE = "/pcs/{pc}/power/shutdown";
+
+type BackendPlan = { batch: boolean; calls: (BackendCall & { pc?: string })[] };
+
+export function allowedBackendPlan(action: AgentAction): BackendPlan | null {
+  if (action.kind !== "shutdown_pcs") {
+    const call = allowedBackendCall(action);
+    return call ? { batch: false, calls: [call] } : null;
+  }
+  const request = action.request as AgentAction["request"] & { each_pc?: unknown };
+  if (
+    !isRecord(request) ||
+    request.method !== "POST" ||
+    request.path !== SHUTDOWN_PATH_TEMPLATE ||
+    !isRecord(request.body) ||
+    Object.keys(request.body).length !== 1 ||
+    request.body.force !== false
+  ) {
+    return null;
+  }
+  const names = request.each_pc;
+  if (
+    !Array.isArray(names) ||
+    names.length === 0 ||
+    names.length > MAX_BROADCAST_TARGETS ||
+    !names.every((name) => typeof name === "string" && PC_NAME_PATTERN.test(name))
+  ) {
+    return null;
+  }
+  return {
+    batch: true,
+    calls: [...new Set(names as string[])].map((pc) => ({
+      body: { force: false },
+      path: `/pcs/${encodeURIComponent(pc)}/power/shutdown`,
+      pc
+    }))
+  };
+}
+
+async function sendToBackend(call: BackendCall, session: string): Promise<{ status: number; body: unknown }> {
+  try {
+    const response = await fetch(`${backendBaseUrl()}${call.path}`, {
+      body: JSON.stringify(call.body),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Cookie: `${AUTH_COOKIE_NAME}=${session}` },
+      method: "POST",
+      signal: AbortSignal.timeout(AGENT_TIMEOUT_MS)
+    });
+    try {
+      return { body: await response.json(), status: response.status };
+    } catch {
+      return { body: { detail: `The shop system returned HTTP ${response.status}.` }, status: response.status };
+    }
+  } catch {
+    return { body: { detail: "Could not reach the shop system." }, status: 502 };
+  }
+}
+
 async function agentJson(path: string, payload: Record<string, unknown>): Promise<{ status: number; body: unknown }> {
   const response = await callAgent(path, payload);
   let body: unknown = null;
@@ -342,8 +422,8 @@ export async function proxyConfirm(request: NextRequest): Promise<NextResponse> 
     return errorReply(409, detail, detail);
   }
 
-  const call = allowedBackendCall(taken.body as AgentAction);
-  if (call === null) {
+  const plan = allowedBackendPlan(taken.body as AgentAction);
+  if (plan === null) {
     // Report the refusal so the agent forgets the action and can say why.
     await agentJson("/actions/result", {
       action_id: actionId,
@@ -355,24 +435,21 @@ export async function proxyConfirm(request: NextRequest): Promise<NextResponse> 
   }
 
   const session = request.cookies.get(AUTH_COOKIE_NAME)?.value ?? "";
-  let backendStatus = 502;
-  let backendBody: unknown = { detail: "Could not reach the shop system." };
-  try {
-    const response = await fetch(`${backendBaseUrl()}${call.path}`, {
-      body: JSON.stringify(call.body),
-      cache: "no-store",
-      headers: { "Content-Type": "application/json", Cookie: `${AUTH_COOKIE_NAME}=${session}` },
-      method: "POST",
-      signal: AbortSignal.timeout(AGENT_TIMEOUT_MS)
-    });
-    backendStatus = response.status;
-    try {
-      backendBody = await response.json();
-    } catch {
-      backendBody = { detail: `The shop system returned HTTP ${response.status}.` };
+  let backendStatus: number;
+  let backendBody: unknown;
+  if (plan.batch) {
+    // One call per PC, in order; every PC gets its own real result.
+    const results: { pc: string | undefined; status_code: number; body: unknown }[] = [];
+    for (const call of plan.calls) {
+      const sent = await sendToBackend(call, session);
+      results.push({ body: sent.body, pc: call.pc, status_code: sent.status });
     }
-  } catch {
-    // Keep the "could not reach the shop system" values.
+    backendStatus = 200;
+    backendBody = { results };
+  } else {
+    const sent = await sendToBackend(plan.calls[0], session);
+    backendStatus = sent.status;
+    backendBody = sent.body;
   }
 
   try {

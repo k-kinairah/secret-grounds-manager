@@ -134,7 +134,7 @@ class ChatService:
 
     # --- chat -------------------------------------------------------------
 
-    async def chat(self, session_id: str, message: str) -> ChatResult:
+    async def chat(self, session_id: str, message: str, operator: dict[str, Any] | None = None) -> ChatResult:
         session = self._session(session_id)
         async with session.lock:
             try:
@@ -154,7 +154,7 @@ class ChatService:
             agent = Agent(
                 model=self._model,
                 tools=tools,
-                system_prompt=self._system_prompt(actions_enabled=_has_propose_tools(tools)),
+                system_prompt=self._system_prompt(actions_enabled=_has_propose_tools(tools), operator=operator),
                 messages=history,
                 conversation_manager=NullConversationManager(),
                 callback_handler=None,
@@ -228,10 +228,24 @@ class ChatService:
         session.turns.append((user_text, reply))
         del session.turns[: max(0, len(session.turns) - self.max_turns)]
 
-    def _system_prompt(self, actions_enabled: bool = False) -> str:
+    def _system_prompt(self, actions_enabled: bool = False, operator: dict[str, Any] | None = None) -> str:
         now = self._now().astimezone(SHOP_TZ)
         prompt = f"{SYSTEM_PROMPT}\n{ACTIONS_PROMPT}" if actions_enabled else SYSTEM_PROMPT
-        return f"{prompt}\nRight now it is {now:%A, %B %d, %Y, %I:%M %p} in Asia/Manila ({now:%Y-%m-%d})."
+        prompt += f"\nRight now it is {now:%A, %B %d, %Y, %I:%M %p} in Asia/Manila ({now:%Y-%m-%d})."
+        if operator:
+            name = str(operator.get("display_name") or "the operator")[:80]
+            role = str(operator.get("role") or "staff")[:20]
+            admin = bool(operator.get("is_admin_account"))
+            prompt += (
+                f"\nYou are talking to {name} ({role}"
+                f"{', signed in as the Admin account' if admin else ''})."
+            )
+            if actions_enabled and not admin:
+                prompt += (
+                    " They are not the Admin account, so shutting down PCs will be refused; tell them "
+                    "to sign in as Admin instead of preparing it."
+                )
+        return prompt
 
 
 # --- helpers -------------------------------------------------------------
