@@ -55,3 +55,13 @@ with a guessed PC name.
 - Keep the user's wording for the message; fix only obvious typos. Use severity "urgent" only \
 when they ask for it.
 """
+
+# Added when the agent has its handover-notes store (on by default).
+HANDOVER_PROMPT = """\
+Shift handover notes:
+- Staff can leave notes for the next shift. Use save_handover_note when they ask to leave, add or \
+remember something for the next shift (it is saved under their name automatically; no \
+confirmation needed), list_handover_notes to read them out, and resolve_handover_note when they \
+say an issue in a note is fixed or handled.
+- Never invent notes; only mention notes listed below or returned by the tools.
+"""

@@ -18,6 +18,7 @@ from strands.tools.mcp import MCPClient
 from sg_agent.config import AGENT_HOST, Settings, get_settings, load_env_file
 from sg_agent.models import build_model
 from sg_agent.actions import ActionError
+from sg_agent.handover import HandoverStore
 from sg_agent.service import ChatService, ToolSource
 
 
@@ -51,6 +52,11 @@ class ResetRequest(BaseModel):
 class ActionRequest(BaseModel):
     session_id: str = Field(..., min_length=1, max_length=100)
     action_id: str = Field(..., min_length=1, max_length=64)
+
+
+class ResolveNoteRequest(BaseModel):
+    note_id: str = Field(..., min_length=1, max_length=16)
+    resolved_by: str = Field(..., min_length=1, max_length=80)
 
 
 class ActionResultRequest(ActionRequest):
@@ -119,6 +125,28 @@ def create_app(service: ChatService, settings: Settings) -> FastAPI:
             }
         )
 
+    # --- shift handover notes (step d) ---------------------------------------------
+    # Read by the dashboard's server for the page's Handover panel; resolving
+    # from the panel is attributed to the operator the dashboard verified.
+
+    @app.get("/handover")
+    def handover_notes() -> dict[str, Any]:
+        store = service.handover_store
+        if store is None:
+            return {"enabled": False, "notes": []}
+        return {"enabled": True, "notes": [note.public() for note in store.open_notes()]}
+
+    @app.post("/handover/resolve")
+    def resolve_handover(request: ResolveNoteRequest) -> JSONResponse:
+        store = service.handover_store
+        if store is None:
+            return JSONResponse({"detail": "Handover notes are turned off."}, status_code=404)
+        try:
+            note = store.resolve(request.note_id, request.resolved_by)
+        except LookupError as error:
+            return JSONResponse({"detail": str(error)}, status_code=409)
+        return JSONResponse({"resolved": note.public()})
+
     @app.post("/actions/cancel")
     async def cancel_action(request: ActionRequest) -> dict[str, Any]:
         return {"reply": await service.cancel_action(request.session_id.strip(), request.action_id.strip())}
@@ -143,6 +171,7 @@ def build_service(settings: Settings) -> ChatService:
         tool_source,
         max_turns=settings.max_turns,
         max_sessions=settings.max_sessions,
+        handover_store=HandoverStore(settings.notes_db) if settings.notes_db else None,
     )
 
 

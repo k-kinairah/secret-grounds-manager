@@ -19,6 +19,7 @@ DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 DEFAULT_CORS_ORIGIN = "http://localhost:3000,http://127.0.0.1:3000"
 DEFAULT_MAX_TURNS = 20
 DEFAULT_MAX_SESSIONS = 200
+DEFAULT_NOTES_DB = Path(__file__).resolve().parents[1] / "data" / "handover.sqlite3"
 
 PROVIDERS = ("bedrock", "anthropic", "openai", "ollama")
 
@@ -61,6 +62,8 @@ class Settings:
     cors_origins: tuple[str, ...]
     max_turns: int
     max_sessions: int
+    # Shift handover notes file; None when SG_AGENT_NOTES_DB=off.
+    notes_db: Path | None = None
 
 
 def get_settings() -> Settings:
@@ -87,4 +90,12 @@ def get_settings() -> Settings:
         ),
         max_turns=int(_env("SG_AGENT_MAX_TURNS", str(DEFAULT_MAX_TURNS))),
         max_sessions=int(_env("SG_AGENT_MAX_SESSIONS", str(DEFAULT_MAX_SESSIONS))),
+        notes_db=_notes_db(),
     )
+
+
+def _notes_db() -> Path | None:
+    configured = _env("SG_AGENT_NOTES_DB")
+    if configured.lower() in {"off", "false", "0", "none"}:
+        return None
+    return Path(configured) if configured else DEFAULT_NOTES_DB

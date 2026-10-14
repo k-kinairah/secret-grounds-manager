@@ -11,7 +11,11 @@ import {
   newConversationId,
   resetAssistantConversation,
   sendAssistantMessage,
-  toolChipText
+  toolChipText,
+  type HandoverNote,
+  HANDOVER_TOOLS,
+  fetchHandoverNotes,
+  resolveHandoverNote
 } from "@/lib/assistant";
 import styles from "@/app/assistant/assistant.module.css";
 
@@ -143,6 +147,9 @@ export function AssistantConsole() {
   const [interim, setInterim] = useState("");
   // What the mic heard: live while holding the button, final after release.
   const [heard, setHeard] = useState<{ live: boolean; text: string } | null>(null);
+  // Shift handover notes panel (phase 3 step d).
+  const [handover, setHandover] = useState<{ enabled: boolean; notes: HandoverNote[] }>({ enabled: false, notes: [] });
+  const [handoverError, setHandoverError] = useState<string | null>(null);
   const liveTranscriptRef = useRef("");
   const [speakReplies, setSpeakReplies] = useState(true);
   const [conversationId, setConversationId] = useState(newConversationId);
@@ -177,6 +184,32 @@ export function AssistantConsole() {
 
   function updateMessage(id: number, patch: Partial<ChatMessage>) {
     setMessages((current) => current.map((message) => (message.id === id ? { ...message, ...patch } : message)));
+  }
+
+  function refreshHandover() {
+    void fetchHandoverNotes().then((result) => {
+      setHandover({ enabled: result.enabled, notes: result.notes });
+      setHandoverError(result.error ?? null);
+    });
+  }
+
+  useEffect(() => {
+    let active = true;
+    void fetchHandoverNotes().then((result) => {
+      if (active) {
+        setHandover({ enabled: result.enabled, notes: result.notes });
+        setHandoverError(result.error ?? null);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function markNoteDone(noteId: string) {
+    const error = await resolveHandoverNote(conversationId, noteId);
+    setHandoverError(error);
+    refreshHandover();
   }
 
   useEffect(() => {
@@ -289,6 +322,9 @@ export function AssistantConsole() {
     }
     if (result.error) {
       setNotice(result.error);
+    }
+    if (result.tools_used.some((tool) => HANDOVER_TOOLS.has(tool))) {
+      refreshHandover();
     }
     speak(result.reply);
     if (result.error && !(speakReplies && support.speech)) {
@@ -438,6 +474,10 @@ export function AssistantConsole() {
         </div>
       </header>
 
+      {handover.enabled && (handover.notes.length > 0 || handoverError) ? (
+        <HandoverPanel error={handoverError} notes={handover.notes} onDone={(id) => void markNoteDone(id)} />
+      ) : null}
+
       <div className={styles.panel}>
         <ol aria-live="polite" className={styles.log} ref={logRef}>
           {messages.length === 0 && !interim ? (
@@ -542,6 +582,39 @@ export function AssistantConsole() {
           </form>
         </div>
       </div>
+    </section>
+  );
+}
+
+function HandoverPanel({
+  notes,
+  error,
+  onDone
+}: {
+  notes: HandoverNote[];
+  error: string | null;
+  onDone: (noteId: string) => void;
+}) {
+  return (
+    <section aria-labelledby="handover-title" className={styles.handover}>
+      <div className={styles.handoverHeader}>
+        <h2 id="handover-title">Handover notes</h2>
+        <span>{notes.length} open</span>
+      </div>
+      {error ? <p className={styles.handoverError}>{error}</p> : null}
+      <ul className={styles.handoverList}>
+        {notes.map((note) => (
+          <li key={note.note_id}>
+            <div>
+              <p>{note.text}</p>
+              <span>{`${note.author} · ${note.age}`}</span>
+            </div>
+            <button className={styles.secondaryButton} onClick={() => onDone(note.note_id)} type="button">
+              Done
+            </button>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

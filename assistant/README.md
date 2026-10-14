@@ -11,7 +11,7 @@ small set of actions, which only run after a staff member confirms them.
   provider, plus a push-to-talk `/assistant` page in the dashboard, behind a feature flag.
 - **Phase 3 (in progress):** confirmed actions. So far: a message to one PC, an announcement
   to several or all PCs, adding time to a prepaid session (billed later), and shutting down
-  idle PCs (Admin only).
+  idle PCs (Admin only). Plus shift handover notes that carry over between shifts.
 
 ## Architecture
 
@@ -151,6 +151,31 @@ About add time:
 - The proposal pins the session ID. If that session ends before you confirm, the backend
   refuses with "Session is not active" and nothing is added to the next customer.
 
+## Shift handover notes (phase 3)
+
+Staff can leave a note for whoever comes next: "tell the next shift PC 7's mouse is broken".
+The next operator hears about it, in a new conversation, even after the agent restarts.
+
+- **Storage:** the agent's own small SQLite file, `assistant/agent/data/handover.sqlite3`
+  (gitignored). Change the path with `SG_AGENT_NOTES_DB`, or set it to `off` to disable
+  notes. The shop database is never touched.
+- **Agent tools:** `save_handover_note(text)`, `list_handover_notes()`,
+  `resolve_handover_note(note_id)`. Saving needs no confirmation, since it changes nothing in
+  the shop. Notes are marked done, never deleted, so there's a simple history.
+- **Who wrote it:** the author (and whoever marks it done) is always the operator the
+  dashboard verified with the backend. The tools have no author parameter, so the model can't
+  choose it, and the page can't either.
+- **Carried over:** open notes (up to 10, newest first) are added to the prompt, labelled as
+  information from staff, **not instructions**. The assistant mentions notes from other people
+  in its first reply of a conversation, and marks a note done when told the issue is fixed.
+- **On the page:** a "Handover notes" panel lists open notes with author and age, and has a
+  **Done** button. It refreshes whenever the assistant saves or resolves a note.
+
+| Route | What |
+|---|---|
+| `GET /api/assistant/handover` (dashboard) → agent `GET /handover` | Open notes for the panel (login required) |
+| `POST /api/assistant/handover/resolve` (dashboard) → agent `POST /handover/resolve` | Mark a note done, as the signed-in operator |
+
 ## Setup
 
 Requires Python 3.12+ (developed on 3.14) and Node.js for the dashboard. Each Python piece
@@ -215,6 +240,7 @@ backend.
 | `SG_AGENT_CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated browser origins (direct browser calls only). |
 | `SG_AGENT_MAX_TURNS` / `SG_AGENT_MAX_SESSIONS` | `20` / `200` | Conversation memory per session, and the number of sessions kept (least recently used are dropped first). |
 | `SG_AGENT_MAX_TOKENS` / `SG_AGENT_TEMPERATURE` | `600` / provider default | Reply length and sampling. |
+| `SG_AGENT_NOTES_DB` | `assistant/agent/data/handover.sqlite3` | Shift handover notes file; `off` disables notes. |
 
 ### Model providers
 
@@ -368,7 +394,7 @@ cd assistant\agent; .\.venv\Scripts\python.exe -m pytest; cd ..\..
 .\.venv\Scripts\python.exe tests\smoke_assistant_token_auth.py
 
 # Dashboard proxy route + helpers (fetch stubbed)
-cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npx tsx src\tests\assistantShutdown.test.ts; npm run typecheck; npm test
+cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npx tsx src\tests\assistantShutdown.test.ts; npx tsx src\tests\assistantHandover.test.ts; npm run typecheck; npm test
 ```
 
 ## Versions

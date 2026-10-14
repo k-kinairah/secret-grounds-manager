@@ -22,7 +22,8 @@ from strands.models import Model
 from strands.tools.mcp import MCPClient
 
 from sg_agent.actions import ActionError, PendingAction, describe_outcome, extract_proposals, new_pending_action
-from sg_agent.prompt import ACTIONS_PROMPT, SYSTEM_PROMPT
+from sg_agent.handover import HandoverStore, make_handover_tools
+from sg_agent.prompt import ACTIONS_PROMPT, HANDOVER_PROMPT, SYSTEM_PROMPT
 
 SHOP_TZ = ZoneInfo("Asia/Manila")
 
@@ -101,7 +102,9 @@ class ChatService:
         max_turns: int = 20,
         max_sessions: int = 200,
         now: Callable[[], datetime] = lambda: datetime.now(SHOP_TZ),
+        handover_store: HandoverStore | None = None,
     ) -> None:
+        self.handover_store = handover_store
         self._model_factory = model_factory
         self._model: Model | None = None
         self._tool_source = tool_source
@@ -124,9 +127,6 @@ class ChatService:
 
     def reset(self, session_id: str) -> bool:
         return self._sessions.pop(session_id, None) is not None
-
-    def close(self) -> None:
-        self._tool_source.close()
 
     def history(self, session_id: str) -> list[tuple[str, str]]:
         session = self._sessions.get(session_id)
@@ -151,6 +151,10 @@ class ChatService:
 
             history = _history_messages(session.turns)
             history_length = len(history)  # the Agent appends to this same list
+            author = str(operator.get("display_name")) if operator and operator.get("display_name") else None
+            if self.handover_store is not None:
+                # Bound to the dashboard-verified operator; the model can't choose the author.
+                tools = [*tools, *make_handover_tools(self.handover_store, author)]
             agent = Agent(
                 model=self._model,
                 tools=tools,
@@ -245,7 +249,18 @@ class ChatService:
                     " They are not the Admin account, so shutting down PCs will be refused; tell them "
                     "to sign in as Admin instead of preparing it."
                 )
+        if self.handover_store is not None:
+            prompt += f"\n{HANDOVER_PROMPT}"
+            author = str(operator.get("display_name")) if operator and operator.get("display_name") else None
+            section = self.handover_store.prompt_section(author)
+            if section:
+                prompt += f"\n{section}"
         return prompt
+
+    def close(self) -> None:
+        self._tool_source.close()
+        if self.handover_store is not None:
+            self.handover_store.close()
 
 
 # --- helpers -------------------------------------------------------------

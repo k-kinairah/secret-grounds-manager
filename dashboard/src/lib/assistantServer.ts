@@ -15,7 +15,7 @@ const DEFAULT_AGENT_URL = "http://127.0.0.1:8781";
 const AGENT_TIMEOUT_MS = 90_000;
 const AUTH_TIMEOUT_MS = 10_000;
 
-type ProxyBody = { conversation_id?: unknown; message?: unknown; action_id?: unknown };
+type ProxyBody = { conversation_id?: unknown; message?: unknown; action_id?: unknown; note_id?: unknown };
 type BackendUser = { user_id: string; display_name?: string; role?: string; is_protected?: boolean };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -497,5 +497,65 @@ export async function proxyCancel(request: NextRequest): Promise<NextResponse> {
     return json(200, { reply });
   } catch {
     return json(200, { reply: "Cancelled. Nothing was sent." });
+  }
+}
+
+// --- Phase 3 step (d): shift handover notes ----------------------------------
+//
+// The notes live in the agent's own small database. The page reads them for
+// its Handover panel and can mark one done; "resolved by" is always the
+// operator verified with the backend, never something the browser sends.
+
+const NOTE_ID_PATTERN = /^[a-f0-9]{1,16}$/;
+
+export async function proxyHandoverList(request: NextRequest): Promise<NextResponse> {
+  if (!isAssistantEnabled()) {
+    return json(404, { detail: "Not found" });
+  }
+  if (!isSameOrigin(request)) {
+    return json(403, { detail: "Cross-origin request rejected." });
+  }
+  if ((await currentUser(request)) === null) {
+    return json(401, { detail: "Not signed in to the dashboard." });
+  }
+  try {
+    const response = await fetch(`${agentBaseUrl()}/handover`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(AUTH_TIMEOUT_MS)
+    });
+    const body = (await response.json()) as unknown;
+    if (!response.ok || !isRecord(body)) {
+      return json(502, { enabled: false, error: "The assistant service returned an error.", notes: [] });
+    }
+    return json(200, {
+      enabled: body.enabled === true,
+      notes: Array.isArray(body.notes) ? body.notes : []
+    });
+  } catch {
+    return json(502, { enabled: false, error: `Could not reach the agent service at ${agentBaseUrl()}.`, notes: [] });
+  }
+}
+
+export async function proxyHandoverResolve(request: NextRequest): Promise<NextResponse> {
+  const checked = await guard(request);
+  if (!checked.ok) {
+    return checked.response;
+  }
+  const noteId = typeof checked.body.note_id === "string" ? checked.body.note_id.trim().toLowerCase() : "";
+  if (!NOTE_ID_PATTERN.test(noteId)) {
+    return json(400, { error: "Invalid note_id." });
+  }
+  try {
+    const result = await agentJson("/handover/resolve", {
+      note_id: noteId,
+      resolved_by: checked.user.display_name || "a staff member"
+    });
+    if (result.status === 200) {
+      return json(200, isRecord(result.body) ? result.body : {});
+    }
+    const detail = isRecord(result.body) && typeof result.body.detail === "string" ? result.body.detail : "Could not update the note.";
+    return json(result.status === 404 ? 404 : 409, { error: detail });
+  } catch {
+    return json(502, { error: `Could not reach the agent service at ${agentBaseUrl()}.` });
   }
 }

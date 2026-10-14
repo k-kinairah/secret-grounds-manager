@@ -64,13 +64,56 @@ const TOOL_LABELS: Record<string, string> = {
   propose_message_pc: "a message",
   propose_broadcast: "an announcement",
   propose_add_time: "time to add",
-  propose_shutdown_idle_pcs: "PCs to shut down"
+  propose_shutdown_idle_pcs: "PCs to shut down",
+  save_handover_note: "a handover note",
+  list_handover_notes: "handover notes",
+  resolve_handover_note: "a handover note"
+};
+
+const TOOL_VERBS: Record<string, string> = {
+  resolve_handover_note: "Marked done",
+  save_handover_note: "Saved"
 };
 
 // Chip under a reply: "Checked: today's sales" for lookups, "Prepared: a
 // message" for propose_* tools (nothing was sent by preparing it).
 export function toolChipText(name: string): string {
-  return `${name.startsWith("propose_") ? "Prepared" : "Checked"}: ${toolLabel(name)}`;
+  const verb = TOOL_VERBS[name] ?? (name.startsWith("propose_") ? "Prepared" : "Checked");
+  return `${verb}: ${toolLabel(name)}`;
+}
+
+// --- Shift handover notes (phase 3 step d) -----------------------------------
+
+export type HandoverNote = { note_id: string; text: string; author: string; age: string };
+export const HANDOVER_TOOLS = new Set(["save_handover_note", "resolve_handover_note"]);
+
+export async function fetchHandoverNotes(): Promise<{ enabled: boolean; notes: HandoverNote[]; error?: string }> {
+  try {
+    const response = await fetch("/api/assistant/handover", { cache: "no-store", credentials: "same-origin" });
+    const body = (await response.json()) as { enabled?: unknown; notes?: unknown; error?: unknown };
+    const notes = Array.isArray(body.notes)
+      ? body.notes.filter(
+          (n): n is HandoverNote =>
+            typeof n === "object" && n !== null && typeof (n as HandoverNote).note_id === "string" && typeof (n as HandoverNote).text === "string"
+        )
+      : [];
+    return { enabled: body.enabled === true, error: typeof body.error === "string" ? body.error : undefined, notes };
+  } catch {
+    return { enabled: false, error: "Couldn't load handover notes.", notes: [] };
+  }
+}
+
+export async function resolveHandoverNote(conversationId: string, noteId: string): Promise<string | null> {
+  try {
+    const response = await postJson("/api/assistant/handover/resolve", { conversation_id: conversationId, note_id: noteId });
+    if (response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === "string" ? body.error : "Couldn't update the note.";
+  } catch {
+    return "Couldn't update the note.";
+  }
 }
 
 export const ACTION_ID_PATTERN = /^[a-f0-9]{32}$/;
