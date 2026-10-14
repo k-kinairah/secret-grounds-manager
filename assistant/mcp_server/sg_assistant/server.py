@@ -51,7 +51,9 @@ def build_server(client: BackendClient, tz: ZoneInfo) -> MCPServer:
         make yesterday / last week / in March?". For today only, prefer get_today_overview.
 
         Returns total, gross, refunds, net, payment count, average transaction, and breakdowns by
-        payment method, by type, by operator, and by PC. Money values are peso strings.
+        payment method, by type, by operator, and by PC. Money values are peso strings. If the shop's
+        sales figures were reset after the requested start, the range starts at the reset instead and
+        the result includes `requested_start_date` and a `note` explaining it; tell the user the note.
         """
         return await tools.get_sales_report(client, tz, start_date, end_date)
 

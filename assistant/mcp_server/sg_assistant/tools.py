@@ -11,7 +11,7 @@ strings exactly as the backend formats it (e.g. "150.00", in pesos).
 """
 
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -142,7 +142,7 @@ async def get_sales_report(
         return _error(error)
 
     summary = report.get("summary", {})
-    return {
+    result: dict[str, Any] = {
         "start_date": report.get("start_date"),
         "end_date": report.get("end_date"),
         "summary": {
@@ -175,6 +175,36 @@ async def get_sales_report(
         ],
         "timezone": str(tz),
     }
+
+    # The backend silently moves the start forward to the sales epoch when the
+    # owner has reset the sales figures. Its start_at is then later than local
+    # midnight of the requested start date (possibly within that same day, so
+    # comparing start_date alone is not enough).
+    reset_at = _sales_reset_at(report.get("start_at"), start_date, tz)
+    if reset_at is not None:
+        result["requested_start_date"] = start_date
+        result["note"] = (
+            f"Sales figures were reset on {_spoken_datetime(reset_at)}; "
+            "earlier sales are not included."
+        )
+    return result
+
+
+def _sales_reset_at(start_at: Any, requested_start_date: str, tz: ZoneInfo) -> datetime | None:
+    actual_start = _parse_dt(start_at)
+    if actual_start is None:
+        return None
+    requested_start = datetime.combine(date.fromisoformat(requested_start_date), time.min, tzinfo=tz)
+    if actual_start <= requested_start:
+        return None
+    return actual_start.astimezone(tz)
+
+
+def _spoken_datetime(value: datetime) -> str:
+    """'October 5, 2026 at 2:30 PM' -- reads naturally when spoken."""
+    hour = value.hour % 12 or 12
+    meridiem = "AM" if value.hour < 12 else "PM"
+    return f"{value.strftime('%B')} {value.day}, {value.year} at {hour}:{value.minute:02d} {meridiem}"
 
 
 async def list_active_sessions(client: BackendClient, tz: ZoneInfo) -> dict[str, Any]:

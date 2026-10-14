@@ -159,6 +159,36 @@ def test_sales_report_passes_custom_range():
     assert result["by_pc"] == [{"pc": "PC-01", "total": "200.00", "paid_sessions": 2}]
 
 
+def test_sales_report_without_reset_has_no_note():
+    # start_at is exactly local midnight of the requested start (Manila is UTC+8).
+    report = dict(SALES_REPORT, start_date="2026-10-01", start_at="2026-09-30T16:00:00+00:00")
+    client = make_client({"/sales/report": report})
+    result = run(tools.get_sales_report(client, TZ, "2026-10-01", "2026-10-07"))
+    assert "note" not in result
+    assert "requested_start_date" not in result
+
+
+def test_sales_report_explains_sales_epoch_clamp():
+    # Owner reset sales at 2026-10-05 14:30 Manila (06:30 UTC); backend moved the start there.
+    report = dict(SALES_REPORT, start_date="2026-10-05", start_at="2026-10-05T06:30:00+00:00")
+    client = make_client({"/sales/report": report})
+    result = run(tools.get_sales_report(client, TZ, "2026-10-01", "2026-10-07"))
+    assert result["start_date"] == "2026-10-05"
+    assert result["requested_start_date"] == "2026-10-01"
+    assert result["note"] == (
+        "Sales figures were reset on October 5, 2026 at 2:30 PM; earlier sales are not included."
+    )
+
+
+def test_sales_report_detects_reset_within_the_first_day():
+    # start_date did not move, but the reset was mid-day, so the morning is excluded.
+    report = dict(SALES_REPORT, start_date="2026-10-05", start_at="2026-10-05T01:05:00+00:00")
+    client = make_client({"/sales/report": report})
+    result = run(tools.get_sales_report(client, TZ, "2026-10-05", "2026-10-05"))
+    assert result["requested_start_date"] == "2026-10-05"
+    assert "October 5, 2026 at 9:05 AM" in result["note"]
+
+
 def test_sales_report_rejects_bad_dates_without_calling_backend():
     seen: list[httpx.Request] = []
     client = make_client({"/sales/report": SALES_REPORT}, seen)
