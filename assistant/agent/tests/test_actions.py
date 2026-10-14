@@ -275,3 +275,39 @@ def test_read_only_prompt_without_propose_tools(tool_source):
     service = ChatService(lambda: model, tool_source, now=lambda: FIXED_NOW)
     TestClient(create_app(service, settings())).post("/chat", json={"session_id": "s", "message": "hi"})
     assert "Actions (" not in model.requests[0]["system_prompt"]
+
+
+# --- add time (phase 3 step b) -------------------------------------------------------
+
+ADD_TIME_PROPOSAL = {
+    "kind": "add_time",
+    "summary": "Add 1 hour to PC 1 (the 1 Hour package, ₱20.00 added to their bill)?",
+    "targets": ["PC-01"],
+    "details": {"session_id": "sess-1", "added": "1 hour", "added_seconds": 3600, "price": "20.00",
+                "new_end_time": "9:45 PM", "billed": "later"},
+    "request": {"method": "POST", "path": "/sessions/sess-1/add-time", "body": {"rate_id": "r-1h"}},
+}
+
+
+def test_add_time_outcome_says_new_end_and_bill():
+    action = actions.new_pending_action(ADD_TIME_PROPOSAL)
+    outcome = actions.describe_outcome(
+        action, 200, {"session": {"pc_name": "PC-01", "scheduled_end_at": "2026-10-15T13:45:00+00:00"}}
+    )
+    assert outcome["ok"] is True
+    assert outcome["reply"] == "Done. Added 1 hour to PC-01. It now ends at 9:45 PM. ₱20.00 was added to their bill."
+    assert outcome["targets"] == [{"pc": "PC-01", "status": "done", "detail": "9:45 PM"}]
+
+
+def test_add_time_refused_session_is_reported():
+    action = actions.new_pending_action(ADD_TIME_PROPOSAL)
+    outcome = actions.describe_outcome(action, 409, {"detail": "Session is not active"})
+    assert outcome["ok"] is False
+    assert outcome["reply"] == "That didn't go through: session is not active."
+
+
+def test_actions_prompt_mentions_add_time_and_price():
+    from sg_agent.prompt import ACTIONS_PROMPT
+
+    assert "propose_add_time" in ACTIONS_PROMPT
+    assert "Never offer free time" in ACTIONS_PROMPT

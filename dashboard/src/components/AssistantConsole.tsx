@@ -48,6 +48,12 @@ type ChatMessage = {
 };
 type Pending = { action: PendingAction; messageId: number };
 
+const ACTION_KIND_LABELS: Record<string, string> = {
+  add_time: "Add time",
+  broadcast: "Announcement",
+  message_pc: "Message to PC"
+};
+
 const NO_SPEECH_HINT =
   "I didn't hear anything. If you were speaking, check which microphone Chrome is using: click the mic icon in the address bar, or open chrome://settings/content/microphone.";
 
@@ -550,7 +556,7 @@ function ActionCard({
   return (
     <div className={`${styles.actionCard} ${styles[`action_${state}`]}`} role="group" aria-label="Prepared action">
       <div className={styles.actionHeader}>
-        <span className={styles.actionKind}>{action.kind === "broadcast" ? "Announcement" : "Message to PC"}</span>
+        <span className={styles.actionKind}>{ACTION_KIND_LABELS[action.kind] ?? "Action"}</span>
         <span className={styles.actionState}>{ACTION_STATE_LABELS[state]}</span>
       </div>
       <p className={styles.actionSummary}>{action.summary}</p>
@@ -575,6 +581,13 @@ function ActionCard({
           ))}
         </div>
       )}
+      {action.kind === "add_time" && action.details.price ? (
+        <p className={styles.actionNote}>
+          {`Billed later: ₱${action.details.price} added to this session's bill${
+            action.details.new_end_time ? ` · new end about ${action.details.new_end_time}` : ""
+          }`}
+        </p>
+      ) : null}
       {skipped.length > 0 && results.length === 0 ? (
         <p className={styles.actionNote}>Offline, will be skipped: {skipped.join(", ")}</p>
       ) : null}

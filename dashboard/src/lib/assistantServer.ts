@@ -189,6 +189,9 @@ export async function proxyReset(request: NextRequest): Promise<NextResponse> {
 const PC_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/;
 const SEVERITIES = new Set(["info", "warning", "urgent"]);
 const MAX_BROADCAST_TARGETS = 60;
+const RATE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const AMOUNT_PATTERN = /^\d{1,4}(\.\d{1,2})?$/;
+const MAX_ADD_TIME_AMOUNT = 2000;
 
 export type AgentAction = {
   action_id: string;
@@ -263,6 +266,30 @@ export function allowedBackendCall(action: AgentAction): BackendCall | null {
     }
     const fields = validMessageFields(request.body);
     return fields ? { body: { ...fields, pc_names: [...new Set(names as string[])] }, path: "/commands/broadcast" } : null;
+  }
+
+  if (kind === "add_time") {
+    // Billed later: exactly ONE of a package (rate_id) or a peso amount.
+    // "seconds" is refused -- on this endpoint it adds the time for free.
+    const match = /^\/sessions\/([A-Za-z0-9-]{1,64})\/add-time$/.exec(request.path);
+    const keys = Object.keys(request.body);
+    if (!match || keys.length !== 1) {
+      return null;
+    }
+    const path = `/sessions/${match[1]}/add-time`;
+    if (keys[0] === "rate_id") {
+      const rateId = request.body.rate_id;
+      return typeof rateId === "string" && RATE_ID_PATTERN.test(rateId) ? { body: { rate_id: rateId }, path } : null;
+    }
+    if (keys[0] === "amount") {
+      const amount = request.body.amount;
+      if (typeof amount !== "string" || !AMOUNT_PATTERN.test(amount)) {
+        return null;
+      }
+      const value = Number(amount);
+      return value > 0 && value <= MAX_ADD_TIME_AMOUNT ? { body: { amount }, path } : null;
+    }
+    return null;
   }
 
   return null;

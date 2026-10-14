@@ -102,6 +102,38 @@ async function run() {
     assert.equal(allowedBackendCall(action), null, label);
   }
 
+  // --- add time (billed later) ------------------------------------------------------
+  const addTime: AgentAction = {
+    action_id: ACTION_ID,
+    kind: "add_time",
+    request: { body: { rate_id: "r-1h" }, method: "POST", path: "/sessions/0b5c1e2a-1111-4c3d-9e8f-123456789abc/add-time" }
+  };
+  assert.deepEqual(allowedBackendCall(addTime), {
+    body: { rate_id: "r-1h" },
+    path: "/sessions/0b5c1e2a-1111-4c3d-9e8f-123456789abc/add-time"
+  });
+  assert.deepEqual(allowedBackendCall(withRequest(addTime, { body: { amount: "50.00" } }))?.body, { amount: "50.00" });
+  assert.equal(toolChipText("propose_add_time"), "Prepared: time to add");
+  const refusedAddTime: [string, AgentAction][] = [
+    ["free seconds", withRequest(addTime, { body: { seconds: 3600 } })],
+    ["rate and amount", withRequest(addTime, { body: { amount: "20.00", rate_id: "r-1h" } })],
+    ["rate and seconds", withRequest(addTime, { body: { rate_id: "r-1h", seconds: 60 } })],
+    ["empty body", withRequest(addTime, { body: {} })],
+    ["amount too big", withRequest(addTime, { body: { amount: "2000.01" } })],
+    ["amount zero", withRequest(addTime, { body: { amount: "0.00" } })],
+    ["amount as number", withRequest(addTime, { body: { amount: 50 } })],
+    ["amount not money", withRequest(addTime, { body: { amount: "1e3" } })],
+    ["bad rate id", withRequest(addTime, { body: { rate_id: "../x" } })],
+    ["prepaid endpoint", withRequest(addTime, { path: "/sessions/abc/add-time-prepaid" })],
+    ["member endpoint", withRequest(addTime, { path: "/sessions/abc/add-time-member" })],
+    ["bad session id", withRequest(addTime, { path: "/sessions/a%2Fb/add-time" })],
+    ["GET", withRequest(addTime, { method: "GET" })],
+    ["kind mismatch", { ...addTime, kind: "message_pc" }]
+  ];
+  for (const [label, action] of refusedAddTime) {
+    assert.equal(allowedBackendCall(action), null, label);
+  }
+
   // --- confirm: happy path ------------------------------------------------------------
   let calls = stubFetch((url, init) => {
     if (url.endsWith("/auth/me")) {

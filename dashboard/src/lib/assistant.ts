@@ -7,7 +7,15 @@ export type PendingAction = {
   kind: string;
   summary: string;
   targets: string[];
-  details: { message?: string; severity?: string; skipped_offline?: string[] };
+  details: {
+    message?: string;
+    severity?: string;
+    skipped_offline?: string[];
+    // add_time
+    added?: string;
+    price?: string;
+    new_end_time?: string;
+  };
   expires_in_seconds: number;
 };
 
@@ -46,7 +54,8 @@ const TOOL_LABELS: Record<string, string> = {
   find_member: "members",
   get_current_shift: "current shift",
   propose_message_pc: "a message",
-  propose_broadcast: "an announcement"
+  propose_broadcast: "an announcement",
+  propose_add_time: "time to add"
 };
 
 // Chip under a reply: "Checked: today's sales" for lookups, "Prepared: a

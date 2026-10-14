@@ -16,8 +16,11 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
+SHOP_TZ = ZoneInfo("Asia/Manila")
 ACTION_TTL_SECONDS = 120
 PROPOSE_TOOL_PREFIX = "propose_"
 _FAILED_STATUSES = ("failed", "timed_out", "rejected")
@@ -165,11 +168,39 @@ def describe_outcome(action: PendingAction, status_code: int, body: Any) -> dict
             reply += f" It didn't reach {_join(missed)}."
         return {"ok": True, "reply": reply, "targets": targets}
 
+    if action.kind == "add_time":
+        session = body.get("session", {}) if isinstance(body, dict) else {}
+        pc = action.targets[0] if action.targets else "the PC"
+        added = action.details.get("added") or "the time"
+        price = action.details.get("price")
+        reply = f"Done. Added {added} to {pc}."
+        ends = _clock(session.get("scheduled_end_at"))
+        if ends:
+            reply += f" It now ends at {ends}."
+        if price:
+            reply += f" ₱{price} was added to their bill."
+        return {"ok": True, "reply": reply, "targets": [{"pc": pc, "status": "done", "detail": ends}]}
+
     return {
         "ok": True,
         "reply": "Done.",
         "targets": [{"pc": pc, "status": "done", "detail": None} for pc in action.targets],
     }
+
+
+def _clock(value: Any) -> str | None:
+    """'2026-10-15T13:45:00+00:00' -> '9:45 PM' in shop time."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local = parsed.astimezone(SHOP_TZ)
+    hour = local.hour % 12 or 12
+    return f"{hour}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
 
 
 def _sentence(text: str) -> str:

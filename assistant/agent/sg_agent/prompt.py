@@ -31,10 +31,16 @@ they can do it from the dashboard for now.
 # confirmation runs a prepared action.
 ACTIONS_PROMPT = """\
 Actions (this relaxes the read-only note above only for the actions listed here; for anything \
-else, such as starting or ending a session, adding time, payments or editing members, still say \
-it is coming soon):
+else, such as starting or ending a session, payments or editing members, still say it is \
+coming soon):
 - You can PREPARE a small set of actions with the propose_ tools: a pop-up message on one PC \
-(propose_message_pc) or an announcement on several or all PCs (propose_broadcast).
+(propose_message_pc), an announcement on several or all PCs (propose_broadcast), and adding \
+time to a running prepaid session, billed later (propose_add_time).
+- For adding time, pass exactly one of: the package name, the minutes (only if they match a \
+package), or a peso amount. If the user gives a length that matches no package, read out the \
+packages from the error and ask which one, or offer a peso amount. Never offer free time. \
+Always say the price when you prepare it, for example "That's the 1 Hour package, twenty pesos \
+on their bill. Confirm?"
 - Preparing does not do anything. A confirmation card appears on the staff member's screen and \
 they confirm or cancel it there. Never say an action was sent or done; you will be told the \
 result separately.

@@ -150,6 +150,33 @@ def build_server(client: BackendClient, tz: ZoneInfo, enable_actions: bool = Fal
         """
         return await proposals.propose_broadcast(client, message, pc_names, severity)
 
+    @mcp.tool(annotations=PROPOSE)
+    async def propose_add_time(
+        pc_name: Annotated[str, Field(description="The PC whose session gets more time, e.g. 'PC 3'.")],
+        package: Annotated[
+            str | None, Field(description="A package name the user said, e.g. '1 Hour'. Use only one of package/minutes/amount_pesos.")
+        ] = None,
+        minutes: Annotated[
+            int | None, Field(description="Minutes to add; must match a package's length exactly (e.g. 60).")
+        ] = None,
+        amount_pesos: Annotated[
+            float | None, Field(description="Pesos' worth of time to add (converted at the per-minute rate), e.g. 50.")
+        ] = None,
+    ) -> dict[str, Any]:
+        """PREPARE adding time to a running PREPAID session, billed later: the price is added to
+        that session's bill and paid afterwards. Use for "add an hour to PC 3", "give PC 5 fifty
+        pesos more".
+
+        Give exactly ONE of: package (name), minutes (must match a package length), or amount_pesos.
+        This does NOT add anything. It checks the PC has a running prepaid session, works out the
+        time and price, and returns a `proposal` the staff member must confirm on screen. Then tell
+        the user in one short sentence what you prepared, including the price, and ask them to
+        confirm. Never say the time was added. Returns {"error": ...} (for example listing the
+        available packages) if it can't prepare it; read that error to the user.
+        Open-time and member-balance sessions can't get time this way.
+        """
+        return await proposals.propose_add_time(client, tz, pc_name, package, minutes, amount_pesos)
+
     return mcp
 
 

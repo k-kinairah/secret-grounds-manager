@@ -10,13 +10,20 @@ hard-coded allow-list before sending it.
 """
 
 import re
+from datetime import datetime, timedelta, timezone
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sg_assistant.backend import BackendClient, BackendError
 
 MESSAGE_MAX_LENGTH = 500
 MESSAGE_SEVERITIES = ("info", "warning", "urgent")
 MESSAGE_DEFAULT_SECONDS = 20
+
+# Add time (billed later). Matches the dashboard allow-list's own cap.
+ADD_TIME_MAX_AMOUNT = Decimal("2000.00")
+ADD_TIME_SESSION_STATUSES = ("active", "ending", "grace_period")
 
 
 def _error(message: str) -> dict[str, str]:
@@ -149,4 +156,181 @@ async def propose_broadcast(
             },
         },
         "status": "Waiting for the operator to confirm on screen. Nothing has been sent yet.",
+    }
+
+
+# --- add time (billed later) -------------------------------------------------
+#
+# POST /sessions/{id}/add-time adds time to a running PREPAID session and adds
+# its price to the session's bill (paid later, e.g. at the end). It is only
+# ever proposed with a package (rate_id) or a peso amount: the backend's third
+# option, bare seconds, adds the time for FREE, so it is never proposed (and
+# the dashboard allow-list refuses it too).
+
+
+def _money(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return Decimal("0.00")
+
+
+def _peso(value: Decimal) -> str:
+    return f"₱{value:,.2f}"
+
+
+def _duration_words(seconds: int) -> str:
+    minutes = max(0, seconds) // 60
+    hours, mins = divmod(minutes, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if mins or not hours:
+        parts.append(f"{mins} minute{'s' if mins != 1 else ''}")
+    return " ".join(parts)
+
+
+def _norm_name(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _scope_ok(rate: dict[str, Any], is_vip: bool) -> bool:
+    return rate.get("station_scope", "standard") in ("vip" if is_vip else "standard", "any")
+
+
+def _packages_for(rates: list[dict[str, Any]], is_vip: bool) -> list[dict[str, Any]]:
+    return [
+        r for r in rates
+        if r.get("rate_type") == "package" and r.get("is_active") and _scope_ok(r, is_vip)
+    ]
+
+
+def _package_list(packages: list[dict[str, Any]]) -> str:
+    return ", ".join(f"{p['name']} ({_peso(_money(p['price']))})" for p in packages) or "none"
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _clock(value: datetime, tz: ZoneInfo) -> str:
+    local = value.astimezone(tz)
+    hour = local.hour % 12 or 12
+    return f"{hour}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
+
+
+async def propose_add_time(
+    client: BackendClient,
+    tz: ZoneInfo,
+    pc_name: str,
+    package: str | None = None,
+    minutes: int | None = None,
+    amount_pesos: float | str | None = None,
+) -> dict[str, Any]:
+    chosen = [package not in (None, ""), minutes is not None, amount_pesos not in (None, "")]
+    if sum(chosen) != 1:
+        return _error(
+            "Say how much time to add in exactly one way: a package name, a number of minutes "
+            "that matches a package, or a peso amount."
+        )
+
+    try:
+        pcs = await client.get("/pcs")
+        sessions = await client.get("/sessions/active")
+    except BackendError as error:
+        return _error(str(error))
+
+    pc = _match_pc(pcs, pc_name)
+    if pc is None:
+        known = ", ".join(sorted(_label(p) for p in pcs)) or "none"
+        return _error(f"There is no PC called {pc_name!r}. Known PCs: {known}.")
+    label = _label(pc)
+    session = next(
+        (s for s in sessions if s.get("pc_name") == pc["pc_name"] and s.get("status") in ADD_TIME_SESSION_STATUSES),
+        None,
+    )
+    if session is None:
+        return _error(f"{label} has no running session to add time to.")
+    mode = session.get("session_mode")
+    if mode == "open_time":
+        return _error(f"{label} is on open time, which is billed by the minute, so there's no time to add.")
+    if mode == "member_balance":
+        return _error(f"{label} is a member session; add time from the member's balance in the dashboard instead.")
+    if not _reachable(pc):
+        return _error(f"{label} is offline, so time can't be added right now.")
+
+    is_vip = bool(pc.get("is_vip"))
+    try:
+        if amount_pesos not in (None, ""):
+            amount = _money(amount_pesos)
+            if amount <= 0 or amount > ADD_TIME_MAX_AMOUNT:
+                return _error(f"The amount must be between ₱0.01 and {_peso(ADD_TIME_MAX_AMOUNT)}.")
+            rate = await client.get("/rates/metered", params={"pc_name": pc["pc_name"]})
+            price, duration = _money(rate.get("price")), int(rate.get("duration_seconds") or 0)
+            if price <= 0 or duration <= 0:
+                return _error("The per-minute (metered) rate isn't set up, so a peso amount can't be converted to time.")
+            seconds = int(((amount * duration) / price).to_integral_value(rounding=ROUND_FLOOR))
+            if seconds < 60:
+                return _error(f"{_peso(amount)} buys less than a minute.")
+            body: dict[str, Any] = {"amount": f"{amount:.2f}"}
+            choice = f"{_peso(amount)} of time"
+        else:
+            rates = await client.get("/rates")
+            packages = _packages_for(rates, is_vip)
+            if package not in (None, ""):
+                wanted = _norm_name(str(package))
+                matches = [p for p in packages if _norm_name(p["name"]) == wanted] or [
+                    p for p in packages if wanted and wanted in _norm_name(p["name"])
+                ]
+            else:
+                if not isinstance(minutes, int) or minutes <= 0:
+                    return _error("Minutes must be a positive whole number.")
+                matches = [p for p in packages if int(p.get("duration_seconds") or 0) == minutes * 60]
+            if len(matches) != 1:
+                what = f"package called {package!r}" if package not in (None, "") else f"{minutes}-minute package"
+                problem = "There's more than one" if matches else "There's no"
+                return _error(
+                    f"{problem} {what} for {label}. Packages: {_package_list(packages)}. "
+                    "Or say a peso amount."
+                )
+            chosen_rate = matches[0]
+            seconds = int(chosen_rate["duration_seconds"])
+            amount = _money(chosen_rate["price"])
+            body = {"rate_id": chosen_rate["rate_id"]}
+            choice = f"the {chosen_rate['name']} package"
+    except BackendError as error:
+        return _error(str(error))
+
+    end = _parse_dt(session.get("scheduled_end_at"))
+    if session.get("status") == "grace_period" or end is None or end < datetime.now(timezone.utc):
+        new_end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    else:
+        new_end = end + timedelta(seconds=seconds)
+    words = _duration_words(seconds)
+    return {
+        "proposal": {
+            "kind": "add_time",
+            "summary": f"Add {words} to {label} ({choice}, {_peso(amount)} added to their bill)?",
+            "targets": [pc["pc_name"]],
+            "details": {
+                "session_id": session["session_id"],
+                "added": words,
+                "added_seconds": seconds,
+                "price": f"{amount:.2f}",
+                "new_end_time": _clock(new_end, tz),
+                "billed": "later",
+            },
+            "request": {
+                "method": "POST",
+                "path": f"/sessions/{session['session_id']}/add-time",
+                "body": body,
+            },
+        },
+        "status": "Waiting for the operator to confirm on screen. Nothing has been added yet.",
     }

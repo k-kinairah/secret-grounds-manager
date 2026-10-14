@@ -9,8 +9,8 @@ small set of actions, which only run after a staff member confirms them.
   endpoints, plus an opt-in, GET-only bearer token on the backend.
 - **Phase 2:** `assistant/agent`, a Strands agent service with a configurable model
   provider, plus a push-to-talk `/assistant` page in the dashboard, behind a feature flag.
-- **Phase 3 (in progress):** confirmed actions. So far: a message to one PC, and an
-  announcement to several or all PCs.
+- **Phase 3 (in progress):** confirmed actions. So far: a message to one PC, an announcement
+  to several or all PCs, and adding time to a prepaid session (billed later).
 
 ## Architecture
 
@@ -114,6 +114,20 @@ tools don't exist and the agent keeps its read-only prompt.
 |---|---|---|---|
 | Message one PC | `propose_message_pc(pc_name, message, severity?)` | `POST /pcs/{pc}/message` | cashier+ |
 | Announcement to several or all online PCs | `propose_broadcast(message, pc_names?, severity?)` | `POST /commands/broadcast` with an explicit `pc_names` list | cashier+ |
+| Add time to a running **prepaid** session, billed later | `propose_add_time(pc_name, package \| minutes \| amount_pesos)` | `POST /sessions/{session_id}/add-time` with exactly one of `rate_id` or `amount` (≤ ₱2,000) | cashier+ |
+
+About add time:
+- The price is added to that session's bill and paid later. The card shows the package or
+  amount, the price, and the new end time.
+- **Minutes** must match a package valid for that PC's station (standard or VIP). If none
+  matches, the assistant lists the packages.
+- **Pesos** are converted at that PC's metered rate (VIP multiplier included), exactly as the
+  backend does it.
+- The backend's third option, bare `seconds`, adds time **for free**, so it is never proposed
+  and the dashboard allow-list refuses it.
+- Open-time and member-balance sessions are refused with a plain explanation.
+- The proposal pins the session ID. If that session ends before you confirm, the backend
+  refuses with "Session is not active" and nothing is added to the next customer.
 
 ## Setup
 
