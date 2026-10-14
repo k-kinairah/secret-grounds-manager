@@ -2,11 +2,16 @@
 
 import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
+  type ActionOutcome,
+  type PendingAction,
   MAX_MESSAGE_LENGTH,
+  cancelAssistantAction,
+  confirmAssistantAction,
+  matchSpokenDecision,
   newConversationId,
   resetAssistantConversation,
   sendAssistantMessage,
-  toolLabel
+  toolChipText
 } from "@/lib/assistant";
 import styles from "@/app/assistant/assistant.module.css";
 
@@ -29,7 +34,29 @@ type Recognition = {
 type RecognitionConstructor = new () => Recognition;
 
 type Status = "idle" | "listening" | "thinking" | "speaking" | "error";
-type ChatMessage = { id: number; role: "user" | "assistant"; text: string; tools?: string[]; error?: string };
+type ActionState = "pending" | "running" | "done" | "failed" | "cancelled" | "expired";
+type ChatMessage = {
+  id: number;
+  role: "user" | "assistant";
+  text: string;
+  tools?: string[];
+  error?: string;
+  // Phase 3: a prepared action shown as a confirm card under this reply.
+  action?: PendingAction;
+  actionState?: ActionState;
+  outcome?: ActionOutcome;
+};
+type Pending = { action: PendingAction; messageId: number };
+
+const DECISION_HINT = "Say “confirm” or “cancel”, or use the buttons.";
+const ACTION_STATE_LABELS: Record<ActionState, string> = {
+  cancelled: "Cancelled",
+  done: "Done",
+  expired: "Expired, ask again",
+  failed: "Didn't go through",
+  pending: "Waiting for you",
+  running: "Sending…"
+};
 type VoiceSupport = { mic: "ok" | "unsupported" | "insecure"; speech: boolean };
 
 const RECOGNITION_LANG = "en-PH";
@@ -99,7 +126,34 @@ export function AssistantConsole() {
   const transcriptRef = useRef("");
   const nextIdRef = useRef(1);
   const logRef = useRef<HTMLOListElement | null>(null);
+  // The pending action lives in state (for rendering) and in a ref (so the
+  // speech-recognition callback always sees the current one).
+  const [pending, setPendingState] = useState<Pending | null>(null);
+  const pendingRef = useRef<Pending | null>(null);
+  const expiryTimerRef = useRef<number | null>(null);
   const busy = status === "thinking";
+
+  function setPending(next: Pending | null) {
+    pendingRef.current = next;
+    setPendingState(next);
+    if (expiryTimerRef.current !== null) {
+      window.clearTimeout(expiryTimerRef.current);
+      expiryTimerRef.current = null;
+    }
+    if (next) {
+      expiryTimerRef.current = window.setTimeout(() => {
+        if (pendingRef.current?.action.id === next.action.id) {
+          pendingRef.current = null;
+          setPendingState(null);
+          updateMessage(next.messageId, { actionState: "expired" });
+        }
+      }, Math.max(1, next.action.expires_in_seconds) * 1000);
+    }
+  }
+
+  function updateMessage(id: number, patch: Partial<ChatMessage>) {
+    setMessages((current) => current.map((message) => (message.id === id ? { ...message, ...patch } : message)));
+  }
 
   useEffect(() => {
     logRef.current?.scrollTo({ behavior: "smooth", top: logRef.current.scrollHeight });
@@ -108,6 +162,9 @@ export function AssistantConsole() {
   useEffect(() => {
     return () => {
       recognitionRef.current?.abort();
+      if (expiryTimerRef.current !== null) {
+        window.clearTimeout(expiryTimerRef.current);
+      }
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
       }
@@ -132,30 +189,88 @@ export function AssistantConsole() {
     [speakReplies, support.speech]
   );
 
-  const ask = useCallback(
-    async (rawText: string) => {
-      const text = rawText.trim().slice(0, MAX_MESSAGE_LENGTH);
-      if (!text || busy) {
+  function addAssistantMessage(message: Omit<ChatMessage, "id" | "role">): number {
+    const id = nextIdRef.current++;
+    setMessages((current) => [...current, { ...message, id, role: "assistant" }]);
+    return id;
+  }
+
+  async function resolvePending(decision: "confirm" | "cancel", spokenOrTyped?: string) {
+    const current = pendingRef.current;
+    if (!current) {
+      return;
+    }
+    setPending(null);
+    setNotice(null);
+    if (spokenOrTyped) {
+      setMessages((list) => [...list, { id: nextIdRef.current++, role: "user", text: spokenOrTyped }]);
+    }
+    updateMessage(current.messageId, { actionState: decision === "confirm" ? "running" : "cancelled" });
+    setStatus("thinking");
+    const result =
+      decision === "confirm"
+        ? await confirmAssistantAction(conversationId, current.action.id)
+        : await cancelAssistantAction(conversationId, current.action.id);
+    if (decision === "confirm") {
+      updateMessage(current.messageId, {
+        actionState: result.outcome?.ok ? "done" : "failed",
+        outcome: result.outcome
+      });
+    }
+    addAssistantMessage({ error: result.error, text: result.reply });
+    if (result.error) {
+      setNotice(result.error);
+    }
+    speak(result.reply);
+  }
+
+  async function ask(rawText: string, source: "voice" | "text" = "text") {
+    const text = rawText.trim().slice(0, MAX_MESSAGE_LENGTH);
+    if (!text || busy) {
+      return;
+    }
+    // While an action is waiting, "confirm"/"cancel" are decided HERE, by an
+    // exact phrase match -- never by the model. Anything else spoken is not
+    // sent anywhere; typed text is treated as a new question.
+    if (pendingRef.current) {
+      const decision = matchSpokenDecision(text);
+      if (decision) {
+        await resolvePending(decision, text);
         return;
       }
-      setNotice(null);
-      setMessages((current) => [...current, { id: nextIdRef.current++, role: "user", text }]);
-      setStatus("thinking");
-      const result = await sendAssistantMessage(conversationId, text);
-      setMessages((current) => [
-        ...current,
-        { error: result.error, id: nextIdRef.current++, role: "assistant", text: result.reply, tools: result.tools_used }
-      ]);
-      if (result.error) {
-        setNotice(result.error);
+      if (source === "voice") {
+        setNotice(DECISION_HINT);
+        setStatus("idle");
+        return;
       }
-      speak(result.reply);
-      if (result.error && !(speakReplies && support.speech)) {
-        setStatus("error");
+    }
+    setNotice(null);
+    setMessages((current) => [...current, { id: nextIdRef.current++, role: "user", text }]);
+    setStatus("thinking");
+    const result = await sendAssistantMessage(conversationId, text);
+    const messageId = addAssistantMessage({
+      action: result.pending_action,
+      actionState: result.pending_action ? "pending" : undefined,
+      error: result.error,
+      text: result.reply,
+      tools: result.tools_used
+    });
+    if (result.pending_action) {
+      // A newer proposal replaces any older card that was still waiting.
+      const previous = pendingRef.current;
+      if (previous) {
+        updateMessage(previous.messageId, { actionState: "expired" });
       }
-    },
-    [busy, conversationId, speak, speakReplies, support.speech]
-  );
+      setPending({ action: result.pending_action, messageId });
+    }
+    if (result.error) {
+      setNotice(result.error);
+    }
+    speak(result.reply);
+    if (result.error && !(speakReplies && support.speech)) {
+      setStatus("error");
+    }
+  }
 
   function startListening() {
     if (support.mic !== "ok" || busy || recognitionRef.current) {
@@ -199,7 +314,7 @@ export function AssistantConsole() {
       const spoken = transcriptRef.current.trim();
       setInterim("");
       if (spoken) {
-        void ask(spoken);
+        void ask(spoken, "voice");
       } else {
         setStatus((current) => (current === "listening" ? "idle" : current));
       }
@@ -244,6 +359,7 @@ export function AssistantConsole() {
       window.speechSynthesis.cancel();
     }
     void resetAssistantConversation(conversationId);
+    setPending(null);
     setConversationId(newConversationId());
     setMessages([]);
     setNotice(null);
@@ -258,7 +374,9 @@ export function AssistantConsole() {
 
   const micHint =
     support.mic === "ok"
-      ? "Hold to talk, release to send"
+      ? pending
+        ? "Hold and say “confirm” or “cancel”"
+        : "Hold to talk, release to send"
       : support.mic === "insecure"
         ? "The mic needs https:// or localhost. Type below instead."
         : "Voice input isn't supported in this browser (try Chrome or Edge). Type below instead.";
@@ -267,7 +385,7 @@ export function AssistantConsole() {
     <section className={styles.console} aria-labelledby="assistant-title">
       <header className={styles.header}>
         <div>
-          <p className={styles.eyebrow}>Read-only · Beta</p>
+          <p className={styles.eyebrow}>Beta · Actions need your confirmation</p>
           <h1 id="assistant-title">Shift Assistant</h1>
           <p>Ask about today&apos;s sales, active sessions, free PCs, members or the current shift.</p>
         </div>
@@ -303,10 +421,20 @@ export function AssistantConsole() {
                   <div className={styles.chips}>
                     {message.tools.map((tool) => (
                       <span className={styles.chip} key={tool}>
-                        Checked: {toolLabel(tool)}
+                        {toolChipText(tool)}
                       </span>
                     ))}
                   </div>
+                ) : null}
+                {message.action ? (
+                  <ActionCard
+                    action={message.action}
+                    disabled={busy || pending?.messageId !== message.id}
+                    onCancel={() => void resolvePending("cancel")}
+                    onConfirm={() => void resolvePending("confirm")}
+                    outcome={message.outcome}
+                    state={message.actionState ?? "pending"}
+                  />
                 ) : null}
                 {message.error ? <span className={styles.errorDetail}>{message.error}</span> : null}
               </div>
@@ -366,7 +494,7 @@ export function AssistantConsole() {
               disabled={busy}
               maxLength={MAX_MESSAGE_LENGTH}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="Or type a question…"
+              placeholder={pending ? "Type “confirm” or “cancel”, or ask something else…" : "Or type a question…"}
               value={draft}
             />
             <button disabled={busy || !draft.trim()} type="submit">
@@ -376,6 +504,68 @@ export function AssistantConsole() {
         </div>
       </div>
     </section>
+  );
+}
+
+function ActionCard({
+  action,
+  state,
+  outcome,
+  disabled,
+  onConfirm,
+  onCancel
+}: {
+  action: PendingAction;
+  state: ActionState;
+  outcome?: ActionOutcome;
+  disabled: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const results = outcome?.targets ?? [];
+  const skipped = action.details.skipped_offline ?? [];
+  return (
+    <div className={`${styles.actionCard} ${styles[`action_${state}`]}`} role="group" aria-label="Prepared action">
+      <div className={styles.actionHeader}>
+        <span className={styles.actionKind}>{action.kind === "broadcast" ? "Announcement" : "Message to PC"}</span>
+        <span className={styles.actionState}>{ACTION_STATE_LABELS[state]}</span>
+      </div>
+      <p className={styles.actionSummary}>{action.summary}</p>
+      {results.length > 0 ? (
+        <div className={styles.chips}>
+          {results.map((result) => (
+            <span
+              className={`${styles.targetChip} ${styles[`target_${result.status}`]}`}
+              key={result.pc}
+              title={result.detail ?? undefined}
+            >
+              {result.status === "done" ? "✓" : result.status === "offline" ? "○" : "✕"} {result.pc}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className={styles.chips}>
+          {action.targets.map((target) => (
+            <span className={styles.targetChip} key={target}>
+              {target}
+            </span>
+          ))}
+        </div>
+      )}
+      {skipped.length > 0 && results.length === 0 ? (
+        <p className={styles.actionNote}>Offline, will be skipped: {skipped.join(", ")}</p>
+      ) : null}
+      {state === "pending" ? (
+        <div className={styles.actionButtons}>
+          <button className={styles.confirmButton} disabled={disabled} onClick={onConfirm} type="button">
+            Confirm
+          </button>
+          <button className={styles.cancelButton} disabled={disabled} onClick={onCancel} type="button">
+            Cancel
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

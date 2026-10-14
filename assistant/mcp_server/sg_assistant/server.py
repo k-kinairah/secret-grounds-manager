@@ -11,7 +11,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from sg_assistant import tools
+from sg_assistant import proposals, tools
 from sg_assistant.backend import BackendClient
 from sg_assistant.config import MCP_HOST, get_settings, load_env_file
 
@@ -21,12 +21,15 @@ INSTRUCTIONS = (
     "Read-only assistant for Secret Grounds, a PC gaming cafe. Use these tools to answer staff "
     "questions about today's sales, sales over a date range, active PC sessions, which PCs are "
     "free or in use, member balances, and the current on-duty operator. Money is in Philippine "
-    "pesos. Times are shop-local. These tools cannot change anything: you cannot start or end "
-    "sessions, add time, or take payments."
+    "pesos. Times are shop-local. These tools cannot change anything by themselves. The propose_* "
+    "tools only PREPARE an action (such as a message to a PC); a staff member must confirm it on "
+    "screen before anything happens. You cannot start or end sessions or take payments."
 )
 
+PROPOSE = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
-def build_server(client: BackendClient, tz: ZoneInfo) -> MCPServer:
+
+def build_server(client: BackendClient, tz: ZoneInfo, enable_actions: bool = False) -> MCPServer:
     mcp = MCPServer(name="secret-grounds", instructions=INSTRUCTIONS)
 
     @mcp.tool(annotations=READ_ONLY)
@@ -104,6 +107,49 @@ def build_server(client: BackendClient, tz: ZoneInfo) -> MCPServer:
         """
         return await tools.get_current_shift(client, tz)
 
+    if not enable_actions:
+        return mcp
+
+    # Phase 3, opt-in (SG_ASSISTANT_ACTIONS=true): proposals only, never execution.
+    @mcp.tool(annotations=PROPOSE)
+    async def propose_message_pc(
+        pc_name: Annotated[str, Field(description="The PC to message, as the user said it, e.g. 'PC 3' or 'PC-03'.")],
+        message: Annotated[str, Field(description="The text to show on that PC's screen (max 500 characters).")],
+        severity: Annotated[
+            str, Field(description="'info' (default), 'warning' or 'urgent'. Only use urgent if the user asks.")
+        ] = "info",
+    ) -> dict[str, Any]:
+        """PREPARE a pop-up message on ONE customer PC's screen. Use for "tell PC 3 their friend is
+        here", "message PC 5 to keep it down".
+
+        This does NOT send anything. It checks the PC exists and is online, then returns a
+        `proposal` that the staff member must confirm on screen. Afterwards, tell the user in one
+        short sentence what you prepared and ask them to confirm; never say it was sent.
+        Returns {"error": ...} if the PC is unknown or offline.
+        """
+        return await proposals.propose_message_pc(client, pc_name, message, severity)
+
+    @mcp.tool(annotations=PROPOSE)
+    async def propose_broadcast(
+        message: Annotated[str, Field(description="The text to show on the PCs' screens (max 500 characters).")],
+        pc_names: Annotated[
+            list[str] | None,
+            Field(description="Only these PCs (as the user said them). Leave empty for every online PC."),
+        ] = None,
+        severity: Annotated[
+            str, Field(description="'info' (default), 'warning' or 'urgent'. Only use urgent if the user asks.")
+        ] = "info",
+    ) -> dict[str, Any]:
+        """PREPARE an announcement on several or all customer PCs. Use for "tell everyone we close
+        in 15 minutes", "announce the promo to all PCs".
+
+        This does NOT send anything. It works out which PCs are online (offline ones are listed as
+        skipped) and returns a `proposal` that the staff member must confirm on screen. Afterwards,
+        tell the user in one short sentence what you prepared and ask them to confirm; never say it
+        was sent. Returns {"error": ...} if no target PC is online.
+        """
+        return await proposals.propose_broadcast(client, message, pc_names, severity)
+
     return mcp
 
 
@@ -113,7 +159,7 @@ def main() -> None:
     if not settings.token:
         print("WARNING: SG_ASSISTANT_TOKEN is not set; every tool will return a configuration error.")
     client = BackendClient(settings.backend_url, settings.token, settings.timeout_seconds)
-    server = build_server(client, ZoneInfo(settings.shop_timezone))
+    server = build_server(client, ZoneInfo(settings.shop_timezone), enable_actions=settings.enable_actions)
     print(
         f"Secret Grounds MCP server on http://{MCP_HOST}:{settings.mcp_port}/mcp "
         f"(backend {settings.backend_url}, timezone {settings.shop_timezone})"

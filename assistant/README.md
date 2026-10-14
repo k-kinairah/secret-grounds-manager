@@ -1,13 +1,16 @@
 # Secret Grounds AI Assistant
 
-A **read-only** voice and text shift assistant for Secret Grounds staff (Alexa+ track,
-Amazon Developer Hackathon). It answers questions about today's sales, sales over a date
-range, active sessions, which PCs are free, member balances, and who is on shift.
+A voice and text shift assistant for Secret Grounds staff (Alexa+ track, Amazon Developer
+Hackathon). It answers questions about today's sales, sales over a date range, active
+sessions, which PCs are free, member balances, and who is on shift. It can also prepare a
+small set of actions, which only run after a staff member confirms them.
 
 - **Phase 1:** `assistant/mcp_server`, an MCP server whose tools wrap existing backend `GET`
   endpoints, plus an opt-in, GET-only bearer token on the backend.
 - **Phase 2:** `assistant/agent`, a Strands agent service with a configurable model
   provider, plus a push-to-talk `/assistant` page in the dashboard, behind a feature flag.
+- **Phase 3 (in progress):** confirmed actions. So far: a message to one PC, and an
+  announcement to several or all PCs.
 
 ## Architecture
 
@@ -70,7 +73,47 @@ Backend problems (backend down, bad token, missing permission) come back as `{"e
 with a readable message instead of failing the call.
 
 `/pcs` only lists PCs whose client is connected to *that* backend process. A dev backend on
-copied data therefore always shows 0 PCs.
+copied data therefore shows 0 PCs unless a test client is connected to it (see
+"Demo PC" below).
+
+## Actions (phase 3): propose, confirm, run
+
+Off unless the MCP server runs with `SG_ASSISTANT_ACTIONS=true`. When it's off, the propose
+tools don't exist and the agent keeps its read-only prompt.
+
+```
+ "Tell PC 3 their friend is here"
+   │
+   ▼  agent ── propose_message_pc ──▶ MCP server: checks PC 3 exists and is online (GET only),
+   │                                  builds the exact request, sends NOTHING
+   │◀── proposal ────────────────────
+   │  agent parks it as a pending action: single use, 2-minute expiry, this conversation only
+   ▼
+ /assistant page shows a confirm card (summary, target PCs, Confirm / Cancel)
+   │  operator clicks Confirm, or says/types exactly "confirm" / "yes" / "go ahead"
+   │  (matched in the browser by exact phrase; the model is never asked)
+   ▼
+ Dashboard server /api/assistant/confirm
+   1. checks the dashboard login (same as /chat)
+   2. takes the action from the agent (single use, scoped to this user's conversation)
+   3. checks it against a hard-coded allow-list and rebuilds the request from validated fields
+   4. sends it to the backend with the OPERATOR'S OWN sg_session cookie (not the token)
+   5. reports the backend's real response to the agent, which builds the spoken result
+   ▼
+ Result card (✓ / ○ offline / ✕ per PC) + spoken outcome
+```
+
+- **Identity:** an action runs as the operator who confirmed it. The backend's normal role
+  checks apply, and the audit trail (`remote_commands.requested_by`) shows that operator.
+  The bearer token stays GET-only; the backend is unchanged for actions.
+- **What the model can't do:** it can't run anything, and it can't create an action by just
+  saying so. Only `propose_*` tool results become pending actions, and "done" is only ever
+  spoken from the backend's real response.
+
+| Action | Tool | Backend call (allow-listed) | Role |
+|---|---|---|---|
+| Message one PC | `propose_message_pc(pc_name, message, severity?)` | `POST /pcs/{pc}/message` | cashier+ |
+| Announcement to several or all online PCs | `propose_broadcast(message, pc_names?, severity?)` | `POST /commands/broadcast` with an explicit `pc_names` list | cashier+ |
 
 ## Setup
 
@@ -108,11 +151,22 @@ Both `.env` files are gitignored. Real environment variables take precedence ove
 | Variable | Where | Default | Meaning |
 |---|---|---|---|
 | `SG_ASSISTANT_TOKEN` | backend **and** MCP server | *(unset = feature off)* | Shared secret. Must match on both sides. |
-| `SG_ASSISTANT_USERNAME` | backend | *(none)* | Existing, active staff username the token acts as. `cashier` works for every tool. With `admin`, `get_current_shift` can also see when another operator's shift opened. |
+| `SG_ASSISTANT_USERNAME` | backend | *(none)* | Existing, active staff username the token acts as. `cashier` works for every tool. With `admin`, `get_current_shift` can also see when another operator's shift opened. See "Creating the assistant account" below. |
+| `SG_ASSISTANT_ACTIONS` | MCP server | `false` | Phase 3: also offer the `propose_*` action tools. |
 | `SG_BACKEND_URL` | MCP server | `http://127.0.0.1:8000` | Backend base URL. |
 | `SG_MCP_PORT` | MCP server | `8765` | MCP port. Always bound to `127.0.0.1`. |
 | `SG_SHOP_TIMEZONE` | MCP server | `Asia/Manila` | Timezone used to display times. |
 | `SG_BACKEND_TIMEOUT_SECONDS` | MCP server | `10` | Backend request timeout. |
+
+### Creating the assistant account
+
+Create the account the token maps to with **`UserRepository.create_user`**, not the
+`/admin/operators` route or the Staff page. Operators (`is_operator = 1`) appear on the
+"Who's in charge right now?" login picker. A plain user doesn't, which is what you want for
+a service account. To remove an account that was already created as an operator, set
+`is_operator = 0` on it. The family-operator seeding at startup only touches its own fixed
+list, so the change sticks. To switch the assistant off, unset `SG_ASSISTANT_TOKEN` on the
+backend.
 
 ### Agent variables
 
@@ -177,7 +231,8 @@ $t = (Select-String '^SG_ASSISTANT_TOKEN=(.+)$' assistant\mcp_server\.env).Match
 curl.exe -H "Authorization: Bearer $t" http://127.0.0.1:8000/auth/me
 ```
 
-**2. MCP server (port 8765).** It reads `assistant\mcp_server\.env`:
+**2. MCP server (port 8765).** It reads `assistant\mcp_server\.env`. Add
+`$env:SG_ASSISTANT_ACTIONS = "true"` first (or put it in `.env`) to enable actions:
 
 ```powershell
 cd assistant\mcp_server
@@ -225,6 +280,27 @@ Voice notes:
   spoken replies work offline.
 - Firefox has no `SpeechRecognition`; the page detects this and offers the text box.
 
+### Demo PC (a test client on the dev backend)
+
+To see a PC react on the dev backend, run a second client from the repo next to the installed
+one. In `TEST_MODE`, power commands are refused on the client, and the lock screen is
+switched off so the laptop stays usable. It runs as `PC-01` from `client\config.json`
+(read-only), pointed at the dev backend. Its recovery file and log go to `%TEMP%`.
+
+```powershell
+$env:SECRET_GROUNDS_SERVER_URL = "http://127.0.0.1:8000"
+$env:SECRET_GROUNDS_TEST_MODE = "true"
+$env:ENABLE_LOCK_SCREEN = "false"
+$env:SECRET_GROUNDS_RECOVERY_PATH = "$env:TEMP\sg-demo-client-recovery.json"
+$env:SECRET_GROUNDS_CLIENT_LOG = "$env:TEMP\sg-demo-client.log"
+$env:SECRET_GROUNDS_REMINDER_VOICE_ENABLED = "false"
+.\.venv\Scripts\python.exe -m client.client
+```
+
+Messages and announcements pop up on this laptop. Close the window or stop the process to
+remove it; nothing installed is changed. It shows a second tray icon while it runs. Tested
+alongside the installed client: no conflict.
+
 ### MCP Inspector
 
 With the backend and MCP server running:
@@ -256,7 +332,7 @@ cd assistant\agent; .\.venv\Scripts\python.exe -m pytest; cd ..\..
 .\.venv\Scripts\python.exe tests\smoke_assistant_token_auth.py
 
 # Dashboard proxy route + helpers (fetch stubbed)
-cd dashboard; npx tsx src\tests\assistant.test.ts; npm run typecheck; npm test
+cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npm run typecheck; npm test
 ```
 
 ## Versions

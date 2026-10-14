@@ -8,15 +8,19 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { getApiBaseUrl } from "./api";
-import { CONVERSATION_ID_PATTERN, MAX_MESSAGE_LENGTH, isAssistantEnabled } from "./assistant";
+import { ACTION_ID_PATTERN, CONVERSATION_ID_PATTERN, MAX_MESSAGE_LENGTH, isAssistantEnabled } from "./assistant";
 
 const AUTH_COOKIE_NAME = "sg_session";
 const DEFAULT_AGENT_URL = "http://127.0.0.1:8781";
 const AGENT_TIMEOUT_MS = 90_000;
 const AUTH_TIMEOUT_MS = 10_000;
 
-type ProxyBody = { conversation_id?: unknown; message?: unknown };
+type ProxyBody = { conversation_id?: unknown; message?: unknown; action_id?: unknown };
 type BackendUser = { user_id: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function json(status: number, body: Record<string, unknown>) {
   return NextResponse.json(body, { headers: { "Cache-Control": "no-store" }, status });
@@ -149,6 +153,7 @@ export async function proxyChat(request: NextRequest): Promise<NextResponse> {
     const payload = (await agentResponse.json()) as Record<string, unknown>;
     return json(agentResponse.ok ? 200 : 502, {
       error: typeof payload.error === "string" ? payload.error : agentResponse.ok ? undefined : `Agent HTTP ${agentResponse.status}`,
+      pending_action: isRecord(payload.pending_action) ? payload.pending_action : undefined,
       reply: typeof payload.reply === "string" ? payload.reply : "Something went wrong.",
       tools_used: Array.isArray(payload.tools_used) ? payload.tools_used : []
     });
@@ -170,4 +175,223 @@ export async function proxyReset(request: NextRequest): Promise<NextResponse> {
     // The agent may be down; there is nothing to clear then.
   }
   return json(200, { cleared: true });
+}
+
+// --- Phase 3: confirmed actions ---------------------------------------------
+//
+// The agent only ever PREPARES an action. When the operator confirms on
+// screen, this route takes the prepared request from the agent (single use),
+// checks it against the hard-coded allow-list below, rebuilds it from the
+// validated fields only, and sends it to the backend with the operator's own
+// sg_session cookie -- exactly what their own click in the dashboard would do,
+// so the backend's normal role checks, on-duty attribution and audit apply.
+
+const PC_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/;
+const SEVERITIES = new Set(["info", "warning", "urgent"]);
+const MAX_BROADCAST_TARGETS = 60;
+
+export type AgentAction = {
+  action_id: string;
+  kind: string;
+  request: { method: string; path: string; body: Record<string, unknown> };
+};
+type BackendCall = { path: string; body: Record<string, unknown> };
+
+function onlyKeys(body: Record<string, unknown>, allowed: string[]): boolean {
+  return Object.keys(body).every((key) => allowed.includes(key));
+}
+
+function validMessageFields(body: Record<string, unknown>): Record<string, unknown> | null {
+  const message = typeof body.message === "string" ? body.message.trim() : "";
+  if (!message || message.length > 500) {
+    return null;
+  }
+  const severity = body.severity ?? "info";
+  if (typeof severity !== "string" || !SEVERITIES.has(severity)) {
+    return null;
+  }
+  const fields: Record<string, unknown> = { message, severity };
+  if (body.duration_seconds !== undefined) {
+    const seconds = body.duration_seconds;
+    if (typeof seconds !== "number" || !Number.isInteger(seconds) || seconds < 5 || seconds > 3600) {
+      return null;
+    }
+    fields.duration_seconds = seconds;
+  }
+  return fields;
+}
+
+// The allow-list. Anything not matched exactly here is refused.
+export function allowedBackendCall(action: AgentAction): BackendCall | null {
+  const { kind, request } = action;
+  if (!isRecord(request) || request.method !== "POST" || typeof request.path !== "string" || !isRecord(request.body)) {
+    return null;
+  }
+
+  if (kind === "message_pc") {
+    const match = /^\/pcs\/([^/]+)\/message$/.exec(request.path);
+    let pcName = "";
+    try {
+      pcName = match ? decodeURIComponent(match[1]) : "";
+    } catch {
+      return null;
+    }
+    if (!PC_NAME_PATTERN.test(pcName) || !onlyKeys(request.body, ["message", "severity", "duration_seconds"])) {
+      return null;
+    }
+    const fields = validMessageFields(request.body);
+    return fields ? { body: fields, path: `/pcs/${encodeURIComponent(pcName)}/message` } : null;
+  }
+
+  if (kind === "broadcast") {
+    if (request.path !== "/commands/broadcast") {
+      return null;
+    }
+    if (!onlyKeys(request.body, ["message", "severity", "duration_seconds", "pc_names"])) {
+      return null;
+    }
+    const names = request.body.pc_names;
+    // Always explicit targets: an empty list would mean "every PC online at
+    // run time", which is not what the operator confirmed.
+    if (
+      !Array.isArray(names) ||
+      names.length === 0 ||
+      names.length > MAX_BROADCAST_TARGETS ||
+      !names.every((name) => typeof name === "string" && PC_NAME_PATTERN.test(name))
+    ) {
+      return null;
+    }
+    const fields = validMessageFields(request.body);
+    return fields ? { body: { ...fields, pc_names: [...new Set(names as string[])] }, path: "/commands/broadcast" } : null;
+  }
+
+  return null;
+}
+
+async function agentJson(path: string, payload: Record<string, unknown>): Promise<{ status: number; body: unknown }> {
+  const response = await callAgent(path, payload);
+  let body: unknown = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+  return { body, status: response.status };
+}
+
+function invalidActionId(actionId: unknown): NextResponse | null {
+  return typeof actionId === "string" && ACTION_ID_PATTERN.test(actionId)
+    ? null
+    : errorReply(400, "That request was invalid.", "Invalid action_id.");
+}
+
+export async function proxyConfirm(request: NextRequest): Promise<NextResponse> {
+  const checked = await guard(request);
+  if (!checked.ok) {
+    return checked.response;
+  }
+  const actionId = checked.body.action_id;
+  const invalid = invalidActionId(actionId);
+  if (invalid) {
+    return invalid;
+  }
+  const sessionId = scopedSessionId(checked.user, checked.body.conversation_id as string);
+
+  let taken: { status: number; body: unknown };
+  try {
+    taken = await agentJson("/actions/take", { action_id: actionId, session_id: sessionId });
+  } catch {
+    return errorReply(
+      502,
+      "The assistant service isn't running right now.",
+      `Could not reach the agent service at ${agentBaseUrl()}.`
+    );
+  }
+  if (taken.status !== 200 || !isRecord(taken.body)) {
+    const detail =
+      isRecord(taken.body) && typeof taken.body.detail === "string"
+        ? taken.body.detail
+        : "That action is no longer available.";
+    return errorReply(409, detail, detail);
+  }
+
+  const call = allowedBackendCall(taken.body as AgentAction);
+  if (call === null) {
+    // Report the refusal so the agent forgets the action and can say why.
+    await agentJson("/actions/result", {
+      action_id: actionId,
+      body: { detail: "That action isn't allowed from the assistant." },
+      session_id: sessionId,
+      status_code: 403
+    }).catch(() => undefined);
+    return errorReply(403, "That action isn't allowed from the assistant.", "Refused by the dashboard allow-list.");
+  }
+
+  const session = request.cookies.get(AUTH_COOKIE_NAME)?.value ?? "";
+  let backendStatus = 502;
+  let backendBody: unknown = { detail: "Could not reach the shop system." };
+  try {
+    const response = await fetch(`${backendBaseUrl()}${call.path}`, {
+      body: JSON.stringify(call.body),
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Cookie: `${AUTH_COOKIE_NAME}=${session}` },
+      method: "POST",
+      signal: AbortSignal.timeout(AGENT_TIMEOUT_MS)
+    });
+    backendStatus = response.status;
+    try {
+      backendBody = await response.json();
+    } catch {
+      backendBody = { detail: `The shop system returned HTTP ${response.status}.` };
+    }
+  } catch {
+    // Keep the "could not reach the shop system" values.
+  }
+
+  try {
+    const result = await agentJson("/actions/result", {
+      action_id: actionId,
+      body: backendBody,
+      session_id: sessionId,
+      status_code: backendStatus
+    });
+    if (result.status === 200 && isRecord(result.body)) {
+      const outcome = result.body;
+      return json(200, {
+        outcome: {
+          kind: outcome.kind,
+          ok: outcome.ok === true,
+          summary: outcome.summary,
+          targets: Array.isArray(outcome.targets) ? outcome.targets : []
+        },
+        reply: typeof outcome.reply === "string" ? outcome.reply : "Done."
+      });
+    }
+  } catch {
+    // The action ran (or failed) but the agent couldn't record it; answer anyway.
+  }
+  const ok = backendStatus >= 200 && backendStatus < 300;
+  return json(200, { outcome: { ok, targets: [] }, reply: ok ? "Done." : "That didn't go through." });
+}
+
+export async function proxyCancel(request: NextRequest): Promise<NextResponse> {
+  const checked = await guard(request);
+  if (!checked.ok) {
+    return checked.response;
+  }
+  const actionId = checked.body.action_id;
+  const invalid = invalidActionId(actionId);
+  if (invalid) {
+    return invalid;
+  }
+  try {
+    const result = await agentJson("/actions/cancel", {
+      action_id: actionId,
+      session_id: scopedSessionId(checked.user, checked.body.conversation_id as string)
+    });
+    const reply = isRecord(result.body) && typeof result.body.reply === "string" ? result.body.reply : "Cancelled.";
+    return json(200, { reply });
+  } catch {
+    return json(200, { reply: "Cancelled. Nothing was sent." });
+  }
 }

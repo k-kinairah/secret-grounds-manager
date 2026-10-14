@@ -340,6 +340,156 @@
   outline: none;
 }
 
+/* Phase 3: prepared-action confirm / result card */
+
+.actionCard {
+  background: rgba(8, 17, 31, 0.92);
+  border: 1px solid rgba(251, 146, 60, 0.55);
+  border-radius: 10px;
+  box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.08);
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px 14px;
+}
+
+.action_running {
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.08);
+}
+
+.action_done {
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow: none;
+}
+
+.action_failed {
+  border-color: rgba(244, 63, 94, 0.6);
+  box-shadow: none;
+}
+
+.action_cancelled,
+.action_expired {
+  border-color: rgba(100, 116, 139, 0.45);
+  box-shadow: none;
+  opacity: 0.7;
+}
+
+.actionHeader {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.actionKind {
+  color: #fdba74;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.actionState {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.action_done .actionState {
+  color: #86efac;
+}
+
+.action_failed .actionState {
+  color: #fda4af;
+}
+
+.assistantBubble .actionSummary {
+  font-size: 15px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.assistantBubble .actionNote {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.targetChip {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 2px 10px;
+}
+
+.target_done {
+  border-color: rgba(34, 197, 94, 0.5);
+  color: #bbf7d0;
+}
+
+.target_offline {
+  border-color: rgba(100, 116, 139, 0.5);
+  color: var(--muted);
+}
+
+.target_failed {
+  border-color: rgba(244, 63, 94, 0.5);
+  color: #fecdd3;
+}
+
+.actionButtons {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.confirmButton,
+.cancelButton {
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+  min-height: 36px;
+  padding: 8px 18px;
+}
+
+.confirmButton {
+  background: rgba(34, 197, 94, 0.2);
+  border: 1px solid rgba(34, 197, 94, 0.6);
+  color: #dcfce7;
+}
+
+.confirmButton:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.32);
+}
+
+.cancelButton {
+  background: transparent;
+  border: 1px solid rgba(100, 116, 139, 0.55);
+  color: var(--text);
+}
+
+.cancelButton:hover:not(:disabled) {
+  border-color: rgba(148, 163, 184, 0.8);
+}
+
+.confirmButton:disabled,
+.cancelButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.confirmButton:focus-visible,
+.cancelButton:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
 @keyframes pulse {
   0%,
   100% {

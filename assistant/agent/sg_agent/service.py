@@ -21,7 +21,8 @@ from strands.agent.conversation_manager import NullConversationManager
 from strands.models import Model
 from strands.tools.mcp import MCPClient
 
-from sg_agent.prompt import SYSTEM_PROMPT
+from sg_agent.actions import ActionError, PendingAction, describe_outcome, extract_proposals, new_pending_action
+from sg_agent.prompt import ACTIONS_PROMPT, SYSTEM_PROMPT
 
 SHOP_TZ = ZoneInfo("Asia/Manila")
 
@@ -35,6 +36,7 @@ class ChatResult:
     reply: str
     tools_used: list[str] = field(default_factory=list)
     error: str | None = None
+    pending_action: dict[str, Any] | None = None
 
 
 class ToolSource:
@@ -84,6 +86,10 @@ def _stop_quietly(client: MCPClient) -> None:
 class _Session:
     turns: list[tuple[str, str]] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Phase 3: at most one action waiting for the operator, plus actions the
+    # dashboard has taken to run and not yet reported back.
+    pending: PendingAction | None = None
+    in_flight: dict[str, PendingAction] = field(default_factory=dict)
 
 
 class ChatService:
@@ -148,7 +154,7 @@ class ChatService:
             agent = Agent(
                 model=self._model,
                 tools=tools,
-                system_prompt=self._system_prompt(),
+                system_prompt=self._system_prompt(actions_enabled=_has_propose_tools(tools)),
                 messages=history,
                 conversation_manager=NullConversationManager(),
                 callback_handler=None,
@@ -165,13 +171,67 @@ class ChatService:
             tools_used = _tool_names(new_messages)
             reply = _spoken(_final_text(result.message)) or FAILED_REPLY
 
-            session.turns.append((message, reply))
-            del session.turns[: max(0, len(session.turns) - self.max_turns)]
-            return ChatResult(reply, tools_used)
+            # Only proposals that came back from propose_* tool results count;
+            # if the model prepared several, the last one is the one shown.
+            pending = None
+            proposals = extract_proposals(new_messages)
+            if proposals:
+                session.pending = new_pending_action(proposals[-1])
+                pending = session.pending.public()
 
-    def _system_prompt(self) -> str:
+            self._remember(session, message, reply)
+            return ChatResult(reply, tools_used, pending_action=pending)
+
+    # --- actions (phase 3) -----------------------------------------------------
+
+    async def take_action(self, session_id: str, action_id: str) -> PendingAction:
+        """Hand the pending action to the dashboard to run. Single use."""
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise ActionError("That action is no longer available. Please ask again.")
+        async with session.lock:
+            action = session.pending
+            if action is None or action.action_id != action_id:
+                raise ActionError("That action is no longer available. Please ask again.")
+            session.pending = None
+            if action.expired():
+                raise ActionError("That action expired. Please ask again.")
+            session.in_flight[action.action_id] = action
+            return action
+
+    async def cancel_action(self, session_id: str, action_id: str) -> str:
+        session = self._sessions.get(session_id)
+        if session is None:
+            return "There was nothing waiting to cancel."
+        async with session.lock:
+            action = session.pending
+            if action is None or action.action_id != action_id:
+                return "There was nothing waiting to cancel."
+            session.pending = None
+            reply = "Okay, cancelled. Nothing was sent."
+            self._remember(session, f"(Cancelled on screen: {action.summary})", reply)
+            return reply
+
+    async def record_result(self, session_id: str, action_id: str, status_code: int, body: Any) -> dict[str, Any]:
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise ActionError("Unknown action.")
+        async with session.lock:
+            action = session.in_flight.pop(action_id, None)
+            if action is None:
+                raise ActionError("Unknown action.")
+            outcome = describe_outcome(action, status_code, body)
+            self._remember(session, f"(Confirmed on screen: {action.summary})", outcome["reply"])
+            return {"kind": action.kind, "summary": action.summary, **outcome}
+
+    def _remember(self, session: _Session, user_text: str, reply: str) -> None:
+        session.turns.append((user_text, reply))
+        del session.turns[: max(0, len(session.turns) - self.max_turns)]
+
+    def _system_prompt(self, actions_enabled: bool = False) -> str:
         now = self._now().astimezone(SHOP_TZ)
-        return f"{SYSTEM_PROMPT}\nRight now it is {now:%A, %B %d, %Y, %I:%M %p} in Asia/Manila ({now:%Y-%m-%d})."
+        prompt = f"{SYSTEM_PROMPT}\n{ACTIONS_PROMPT}" if actions_enabled else SYSTEM_PROMPT
+        return f"{prompt}\nRight now it is {now:%A, %B %d, %Y, %I:%M %p} in Asia/Manila ({now:%Y-%m-%d})."
 
 
 # --- helpers -------------------------------------------------------------
@@ -183,6 +243,10 @@ def _history_messages(turns: list[tuple[str, str]]) -> list[dict[str, Any]]:
         messages.append({"role": "user", "content": [{"text": user_text}]})
         messages.append({"role": "assistant", "content": [{"text": assistant_text}]})
     return messages
+
+
+def _has_propose_tools(tools: list[Any]) -> bool:
+    return any(str(getattr(tool, "tool_name", "")).startswith("propose_") for tool in tools)
 
 
 def _tool_names(messages: list[dict[str, Any]]) -> list[str]:

@@ -44,6 +44,7 @@ class Settings:
     mcp_port: int
     shop_timezone: str
     timeout_seconds: float
+    enable_actions: bool = False
 
 
 def get_settings() -> Settings:
@@ -55,4 +56,5 @@ def get_settings() -> Settings:
         mcp_port=int(port_text) if port_text else DEFAULT_MCP_PORT,
         shop_timezone=os.getenv("SG_SHOP_TIMEZONE", "").strip() or DEFAULT_SHOP_TIMEZONE,
         timeout_seconds=float(timeout_text) if timeout_text else DEFAULT_TIMEOUT_SECONDS,
+        enable_actions=os.getenv("SG_ASSISTANT_ACTIONS", "").strip().lower() in {"1", "true", "yes", "on"},
     )
