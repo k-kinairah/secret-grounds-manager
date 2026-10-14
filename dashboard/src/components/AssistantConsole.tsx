@@ -48,7 +48,12 @@ type ChatMessage = {
 };
 type Pending = { action: PendingAction; messageId: number };
 
-const DECISION_HINT = "Say “confirm” or “cancel”, or use the buttons.";
+const NO_SPEECH_HINT =
+  "I didn't hear anything. If you were speaking, check which microphone Chrome is using: click the mic icon in the address bar, or open chrome://settings/content/microphone.";
+
+function unmatchedDecisionHint(heard: string): string {
+  return `Heard: “${heard}” — say “confirm” or “cancel”, or use the buttons.`;
+}
 const ACTION_STATE_LABELS: Record<ActionState, string> = {
   cancelled: "Cancelled",
   done: "Done",
@@ -103,9 +108,9 @@ function micErrorMessage(code: string): string {
     case "service-not-allowed":
       return "Microphone permission was denied. Allow the mic for this site in the browser, or type your question.";
     case "audio-capture":
-      return "No microphone was found. Plug one in, or type your question.";
+      return "No microphone was found. Plug one in, or pick another one in Chrome's site settings (the mic icon in the address bar), or type your question.";
     case "no-speech":
-      return "I didn't hear anything. Hold the button and speak, or type your question.";
+      return NO_SPEECH_HINT;
     case "network":
       return "Speech recognition needs an internet connection. You can type your question instead.";
     default:
@@ -120,6 +125,9 @@ export function AssistantConsole() {
   const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [interim, setInterim] = useState("");
+  // What the mic heard: live while holding the button, final after release.
+  const [heard, setHeard] = useState<{ live: boolean; text: string } | null>(null);
+  const liveTranscriptRef = useRef("");
   const [speakReplies, setSpeakReplies] = useState(true);
   const [conversationId, setConversationId] = useState(newConversationId);
   const recognitionRef = useRef<Recognition | null>(null);
@@ -239,7 +247,7 @@ export function AssistantConsole() {
         return;
       }
       if (source === "voice") {
-        setNotice(DECISION_HINT);
+        setNotice(unmatchedDecisionHint(text));
         setStatus("idle");
         return;
       }
@@ -288,6 +296,8 @@ export function AssistantConsole() {
     recognition.interimResults = true;
     recognition.continuous = true;
     transcriptRef.current = "";
+    liveTranscriptRef.current = "";
+    setHeard({ live: true, text: "" });
     recognition.onresult = (event) => {
       let finalText = "";
       let interimText = "";
@@ -300,7 +310,9 @@ export function AssistantConsole() {
         }
       }
       transcriptRef.current = finalText;
-      setInterim(`${finalText}${interimText}`.trim());
+      liveTranscriptRef.current = `${finalText}${interimText}`.trim();
+      setInterim(liveTranscriptRef.current);
+      setHeard({ live: true, text: liveTranscriptRef.current });
     };
     recognition.onerror = (event) => {
       if (event.error === "aborted") {
@@ -311,11 +323,15 @@ export function AssistantConsole() {
     };
     recognition.onend = () => {
       recognitionRef.current = null;
-      const spoken = transcriptRef.current.trim();
+      // Releasing quickly can end recognition before Chrome finalises the
+      // last words; fall back to the latest interim text rather than drop it.
+      const spoken = transcriptRef.current.trim() || liveTranscriptRef.current.trim();
       setInterim("");
+      setHeard(spoken ? { live: false, text: spoken } : null);
       if (spoken) {
         void ask(spoken, "voice");
       } else {
+        setNotice((current) => current ?? NO_SPEECH_HINT);
         setStatus((current) => (current === "listening" ? "idle" : current));
       }
     };
@@ -364,6 +380,7 @@ export function AssistantConsole() {
     setMessages([]);
     setNotice(null);
     setInterim("");
+    setHeard(null);
     setStatus("idle");
   }
 
@@ -462,6 +479,12 @@ export function AssistantConsole() {
               </button>
             ) : null}
           </div>
+          {heard ? (
+            <p aria-live="polite" className={styles.heard}>
+              <span className={styles.heardLabel}>{heard.live ? "Hearing" : "Heard"}:</span>{" "}
+              {heard.text ? `“${heard.text}”` : <span className={styles.heardWaiting}>(waiting for speech…)</span>}
+            </p>
+          ) : null}
           {notice ? (
             <div className={styles.notice} role="alert">
               {notice}

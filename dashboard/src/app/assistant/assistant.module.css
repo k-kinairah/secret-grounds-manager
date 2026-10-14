@@ -340,6 +340,28 @@
   outline: none;
 }
 
+.heard {
+  color: var(--text);
+  font-size: 14px;
+  margin: -4px 0 0;
+  max-width: 640px;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.heardLabel {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.heardWaiting {
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* Phase 3: prepared-action confirm / result card */
 
 .actionCard {
