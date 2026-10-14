@@ -27,8 +27,12 @@ _SEVERITY_STYLES: dict[str, dict[str, str]] = {
 }
 
 
+def _test_mode_enabled() -> bool:
+    return os.getenv("SECRET_GROUNDS_TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def default_power_executor(command: list[str]) -> None:
-    if os.getenv("SECRET_GROUNDS_TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if _test_mode_enabled():
         raise RuntimeError("real_power_executor_blocked_in_test_mode")
     if os.getenv("PYTEST_CURRENT_TEST"):
         raise RuntimeError("real_power_executor_blocked_in_pytest")
@@ -77,6 +81,10 @@ class RemoteControlHandler:
 
         print(f"Remote {command_type} command accepted for {self.pc_name}.")
         Thread(target=self._execute_after_ack, args=(command_type, command), daemon=True).start()
+        if self.power_executor is default_power_executor and _test_mode_enabled():
+            # default_power_executor refuses to run in test mode, so say so in
+            # the acknowledgement instead of implying the PC will power off.
+            return "accepted (test mode: not powered off)"
         if command_type in {"shutdown", "restart"}:
             return "accepted; expected disconnect may follow"
         return "accepted"
