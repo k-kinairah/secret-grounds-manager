@@ -31,6 +31,15 @@ def test_first_step_asks_for_count_without_revealing_expected():
     assert result["blockers"] == []
 
 
+def test_first_step_says_only_the_tool_knows_the_difference():
+    # Real-model run: after "1000" the model skipped the tool and invented a shortage and
+    # "unsettled sessions" (the PCs' running sessions). The first step now says what to do next
+    # and that nothing blocks closing.
+    result = evaluate_shift_close(SHIFT)
+    assert "call check_shift_close again with counted_cash" in result["next_step"]
+    assert result["blocking_note"].startswith("Nothing blocks closing")
+
+
 def test_opened_at_is_given_in_shop_time():
     # 18:03 UTC on Oct 15 is 2:03 AM on Oct 16 in Manila (the model once said "yesterday at 6:03 PM").
     result = evaluate_shift_close(dict(SHIFT, opened_at="2026-10-15T18:03:33.074430Z"))

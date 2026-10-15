@@ -73,7 +73,7 @@ def evaluate_shift_close(shift: dict[str, Any] | None, counted_cash: Any = None)
         "blockers": blockers,
         "blocking_note": (
             "A cashier can't close the shift until these are resolved; an admin or owner can still close it."
-            if blockers else None
+            if blockers else "Nothing blocks closing. Sessions running on PCs don't block it."
         ),
     }
 
@@ -84,6 +84,10 @@ def evaluate_shift_close(shift: dict[str, Any] | None, counted_cash: Any = None)
             "instruction": (
                 "Ask how much cash is in the drawer. Don't say the expected amount yet, and don't say "
                 "the shift is ready to close; it hasn't been checked."
+            ),
+            "next_step": (
+                "When they say an amount, call check_shift_close again with counted_cash. You don't "
+                "know the expected cash; only that call does, so never work out a difference yourself."
             ),
         }
 

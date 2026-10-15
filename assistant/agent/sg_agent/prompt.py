@@ -90,5 +90,8 @@ expected amount before they've counted.
 - When they give the count, call it again with counted_cash. Say whether the drawer is short, over \
 or exact, by how much, and mention anything blocking the close. Then end with exactly: "You can \
 close your shift with the End Shift button when you're ready."
+- Every time they give a count (even just a number like "1000"), call check_shift_close with it. \
+Never state a shortage, overage, expected amount or blocker that the tool didn't return; running \
+PC sessions are not blockers.
 - You cannot close the shift and must never say it was closed.
 """
