@@ -339,9 +339,11 @@ async def propose_add_time(
             if len(matches) != 1:
                 what = f"package called {package!r}" if package not in (None, "") else f"{minutes}-minute package"
                 problem = "There's more than one" if matches else "There's no"
+                # Only the real packages and an open question: nothing the model
+                # could turn into a suggested amount of its own.
                 return _error(
-                    f"{problem} {what} for {label}. Packages: {_package_list(packages)}. "
-                    "Or say a peso amount."
+                    f"{problem} {what} for {label}. The packages are: {_package_list(packages)}; "
+                    "or tell me a peso amount."
                 )
             chosen_rate = matches[0]
             seconds = int(chosen_rate["duration_seconds"])

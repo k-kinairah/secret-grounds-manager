@@ -8,6 +8,7 @@ import httpx
 
 from sg_assistant import proposals
 from sg_assistant.backend import BackendClient
+from sg_assistant.server import build_server
 
 TOKEN = "test-token"
 TZ = ZoneInfo("Asia/Manila")
@@ -146,3 +147,23 @@ def test_backend_down():
 
     client = BackendClient("http://backend.test", TOKEN, transport=httpx.MockTransport(refuse))
     assert "Could not reach" in propose(client, pc_name="PC 1", minutes=60)["error"]
+
+
+def test_no_matching_package_lists_only_real_packages():
+    error = propose(pc_name="PC 1", minutes=30)["error"]
+    assert error == (
+        "There's no 30-minute package for PC 1. The packages are: 1 Hour (₱20.00), 3 Hours (₱50.00); "
+        "or tell me a peso amount."
+    )
+    # The only peso figures in the message are real package prices -- nothing
+    # derived from the request (e.g. "30 pesos") the model could repeat.
+    import re
+
+    assert re.findall(r"₱[\d.,]+", error) == ["₱20.00", "₱50.00"]
+    assert "30 pesos" not in error and "₱30" not in error
+
+
+def test_add_time_tool_description_forbids_suggesting_amounts():
+    tools = {t.name: t for t in run(build_server(make_client(), TZ, enable_actions=True).list_tools())}
+    description = " ".join(tools["propose_add_time"].model_dump(by_alias=True)["description"].split())
+    assert "Never suggest a peso amount or a package yourself" in description

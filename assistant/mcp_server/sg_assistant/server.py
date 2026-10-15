@@ -179,7 +179,8 @@ def build_server(client: BackendClient, tz: ZoneInfo, enable_actions: bool = Fal
         time and price, and returns a `proposal` the staff member must confirm on screen. Then tell
         the user in one short sentence what you prepared, including the price, and ask them to
         confirm. Never say the time was added. Returns {"error": ...} (for example listing the
-        available packages) if it can't prepare it; read that error to the user.
+        available packages) if it can't prepare it; read that error to the user as it is. Never
+        suggest a peso amount or a package yourself; the user picks.
         Open-time and member-balance sessions can't get time this way.
         """
         return await proposals.propose_add_time(client, tz, pc_name, package, minutes, amount_pesos)
