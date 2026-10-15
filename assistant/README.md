@@ -178,6 +178,31 @@ The next operator hears about it, in a new conversation, even after the agent re
 | `GET /api/assistant/handover` (dashboard) → agent `GET /handover` | Open notes for the panel (login required) |
 | `POST /api/assistant/handover/resolve` (dashboard) → agent `POST /handover/resolve` | Mark a note done, as the signed-in operator |
 
+## Close-shift check (phase 3, read-only)
+
+"Close my shift" starts a short check. The assistant asks how much cash is in the drawer,
+compares it with the expected cash, says whether the drawer is short, over or exact, and
+mentions anything that would block closing. It **never closes the shift**. It ends with
+"You can close the shift from the Shifts page when ready."
+
+- **Whose shift:** on every message the dashboard server fetches the signed-in operator's
+  own `GET /shifts/current`, using their login cookie, and passes a summary to the agent as
+  `shift`. The `assistant` token account is never used, and it can't read other cashiers'
+  shifts anyway. If the fetch fails, `shift` is left out, and the agent has no close-check
+  tool for that message.
+- **Agent tool:** `check_shift_close(counted_cash?)` is bound to that summary, so the model
+  can't pick a different shift or invent totals. There is no tool that closes a shift.
+- **Blind count:** the first call (without `counted_cash`) returns only whether a shift is
+  open and any blockers. The expected amount comes back only after the operator has given
+  their count, so the count isn't anchored to the expected number.
+- **Blockers:** sessions still waiting to be settled and payments needing review. The
+  backend refuses a cashier close while either is non-zero; an admin or owner can still
+  close (with a reason if it's someone else's shift).
+- **Times:** the shift's opening time is given to the model already in shop time (Manila). In
+  testing, the model read the raw UTC time as local time and said "yesterday at 6:03 PM".
+- **Note:** in the dashboard, `/shifts` is an admin-only page; cashiers close from the
+  **End Shift** bar. The closing sentence uses the wording that was asked for.
+
 ## Setup
 
 Requires Python 3.12+ (developed on 3.14) and Node.js for the dashboard. Each Python piece
@@ -396,7 +421,7 @@ cd assistant\agent; .\.venv\Scripts\python.exe -m pytest; cd ..\..
 .\.venv\Scripts\python.exe tests\smoke_assistant_token_auth.py
 
 # Dashboard proxy route + helpers (fetch stubbed)
-cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npx tsx src\tests\assistantShutdown.test.ts; npx tsx src\tests\assistantHandover.test.ts; npx tsx src\tests\assistantStream.test.ts; npm run typecheck; npm test
+cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npx tsx src\tests\assistantShutdown.test.ts; npx tsx src\tests\assistantHandover.test.ts; npx tsx src\tests\assistantStream.test.ts; npx tsx src\tests\assistantShift.test.ts; npm run typecheck; npm test
 ```
 
 ## Latency and model choice

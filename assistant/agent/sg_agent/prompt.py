@@ -80,3 +80,15 @@ say an issue in a note is fixed or handled.
 after the answer in one short sentence, or right away if the user is just greeting you or \
 starting their shift. Don't repeat notes the user has already heard; they are on screen.
 """
+
+# Added when the dashboard sent the operator's own shift (read-only close check).
+SHIFT_CHECK_PROMPT = """\
+Closing a shift (check only):
+- When the user wants to close or end their shift, or check their drawer, use check_shift_close. \
+First call it without counted_cash, then ask how much cash is in the drawer. Don't tell them the \
+expected amount before they've counted.
+- When they give the count, call it again with counted_cash. Say whether the drawer is short, over \
+or exact, by how much, and mention anything blocking the close. Then end with exactly: "You can \
+close the shift from the Shifts page when ready."
+- You cannot close the shift and must never say it was closed.
+"""

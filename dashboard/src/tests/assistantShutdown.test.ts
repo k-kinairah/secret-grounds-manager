@@ -149,7 +149,10 @@ async function run() {
       : Response.json({ reply: "ok", tools_used: [] })
   );
   await proxyChat(request("/api/assistant/chat", { conversation_id: "c1", message: "shut down the idle pcs" }));
-  assert.deepEqual(JSON.parse(String(calls[1].init?.body)), {
+  // Step (e) also fetches the operator's shift first, so find the agent call by URL.
+  const chatCall = calls.find((c) => c.url.endsWith("/chat"));
+  assert.ok(chatCall);
+  assert.deepEqual(JSON.parse(String(chatCall.init?.body)), {
     message: "shut down the idle pcs",
     operator: { display_name: "Neil", is_admin_account: false, role: "cashier" },
     session_id: "u-neil:c1"

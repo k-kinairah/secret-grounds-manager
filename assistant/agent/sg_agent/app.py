@@ -34,10 +34,26 @@ class Operator(BaseModel):
     is_admin_account: bool = False
 
 
+class ShiftSnapshot(BaseModel):
+    """The signed-in operator's OWN open shift, fetched by the dashboard with
+    their login (GET /shifts/current). Used only by the read-only close check."""
+
+    open: bool
+    cashier_name: str | None = Field(default=None, max_length=80)
+    opened_at: str | None = Field(default=None, max_length=40)
+    opening_cash: str | None = Field(default=None, max_length=20)
+    expected_cash: str | None = Field(default=None, max_length=20)
+    payment_count: int = 0
+    settlement_pending_sessions: int = 0
+    review_required_payments: int = 0
+    outstanding_unsettled_balance: str | None = Field(default=None, max_length=20)
+
+
 class ChatRequest(BaseModel):
     session_id: str = Field(..., min_length=1, max_length=100)
     message: str = Field(..., min_length=1, max_length=2000)
     operator: Operator | None = None
+    shift: ShiftSnapshot | None = None
 
 
 class ChatResponse(BaseModel):
@@ -95,6 +111,7 @@ def create_app(service: ChatService, settings: Settings) -> FastAPI:
             request.session_id.strip(),
             request.message.strip(),
             operator=request.operator.model_dump() if request.operator else None,
+            shift=request.shift.model_dump() if request.shift else None,
         )
         return ChatResponse(
             reply=result.reply,
@@ -121,6 +138,7 @@ def create_app(service: ChatService, settings: Settings) -> FastAPI:
                     request.session_id.strip(),
                     request.message.strip(),
                     operator=request.operator.model_dump() if request.operator else None,
+                    shift=request.shift.model_dump() if request.shift else None,
                     on_tool=on_tool,
                 )
                 final = ChatResponse(

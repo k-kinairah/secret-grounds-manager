@@ -131,8 +131,59 @@ async function callAgent(path: string, payload: Record<string, unknown>): Promis
   });
 }
 
-function agentChatPayload(user: BackendUser, conversationId: string, message: string): Record<string, unknown> {
+// Step (e): the signed-in operator's OWN open shift, read with their login
+// (GET /shifts/current), so the read-only close check works on exactly their
+// shift without giving the assistant account any extra rights. Omitted if
+// it can't be read; {open: false} if they have no shift open.
+async function operatorShift(request: NextRequest): Promise<Record<string, unknown> | undefined> {
+  const session = request.cookies.get(AUTH_COOKIE_NAME)?.value;
+  if (!session) {
+    return undefined;
+  }
+  try {
+    const response = await fetch(`${backendBaseUrl()}/shifts/current`, {
+      cache: "no-store",
+      headers: { Cookie: `${AUTH_COOKIE_NAME}=${session}` },
+      signal: AbortSignal.timeout(AUTH_TIMEOUT_MS)
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+    const detail = (await response.json()) as unknown;
+    if (detail === null) {
+      return { open: false };
+    }
+    if (!isRecord(detail) || !isRecord(detail.shift) || !isRecord(detail.totals)) {
+      return undefined;
+    }
+    const { shift, totals } = detail;
+    const text = (value: unknown) => (typeof value === "string" || typeof value === "number" ? String(value) : undefined);
+    const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+    return {
+      cashier_name: text(shift.cashier_name),
+      expected_cash: text(totals.expected_cash),
+      open: shift.status === "open",
+      opened_at: text(shift.opened_at),
+      opening_cash: text(shift.opening_cash),
+      outstanding_unsettled_balance: text(totals.outstanding_unsettled_balance),
+      payment_count: count(totals.payment_count),
+      review_required_payments: count(totals.review_required_payments),
+      settlement_pending_sessions: count(totals.settlement_pending_sessions)
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function agentChatPayload(
+  request: NextRequest,
+  user: BackendUser,
+  conversationId: string,
+  message: string
+): Promise<Record<string, unknown>> {
+  const shift = user.display_name ? await operatorShift(request) : undefined;
   return {
+    ...(shift ? { shift } : {}),
     message,
     // Who is talking, as verified with the backend -- only used to phrase
     // replies; the backend still enforces every permission.
@@ -166,7 +217,7 @@ export async function proxyChatStream(request: NextRequest): Promise<Response> {
   try {
     agentResponse = await callAgent(
       "/chat/stream",
-      agentChatPayload(checked.user, checked.body.conversation_id as string, message)
+      await agentChatPayload(request, checked.user, checked.body.conversation_id as string, message)
     );
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "TimeoutError";
@@ -197,7 +248,10 @@ export async function proxyChat(request: NextRequest): Promise<NextResponse> {
 
   let agentResponse: Response;
   try {
-    agentResponse = await callAgent("/chat", agentChatPayload(checked.user, checked.body.conversation_id as string, message));
+    agentResponse = await callAgent(
+      "/chat",
+      await agentChatPayload(request, checked.user, checked.body.conversation_id as string, message)
+    );
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "TimeoutError";
     return errorReply(

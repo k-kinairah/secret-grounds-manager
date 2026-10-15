@@ -63,8 +63,10 @@ async function run() {
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-type"), "application/x-ndjson");
   assert.match(await response.text(), /"type":"tool"/);
-  assert.equal(calls[1].url, "http://127.0.0.1:8781/chat/stream");
-  assert.deepEqual(JSON.parse(String(calls[1].init?.body)), {
+  // Step (e) also fetches the operator's shift first, so find the agent call by URL.
+  const streamCall = calls.find((c) => c.url === "http://127.0.0.1:8781/chat/stream");
+  assert.ok(streamCall);
+  assert.deepEqual(JSON.parse(String(streamCall.init?.body)), {
     message: "sales?",
     operator: { display_name: "Neil", is_admin_account: false, role: "cashier" },
     session_id: "u-neil:c1"
