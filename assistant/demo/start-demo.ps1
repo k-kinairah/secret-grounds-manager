@@ -1,0 +1,220 @@
+<#
+.SYNOPSIS
+  Start the whole assistant demo on 127.0.0.1 with fresh, fake shop data.
+
+.DESCRIPTION
+  1. Seeds a NEW demo shop database and handover-notes file under
+     %TEMP%\sg-demo\run-<time>\ (assistant\demo\seed_demo.py).
+  2. Starts, all on 127.0.0.1:
+       backend      :8000  (on the demo database, with the assistant token)
+       MCP server   :8765  (actions on)
+       agent        :8781  (model settings from assistant\agent\.env)
+       test client  PC-01  (TEST_MODE: power commands refused, no lock screen)
+       dashboard    :3000  (next dev, assistant page on)
+  3. Records what it started in %TEMP%\sg-demo\demo-state.json, so
+     stop-demo.ps1 stops exactly those processes and nothing else.
+
+  It never touches the live shop: no 18001/3001, no data\ or backups\ folder,
+  no installed client or supervisor. Logs go to the run folder.
+
+  Run from anywhere:
+    powershell -ExecutionPolicy Bypass -File assistant\demo\start-demo.ps1
+#>
+param(
+    [switch]$NoBrowser
+)
+
+$ErrorActionPreference = "Stop"
+
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$DemoHome = Join-Path $env:TEMP "sg-demo"
+$StateFile = Join-Path $DemoHome "demo-state.json"
+$Ports = [ordered]@{ backend = 8000; mcp = 8765; agent = 8781; dashboard = 3000 }
+
+$MainPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+$McpPython = Join-Path $RepoRoot "assistant\mcp_server\.venv\Scripts\python.exe"
+$AgentPython = Join-Path $RepoRoot "assistant\agent\.venv\Scripts\python.exe"
+$Seed = Join-Path $RepoRoot "assistant\demo\seed_demo.py"
+$NextBin = Join-Path $RepoRoot "dashboard\node_modules\next\dist\bin\next"
+
+function Fail([string]$message) {
+    Write-Host "start-demo: $message" -ForegroundColor Red
+    exit 1
+}
+
+function Test-PortInUse([int]$port) {
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $client.Connect("127.0.0.1", $port)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        $client.Close()
+    }
+}
+
+function Wait-Http([string]$name, [string]$url, [int]$seconds) {
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5
+            if ($response.StatusCode -lt 500) { return }
+        } catch [System.Net.WebException] {
+            if ($_.Exception.Response -ne $null -and [int]$_.Exception.Response.StatusCode -lt 500) { return }
+        } catch {
+        }
+        Start-Sleep -Milliseconds 700
+    }
+    throw "$name did not answer at $url within $seconds seconds (see the logs in $RunDir)"
+}
+
+function Wait-Port([string]$name, [int]$port, [int]$seconds) {
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-PortInUse $port) { return }
+        Start-Sleep -Milliseconds 700
+    }
+    throw "$name did not open port $port within $seconds seconds (see the logs in $RunDir)"
+}
+
+# Start a process with extra environment variables, then put the parent's environment back.
+function Start-DemoProcess([string]$name, [string]$file, [string[]]$arguments, [string]$workDir, [hashtable]$environment) {
+    $saved = @{}
+    foreach ($key in $environment.Keys) {
+        $saved[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
+        [Environment]::SetEnvironmentVariable($key, $environment[$key], "Process")
+    }
+    try {
+        $process = Start-Process -FilePath $file -ArgumentList $arguments -WorkingDirectory $workDir `
+            -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $RunDir "$name.out.log") `
+            -RedirectStandardError (Join-Path $RunDir "$name.err.log")
+    } finally {
+        foreach ($key in $saved.Keys) {
+            [Environment]::SetEnvironmentVariable($key, $saved[$key], "Process")
+        }
+    }
+    $script:Started += [pscustomobject]@{
+        name       = $name
+        pid        = $process.Id
+        started_at = $process.StartTime.ToString("o")
+    }
+    Save-State
+    Write-Host ("  started {0,-10} (pid {1})" -f $name, $process.Id)
+    return $process
+}
+
+function Save-State {
+    [pscustomobject]@{ run_dir = $RunDir; processes = $script:Started } |
+        ConvertTo-Json -Depth 4 | Set-Content -Path $StateFile -Encoding UTF8
+}
+
+# --- checks before anything starts --------------------------------------------------------
+
+foreach ($path in @($MainPython, $McpPython, $AgentPython, $Seed, $NextBin)) {
+    if (-not (Test-Path $path)) { Fail "missing $path (see the Setup section in assistant\README.md)" }
+}
+if (-not (Test-Path (Join-Path $RepoRoot "assistant\mcp_server\.env"))) {
+    Fail "missing assistant\mcp_server\.env (it holds SG_ASSISTANT_TOKEN)"
+}
+if (-not (Test-Path (Join-Path $RepoRoot "assistant\agent\.env"))) {
+    Fail "missing assistant\agent\.env (it holds the model provider settings)"
+}
+if (Test-Path $StateFile) {
+    Fail "a demo already seems to be running ($StateFile exists). Run stop-demo.ps1 first."
+}
+foreach ($name in $Ports.Keys) {
+    if (Test-PortInUse $Ports[$name]) { Fail "port $($Ports[$name]) ($name) is already in use on 127.0.0.1" }
+}
+
+$tokenLine = Select-String -Path (Join-Path $RepoRoot "assistant\mcp_server\.env") -Pattern '^SG_ASSISTANT_TOKEN=(.+)$' |
+    Select-Object -First 1
+if ($tokenLine -eq $null) { Fail "SG_ASSISTANT_TOKEN is empty in assistant\mcp_server\.env" }
+$AssistantToken = $tokenLine.Matches[0].Groups[1].Value.Trim()
+
+# --- fresh demo data ------------------------------------------------------------------------
+
+New-Item -ItemType Directory -Force -Path $DemoHome | Out-Null
+$RunDir = Join-Path $DemoHome ("run-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+New-Item -ItemType Directory -Path $RunDir | Out-Null
+$ShopDb = Join-Path $RunDir "shop.sqlite3"
+$NotesDb = Join-Path $RunDir "handover.sqlite3"
+$script:Started = @()
+
+function Invoke-Seed([string]$name, [string]$python, [string[]]$arguments) {
+    $env:PYTHONIOENCODING = "utf-8"
+    $out = Join-Path $RunDir "$name.out.log"
+    $err = Join-Path $RunDir "$name.err.log"
+    $process = Start-Process -FilePath $python -ArgumentList (@("`"$Seed`"") + $arguments) -WorkingDirectory $RepoRoot `
+        -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    if ($process.ExitCode -ne 0) { Fail "$name failed; see $err" }
+    Get-Content -Encoding UTF8 $out | Where-Object { $_ -notmatch '^(Sending client command|Command WebSocket|Client )' } |
+        ForEach-Object { Write-Host "  $_" }
+}
+
+Write-Host "Seeding demo data in $RunDir ..."
+Invoke-Seed "seed-shop" $MainPython @("--db", "`"$ShopDb`"")
+Invoke-Seed "seed-notes" $AgentPython @("--notes-db", "`"$NotesDb`"")
+
+# --- start everything -------------------------------------------------------------------------
+
+Write-Host "Starting services ..."
+try {
+    Start-DemoProcess "backend" $MainPython @("-m", "uvicorn", "server.main:app", "--host", "127.0.0.1", "--port", "$($Ports.backend)") $RepoRoot @{
+        SECRET_GROUNDS_DB_PATH      = $ShopDb
+        SECRET_GROUNDS_BACKUP_DIR   = (Join-Path $RunDir "backups")
+        SECRET_GROUNDS_SERVER_LOG   = (Join-Path $RunDir "backend.log")
+        SECRET_GROUNDS_CORS_ORIGINS = "http://127.0.0.1:$($Ports.dashboard)"
+        SG_ASSISTANT_TOKEN          = $AssistantToken
+        SG_ASSISTANT_USERNAME       = "assistant"
+    } | Out-Null
+    Wait-Http "backend" "http://127.0.0.1:$($Ports.backend)/healthz" 60
+
+    Start-DemoProcess "mcp" $McpPython @("-m", "sg_assistant.server") (Join-Path $RepoRoot "assistant\mcp_server") @{
+        SG_BACKEND_URL       = "http://127.0.0.1:$($Ports.backend)"
+        SG_MCP_PORT          = "$($Ports.mcp)"
+        SG_ASSISTANT_ACTIONS = "true"
+    } | Out-Null
+    Wait-Port "MCP server" $Ports.mcp 60
+
+    Start-DemoProcess "agent" $AgentPython @("-m", "sg_agent.app") (Join-Path $RepoRoot "assistant\agent") @{
+        SG_AGENT_PORT         = "$($Ports.agent)"
+        SG_MCP_URL            = "http://127.0.0.1:$($Ports.mcp)/mcp"
+        SG_AGENT_NOTES_DB     = $NotesDb
+        SG_AGENT_CORS_ORIGINS = "http://127.0.0.1:$($Ports.dashboard)"
+    } | Out-Null
+    Wait-Http "agent" "http://127.0.0.1:$($Ports.agent)/health" 90
+
+    Start-DemoProcess "client" $MainPython @("-m", "client.client") $RepoRoot @{
+        SECRET_GROUNDS_SERVER_URL               = "http://127.0.0.1:$($Ports.backend)"
+        SECRET_GROUNDS_TEST_MODE                = "true"
+        ENABLE_LOCK_SCREEN                      = "false"
+        SECRET_GROUNDS_RECOVERY_PATH            = (Join-Path $RunDir "client-recovery.json")
+        SECRET_GROUNDS_CLIENT_LOG               = (Join-Path $RunDir "client.log")
+        SECRET_GROUNDS_REMINDER_VOICE_ENABLED   = "false"
+        SECRET_GROUNDS_EXPIRATION_SOUND_ENABLED = "false"
+    } | Out-Null
+
+    Start-DemoProcess "dashboard" "node" @("`"$NextBin`"", "dev", "-H", "127.0.0.1", "-p", "$($Ports.dashboard)") (Join-Path $RepoRoot "dashboard") @{
+        NEXT_PUBLIC_ASSISTANT_ENABLED = "true"
+        NEXT_PUBLIC_FASTAPI_BASE_URL  = "http://127.0.0.1:$($Ports.backend)"
+        ASSISTANT_BACKEND_URL         = "http://127.0.0.1:$($Ports.backend)"
+        ASSISTANT_AGENT_URL           = "http://127.0.0.1:$($Ports.agent)"
+    } | Out-Null
+    Wait-Http "dashboard" "http://127.0.0.1:$($Ports.dashboard)/login" 180
+} catch {
+    Write-Host "start-demo: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Stopping what was started ..."
+    & (Join-Path $PSScriptRoot "stop-demo.ps1")
+    exit 1
+}
+
+$url = "http://127.0.0.1:$($Ports.dashboard)/assistant"
+Write-Host ""
+Write-Host "Demo is running." -ForegroundColor Green
+Write-Host "  Open $url and sign in as Joy (the cashier with the open shift)."
+Write-Host "  PC-01 is this laptop's test client; messages pop up here."
+Write-Host "  Logs: $RunDir"
+Write-Host "  Stop: powershell -ExecutionPolicy Bypass -File assistant\demo\stop-demo.ps1"
+if (-not $NoBrowser) { Start-Process $url }
