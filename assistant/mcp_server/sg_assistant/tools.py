@@ -317,12 +317,105 @@ async def find_member(client: BackendClient, tz: ZoneInfo, query: str) -> dict[s
                 "phone": mask_phone(member.get("phone_number")),
             }
         )
-    return {
+    result: dict[str, Any] = {
         "query": cleaned,
         "match_count": len(members),
         "showing": len(results),
         "members": results,
     }
+    if not members:
+        # Speech-to-text often misspells names ("rojin" for "Rogene"). Offer the
+        # closest members as guesses -- names and codes only, never balances --
+        # so the assistant can ask "Did you mean ...?" instead of "not found".
+        try:
+            everyone = await client.get("/members")
+        except BackendError:
+            everyone = []
+        suggestions = closest_members(cleaned, everyone)
+        if suggestions:
+            result["did_you_mean"] = suggestions
+            result["note"] = (
+                "No exact match. These are guesses from a similar spelling or sound; ask the user "
+                "to confirm the name before using any of them."
+            )
+    return result
+
+
+# --- fuzzy / sound-alike member matching ----------------------------------------------
+
+FUZZY_THRESHOLD = 0.6
+MAX_SUGGESTIONS = 3
+_SOUNDEX_CODES = {
+    **dict.fromkeys("bfpv", "1"), **dict.fromkeys("cgjkqsxz", "2"), **dict.fromkeys("dt", "3"),
+    "l": "4", **dict.fromkeys("mn", "5"), "r": "6",
+}
+
+
+def soundex(word: str) -> str:
+    """American Soundex: 'Rogene', 'rojin', 'raw jin' -> 'R250'."""
+    letters = [c for c in word.lower() if c.isalpha()]
+    if not letters:
+        return ""
+    first = letters[0]
+    digits: list[str] = []
+    previous = _SOUNDEX_CODES.get(first, "")
+    for char in letters[1:]:
+        code = _SOUNDEX_CODES.get(char, "")
+        if code and code != previous:
+            digits.append(code)
+        if char not in "hw":  # h/w don't separate equal codes; vowels do
+            previous = code
+    return (first.upper() + "".join(digits) + "000")[:4]
+
+
+def _fold(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _candidate_strings(member: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for key in ("username", "display_name", "full_name", "member_code"):
+        value = member.get(key)
+        if not value:
+            continue
+        values.append(str(value))
+        values.extend(str(value).split())  # each word of a name on its own
+    code = str(member.get("member_code") or "")
+    if "-" in code:
+        values.append(code.split("-", 1)[1])
+    return [v for v in values if _fold(v)]
+
+
+def _similarity(query: str, candidate: str) -> float:
+    from difflib import SequenceMatcher
+
+    q, c = _fold(query), _fold(candidate)
+    if not q or not c:
+        return 0.0
+    score = SequenceMatcher(None, q, c).ratio()
+    if q.isalpha() and c.isalpha() and soundex(q) == soundex(c):
+        score = max(score, 0.75) + 0.15  # sounds the same: strong hint
+    return min(score, 1.0)
+
+
+def closest_members(query: str, members: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ranked guesses: best of edit-distance similarity and Soundex, over
+    username, names (whole and per word) and member code."""
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for member in members:
+        best = max((_similarity(query, value) for value in _candidate_strings(member)), default=0.0)
+        if best >= FUZZY_THRESHOLD:
+            scored.append((best, member))
+    scored.sort(key=lambda pair: (-pair[0], str(pair[1].get("member_code"))))
+    return [
+        {
+            "name": m.get("display_name") or m.get("full_name") or m.get("username"),
+            "username": m.get("username"),
+            "member_code": m.get("member_code"),
+            "match": round(score, 2),
+        }
+        for score, m in scored[:MAX_SUGGESTIONS]
+    ]
 
 
 async def get_current_shift(client: BackendClient, tz: ZoneInfo) -> dict[str, Any]:

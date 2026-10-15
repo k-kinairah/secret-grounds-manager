@@ -68,6 +68,9 @@ def build_server(client: BackendClient, tz: ZoneInfo, enable_actions: bool = Fal
         For each session: PC, mode (prepaid / open_time / member_balance), status, member code if any,
         start time, time remaining and end time (prepaid/member) or elapsed time (open_time), amount
         still due, and payment status.
+        When answering out loud: give the count, then the few sessions that matter (ending soon or
+        owing money). Sessions stuck in "settlement_pending" for days are leftovers waiting to be
+        settled; mention them as one count ("plus four old unsettled sessions"), don't read each.
         """
         return await tools.list_active_sessions(client, tz)
 
@@ -93,6 +96,10 @@ def build_server(client: BackendClient, tz: ZoneInfo, enable_actions: bool = Fal
         Returns up to 10 matches with: member code, username, name, status (active/inactive), standard
         time balance, VIP time balance, whether they are playing now, membership expiry, and a masked
         phone number. PINs are never returned.
+        If nothing matches exactly (speech-to-text often misspells names), `members` is empty and
+        `did_you_mean` lists up to 3 close names by spelling and sound. Then ask "Did you mean
+        <name>?" and only look the member up again after the user confirms; a guess is never the
+        member.
         """
         return await tools.find_member(client, tz, query)
 

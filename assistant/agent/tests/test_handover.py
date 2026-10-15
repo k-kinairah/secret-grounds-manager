@@ -136,7 +136,7 @@ def test_next_operator_hears_open_notes_in_a_new_conversation(tool_source, store
     prompt = model.requests[0]["system_prompt"]
     assert "Open shift handover notes" in prompt
     assert "from Ana" in prompt and "PC 7's mouse is broken" in prompt
-    assert "first reply of a conversation" in prompt
+    assert "mention them once, in this reply, after answering" in prompt
 
 
 def test_resolve_through_agent_records_resolver(tool_source, store):
@@ -173,3 +173,47 @@ def test_handover_off(tool_source):
     client.post("/chat", json={"session_id": "s", "message": "hi"})
     assert "save_handover_note" not in model.requests[0]["tool_names"]
     assert "handover" not in model.requests[0]["system_prompt"].lower()
+
+
+# --- fix 1: each note is brought up at most once per operator --------------------------------
+
+
+def test_notes_from_others_are_given_once_per_operator(store):
+    store.add("PC 7's mouse is broken", "Rojan")
+    first = store.prompt_section("Neil")
+    assert "PC 7's mouse is broken" in first
+    # Neil has now been given it: later prompts don't repeat it.
+    assert store.prompt_section("Neil") == ""
+    # Another operator still gets it once.
+    assert "PC 7's mouse is broken" in store.prompt_section("Ana")
+    # A new note reaches Neil, without the old one.
+    store.add("Printer is out of paper", "Ana")
+    again = store.prompt_section("Neil")
+    assert "Printer is out of paper" in again and "mouse" not in again
+
+
+def test_own_notes_stay_listed_but_are_not_marked_new(store):
+    store.add("Restock the snacks", "Neil")
+    assert "from you" in store.prompt_section("Neil")
+    assert "from you" in store.prompt_section("Neil")  # own notes aren't "seen"-tracked
+    assert store.seen_by("Neil") == set()
+
+
+def test_seen_survives_restart(tmp_path):
+    path = tmp_path / "notes.sqlite3"
+    first = HandoverStore(path)
+    first.add("Aircon leaking", "Ana")
+    assert "Aircon leaking" in first.prompt_section("Neil")
+    first.close()
+    second = HandoverStore(path)
+    assert second.prompt_section("Neil") == ""
+    second.close()
+
+
+def test_repeat_chats_do_not_repeat_notes(tool_source, store):
+    store.add("PC 7's mouse is broken", "Rojan")
+    client, model = make_client(tool_source, store, [{"text": "a"}, {"text": "b"}])
+    client.post("/chat", json={"session_id": "c1", "message": "free PCs?", "operator": NEIL})
+    client.post("/chat", json={"session_id": "c2", "message": "sales today?", "operator": NEIL})
+    assert "PC 7's mouse" in model.requests[0]["system_prompt"]
+    assert "PC 7's mouse" not in model.requests[1]["system_prompt"]
