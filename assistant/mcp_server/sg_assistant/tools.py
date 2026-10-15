@@ -224,6 +224,8 @@ async def list_active_sessions(client: BackendClient, tz: ZoneInfo) -> dict[str,
             "mode": mode,
             "status": status,
             "member": session.get("member_code_snapshot") or None,
+            # Name only (no phone, no PIN), so the assistant can say who is on the PC.
+            "member_name": session.get("member_name_snapshot") or None,
             "started_at": _local(session.get("started_at"), tz),
         }
         if mode == "open_time":

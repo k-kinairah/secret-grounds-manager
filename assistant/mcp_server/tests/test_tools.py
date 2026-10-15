@@ -215,6 +215,31 @@ def test_active_sessions_remaining_and_amount_due():
     assert open_time["time_remaining"] is None
     assert open_time["elapsed"] in {"2h 05m", "2h 04m"}
     assert open_time["amount_due"] == "70.00"
+    assert prepaid["member"] is None and prepaid["member_name"] is None
+
+
+def test_active_sessions_include_member_name_but_no_phone_or_pin():
+    member_session = dict(
+        ACTIVE_SESSIONS[0],
+        session_id="s3",
+        pc_name="PC-07",
+        session_mode="member_balance",
+        member_id="m1",
+        member_code_snapshot="SG-16B913DC",
+        member_name_snapshot="Andrea Santos",
+        # Should the backend ever add these, they must not reach the model.
+        phone_number="09171234567",
+        member_phone="09171234567",
+        pin_hash="secret-hash",
+        member_pin="1234",
+    )
+    client = make_client({"/sessions/active": [member_session]})
+    result = run(tools.list_active_sessions(client, TZ))
+    row = result["sessions"][0]
+    assert (row["pc"], row["member"], row["member_name"]) == ("PC-07", "SG-16B913DC", "Andrea Santos")
+    text = str(result)
+    for secret in ("0917", "secret-hash", "1234", "phone", "pin"):
+        assert secret not in text
 
 
 # --- list_pcs ----------------------------------------------------------------

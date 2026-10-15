@@ -65,8 +65,8 @@ def build_server(client: BackendClient, tz: ZoneInfo, enable_actions: bool = Fal
         """Every PC session currently running. Use for "who's playing?", "how much time is left on
         PC 5?", "how much does PC 3 owe?".
 
-        For each session: PC, mode (prepaid / open_time / member_balance), status, member code if any,
-        start time, time remaining and end time (prepaid/member) or elapsed time (open_time), amount
+        For each session: PC, mode (prepaid / open_time / member_balance), status, member code and
+        member name if any (say the name, e.g. "Andrea Santos is on PC 7"), start time, time remaining and end time (prepaid/member) or elapsed time (open_time), amount
         still due, and payment status.
         When answering out loud: give the count, then the few sessions that matter (ending soon or
         owing money). Sessions stuck in "settlement_pending" for days are leftovers waiting to be
