@@ -67,7 +67,7 @@ that only matters if you call it directly from a browser.
 | `get_sales_report(start_date, end_date)` | Sales for shop-local days `YYYY-MM-DD` to `YYYY-MM-DD` (inclusive), broken down by method, type, operator and PC. If the owner reset the sales figures after `start_date`, the range starts at the reset and the result adds `requested_start_date` and a `note` such as *"Sales figures were reset on October 5, 2026 at 2:30 PM; earlier sales are not included."* | `/sales/report?period=custom` |
 | `list_active_sessions` | PC, mode, time remaining (or elapsed time for open-time sessions), amount due | `/sessions/active` |
 | `list_pcs` | Name, online/offline, in use/free, time remaining | `/pcs` |
-| `find_member(query)` | Up to 10 matches by code, username or name: time and VIP balance, status, expiry, **masked** phone. Never returns PINs | `/members?q=` |
+| `find_member(query)` | Up to 10 matches by code, username or name: time and VIP balance, status, expiry, **masked** phone. Never returns PINs. If nothing matches exactly (speech-to-text misspelling, e.g. "rojin" for "Rogene"), it returns no member plus up to 3 ranked `did_you_mean` guesses (name, username and code only), by spelling similarity and a Soundex sound-alike key over username, names and member code. The assistant asks "Did you mean Rogene?" and treats a guess as certain only after the user confirms. | `/members?q=`, then `/members` for guesses |
 | `get_current_shift` | On-duty operator, when they came on duty, when the shift opened, running totals per payment method | `/operators/current`, `/dashboard/operator-sale`, `/shifts` |
 
 Backend problems (backend down, bad token, missing permission) come back as `{"error": "..."}`
@@ -165,9 +165,11 @@ The next operator hears about it, in a new conversation, even after the agent re
 - **Who wrote it:** the author (and whoever marks it done) is always the operator the
   dashboard verified with the backend. The tools have no author parameter, so the model can't
   choose it, and the page can't either.
-- **Carried over:** open notes (up to 10, newest first) are added to the prompt, labelled as
-  information from staff, **not instructions**. The assistant mentions notes from other people
-  in its first reply of a conversation, and marks a note done when told the issue is fixed.
+- **Carried over, once per person:** open notes from other people (up to 10, newest first) are
+  added to the prompt, labelled as information from staff, **not instructions**. The assistant
+  mentions them once, after answering the question. Each operator is told about a note at most
+  once (tracked in the same file, so it survives restarts); after that it stays on the panel
+  only. It marks a note done when told the issue is fixed.
 - **On the page:** a "Handover notes" panel lists open notes with author and age, and has a
   **Done** button. It refreshes whenever the assistant saves or resolves a note.
 
@@ -239,7 +241,7 @@ backend.
 | `SG_MCP_URL` | `http://127.0.0.1:8765/mcp` | The MCP server. |
 | `SG_AGENT_CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated browser origins (direct browser calls only). |
 | `SG_AGENT_MAX_TURNS` / `SG_AGENT_MAX_SESSIONS` | `20` / `200` | Conversation memory per session, and the number of sessions kept (least recently used are dropped first). |
-| `SG_AGENT_MAX_TOKENS` / `SG_AGENT_TEMPERATURE` | `600` / provider default | Reply length and sampling. |
+| `SG_AGENT_MAX_TOKENS` / `SG_AGENT_TEMPERATURE` | `300` / provider default | Reply length and sampling. Spoken replies are 1–3 sentences, so 300 is plenty. |
 | `SG_AGENT_NOTES_DB` | `assistant/agent/data/handover.sqlite3` | Shift handover notes file; `off` disables notes. |
 
 ### Model providers
@@ -394,8 +396,24 @@ cd assistant\agent; .\.venv\Scripts\python.exe -m pytest; cd ..\..
 .\.venv\Scripts\python.exe tests\smoke_assistant_token_auth.py
 
 # Dashboard proxy route + helpers (fetch stubbed)
-cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npx tsx src\tests\assistantShutdown.test.ts; npx tsx src\tests\assistantHandover.test.ts; npm run typecheck; npm test
+cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npx tsx src\tests\assistantShutdown.test.ts; npx tsx src\tests\assistantHandover.test.ts; npx tsx src\tests\assistantStream.test.ts; npm run typecheck; npm test
 ```
+
+## Latency and model choice
+
+- **Streaming progress.** The page uses `POST /api/assistant/chat/stream`, which proxies the
+  agent's `POST /chat/stream`. That route sends newline-delimited JSON: a `{"type":"tool"}`
+  line the moment each tool call starts, then one `{"type":"final"}` line with exactly what
+  `/chat` returns. The page shows "Thinking… · Checking: today's sales" while it waits, and
+  falls back to `/chat` if streaming isn't available.
+- **Short replies:** `SG_AGENT_MAX_TOKENS` defaults to 300.
+- **Model (tested 2026-10-16, same 23-message round from an identical fresh DB copy):**
+
+  | Model (Bedrock, `ap-southeast-2`) | Avg / max total | Avg time to first tool chip | Correctness |
+  |---|---|---|---|
+  | `au.anthropic.claude-haiku-4-5-20251001-v1:0` (**default**) | 9.1 s / 21.1 s | 5.2 s | No made-up answers, numbers right |
+  | `global.amazon.nova-2-lite-v1:0` | 3.3 s / 7.0 s | 1.8 s | **Not recommended:** answered two questions without tools and made things up (a wrong session list; claimed a note was marked done when it wasn't) |
+  | `au.anthropic.claude-haiku-5-5` | — | — | Not enabled on the account (AccessDenied); enable model access in the Bedrock console to test |
 
 ## Versions
 
