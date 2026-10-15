@@ -5,7 +5,7 @@ The dashboard's server fetches the signed-in operator's OWN open shift
 summary here. The model gets one tool bound to that verified data: it can
 ask for the counted cash, compare it with the expected cash and point out
 anything that would block closing. It can never close the shift -- there is
-no tool for that -- and it always ends by pointing to the Shifts page.
+no tool for that -- and it always ends by pointing to the End Shift button.
 
 Blind count: the expected amount is only revealed after the operator has
 said what they counted, so the count isn't anchored to the number.
@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from strands import tool
 
-CLOSE_HINT = "You can close the shift from the Shifts page when ready."
+CLOSE_HINT = "You can close your shift with the End Shift button when you're ready."
 MAX_COUNTED = Decimal("1000000")
 SHOP_TZ = ZoneInfo("Asia/Manila")
 

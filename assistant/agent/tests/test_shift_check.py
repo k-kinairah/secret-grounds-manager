@@ -47,7 +47,7 @@ def test_exact_short_over():
     over = evaluate_shift_close(SHIFT, 4300.5)
     assert (over["result"], over["difference"]) == ("over", "50.50")
     for r in (exact, short, over):
-        assert r["close_hint"] == CLOSE_HINT == "You can close the shift from the Shifts page when ready."
+        assert r["close_hint"] == CLOSE_HINT == "You can close your shift with the End Shift button when you're ready."
         assert "NOT been closed" in r["note"]
 
 
@@ -85,7 +85,7 @@ def test_close_my_shift_multi_turn(tool_source):
         {"tool": "check_shift_close", "input": {}},
         {"text": "Sure. How much cash is in the drawer?"},
         {"tool": "check_shift_close", "input": {"counted_cash": 4100}},
-        {"text": "The drawer is short by 150 pesos. You can close the shift from the Shifts page when ready."},
+        {"text": "The drawer is short by 150 pesos. You can close your shift with the End Shift button when you're ready."},
     ])
     first = client.post("/chat", json={"session_id": "s", "message": "Close my shift", "operator": NEIL, "shift": SHIFT}).json()
     assert first["reply"] == "Sure. How much cash is in the drawer?"
@@ -94,7 +94,7 @@ def test_close_my_shift_multi_turn(tool_source):
     assert "4250" not in tool_result_text(model.requests[1])
 
     second = client.post("/chat", json={"session_id": "s", "message": "4,100", "operator": NEIL, "shift": SHIFT}).json()
-    assert second["reply"].endswith("You can close the shift from the Shifts page when ready.")
+    assert second["reply"].endswith("You can close your shift with the End Shift button when you're ready.")
     result = tool_result_text(model.requests[3])
     assert "short" in result and "-150.00" in result and "NOT been closed" in result
     # The rules are in the prompt, and nothing in the tool list can close a shift.

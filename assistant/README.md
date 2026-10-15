@@ -183,7 +183,7 @@ The next operator hears about it, in a new conversation, even after the agent re
 "Close my shift" starts a short check. The assistant asks how much cash is in the drawer,
 compares it with the expected cash, says whether the drawer is short, over or exact, and
 mentions anything that would block closing. It **never closes the shift**. It ends with
-"You can close the shift from the Shifts page when ready."
+"You can close your shift with the End Shift button when you're ready."
 
 - **Whose shift:** on every message the dashboard server fetches the signed-in operator's
   own `GET /shifts/current`, using their login cookie, and passes a summary to the agent as
@@ -200,8 +200,8 @@ mentions anything that would block closing. It **never closes the shift**. It en
   close (with a reason if it's someone else's shift).
 - **Times:** the shift's opening time is given to the model already in shop time (Manila). In
   testing, the model read the raw UTC time as local time and said "yesterday at 6:03 PM".
-- **Note:** in the dashboard, `/shifts` is an admin-only page; cashiers close from the
-  **End Shift** bar. The closing sentence uses the wording that was asked for.
+- **Why "End Shift":** `/shifts` is an admin-only page in the dashboard; cashiers close
+  from the **End Shift** button, so that's where the assistant points.
 
 ## Setup
 

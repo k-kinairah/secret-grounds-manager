@@ -89,6 +89,6 @@ First call it without counted_cash, then ask how much cash is in the drawer. Don
 expected amount before they've counted.
 - When they give the count, call it again with counted_cash. Say whether the drawer is short, over \
 or exact, by how much, and mention anything blocking the close. Then end with exactly: "You can \
-close the shift from the Shifts page when ready."
+close your shift with the End Shift button when you're ready."
 - You cannot close the shift and must never say it was closed.
 """
