@@ -131,6 +131,60 @@ async function callAgent(path: string, payload: Record<string, unknown>): Promis
   });
 }
 
+function agentChatPayload(user: BackendUser, conversationId: string, message: string): Record<string, unknown> {
+  return {
+    message,
+    // Who is talking, as verified with the backend -- only used to phrase
+    // replies; the backend still enforces every permission.
+    ...(user.display_name
+      ? {
+          operator: {
+            display_name: user.display_name,
+            is_admin_account: user.is_protected === true,
+            role: user.role ?? "cashier"
+          }
+        }
+      : {}),
+    session_id: scopedSessionId(user, conversationId)
+  };
+}
+
+// Streaming variant (latency fix): passes the agent's newline-delimited JSON
+// through -- {"type":"tool"} lines as tools start, then one {"type":"final"}
+// line -- so the page can show what's happening before the answer is ready.
+// Same login, origin and message checks as /chat.
+export async function proxyChatStream(request: NextRequest): Promise<Response> {
+  const checked = await guard(request);
+  if (!checked.ok) {
+    return checked.response;
+  }
+  const message = typeof checked.body.message === "string" ? checked.body.message.trim() : "";
+  if (!message || message.length > MAX_MESSAGE_LENGTH) {
+    return errorReply(400, "I didn't get a question.", "Message is empty or too long.");
+  }
+  let agentResponse: Response;
+  try {
+    agentResponse = await callAgent(
+      "/chat/stream",
+      agentChatPayload(checked.user, checked.body.conversation_id as string, message)
+    );
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    return errorReply(
+      502,
+      timedOut ? "Sorry, that took too long. Please try again." : "The assistant service isn't running right now.",
+      timedOut ? "The agent service timed out." : `Could not reach the agent service at ${agentBaseUrl()}.`
+    );
+  }
+  if (!agentResponse.ok || agentResponse.body === null) {
+    return errorReply(502, "Something went wrong.", `Agent HTTP ${agentResponse.status}`);
+  }
+  return new Response(agentResponse.body, {
+    headers: { "Cache-Control": "no-store", "Content-Type": "application/x-ndjson" },
+    status: 200
+  });
+}
+
 export async function proxyChat(request: NextRequest): Promise<NextResponse> {
   const checked = await guard(request);
   if (!checked.ok) {
@@ -143,22 +197,7 @@ export async function proxyChat(request: NextRequest): Promise<NextResponse> {
 
   let agentResponse: Response;
   try {
-    const { user } = checked;
-    agentResponse = await callAgent("/chat", {
-      message,
-      // Who is talking, as verified with the backend above -- only used to
-      // phrase replies; the backend still enforces every permission.
-      ...(user.display_name
-        ? {
-            operator: {
-              display_name: user.display_name,
-              is_admin_account: user.is_protected === true,
-              role: user.role ?? "cashier"
-            }
-          }
-        : {}),
-      session_id: scopedSessionId(user, checked.body.conversation_id as string)
-    });
+    agentResponse = await callAgent("/chat", agentChatPayload(checked.user, checked.body.conversation_id as string, message));
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "TimeoutError";
     return errorReply(

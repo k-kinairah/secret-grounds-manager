@@ -239,6 +239,13 @@
   font-weight: 900;
 }
 
+/* Tools started while thinking (streamed), e.g. "Checking: today's sales". */
+.liveTools {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .linkButton {
   background: none;
   border: none;

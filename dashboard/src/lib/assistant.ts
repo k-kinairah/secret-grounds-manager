@@ -82,6 +82,18 @@ export function toolChipText(name: string): string {
   return `${verb}: ${toolLabel(name)}`;
 }
 
+// While the tool is still running: "Checking: today's sales", "Preparing: a message".
+export function liveToolText(name: string): string {
+  const verb = name.startsWith("propose_")
+    ? "Preparing"
+    : name === "save_handover_note"
+      ? "Saving"
+      : name === "resolve_handover_note"
+        ? "Updating"
+        : "Checking";
+  return `${verb}: ${toolLabel(name)}`;
+}
+
 // --- Shift handover notes (phase 3 step d) -----------------------------------
 
 export type HandoverNote = { note_id: string; text: string; author: string; age: string };
@@ -191,17 +203,79 @@ export async function sendAssistantMessage(conversationId: string, message: stri
     };
   }
   try {
-    const payload = (await response.json()) as Partial<AssistantReply>;
-    return {
-      reply: typeof payload.reply === "string" ? payload.reply : "Something went wrong.",
-      tools_used: Array.isArray(payload.tools_used) ? payload.tools_used.filter((t) => typeof t === "string") : [],
-      error: typeof payload.error === "string" ? payload.error : response.ok ? undefined : `HTTP ${response.status}`,
-      pending_action:
-        payload.pending_action && typeof payload.pending_action.id === "string" ? payload.pending_action : undefined
-    };
+    return toAssistantReply((await response.json()) as Partial<AssistantReply>, response.ok, response.status);
   } catch {
     return { reply: "Something went wrong.", tools_used: [], error: `Unexpected response (HTTP ${response.status}).` };
   }
+}
+
+function toAssistantReply(payload: Partial<AssistantReply>, ok: boolean, status: number): AssistantReply {
+  return {
+    reply: typeof payload.reply === "string" ? payload.reply : "Something went wrong.",
+    tools_used: Array.isArray(payload.tools_used) ? payload.tools_used.filter((t) => typeof t === "string") : [],
+    error: typeof payload.error === "string" ? payload.error : ok ? undefined : `HTTP ${status}`,
+    pending_action:
+      payload.pending_action && typeof payload.pending_action.id === "string" ? payload.pending_action : undefined
+  };
+}
+
+// Latency fix: the streaming route reports each tool as it starts, so the page
+// can show "Thinking… · Checking: today's sales" before the answer is ready.
+// Falls back to the plain /chat route if streaming isn't available.
+export async function sendAssistantMessageStream(
+  conversationId: string,
+  message: string,
+  onTool: (name: string) => void
+): Promise<AssistantReply> {
+  let response: Response;
+  try {
+    response = await postJson("/api/assistant/chat/stream", { conversation_id: conversationId, message });
+  } catch {
+    return sendAssistantMessage(conversationId, message);
+  }
+  const type = response.headers.get("content-type") ?? "";
+  if (!response.ok || response.body === null || !type.includes("ndjson")) {
+    if (type.includes("json")) {
+      try {
+        return toAssistantReply((await response.json()) as Partial<AssistantReply>, response.ok, response.status);
+      } catch {
+        // fall through to the plain route
+      }
+    }
+    return sendAssistantMessage(conversationId, message);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf("\n");
+      if (!line) {
+        continue;
+      }
+      let event: { type?: unknown; name?: unknown } & Partial<AssistantReply>;
+      try {
+        event = JSON.parse(line) as typeof event;
+      } catch {
+        continue;
+      }
+      if (event.type === "tool" && typeof event.name === "string" && event.name) {
+        onTool(event.name);
+      } else if (event.type === "final") {
+        return toAssistantReply(event, true, 200);
+      }
+    }
+    if (done) {
+      break;
+    }
+  }
+  return { reply: "Something went wrong.", tools_used: [], error: "The answer stream ended early." };
 }
 
 async function postAction(path: string, conversationId: string, actionId: string): Promise<ActionReply> {

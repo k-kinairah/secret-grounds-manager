@@ -6,11 +6,13 @@ dashboard reaches it through its own server-side proxy route, never from the
 browser directly.
 """
 
+import asyncio
+import json
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from strands.tools.mcp import MCPClient
@@ -19,7 +21,7 @@ from sg_agent.config import AGENT_HOST, Settings, get_settings, load_env_file
 from sg_agent.models import build_model
 from sg_agent.actions import ActionError
 from sg_agent.handover import HandoverStore
-from sg_agent.service import ChatService, ToolSource
+from sg_agent.service import FAILED_REPLY, ChatService, ToolSource
 
 
 class Operator(BaseModel):
@@ -100,6 +102,51 @@ def create_app(service: ChatService, settings: Settings) -> FastAPI:
             error=result.error,
             pending_action=result.pending_action,
         )
+
+    @app.post("/chat/stream")
+    async def chat_stream(request: ChatRequest) -> StreamingResponse:
+        """Same as /chat, as newline-delimited JSON: {"type":"tool","name":...}
+        as soon as each tool call starts, then one {"type":"final",...} line
+        with exactly what /chat returns. Lets the voice page show what it's
+        doing while the answer is still being worked out."""
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        def on_tool(name: str) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "tool", "name": name})
+
+        async def run() -> None:
+            try:
+                result = await service.chat(
+                    request.session_id.strip(),
+                    request.message.strip(),
+                    operator=request.operator.model_dump() if request.operator else None,
+                    on_tool=on_tool,
+                )
+                final = ChatResponse(
+                    reply=result.reply,
+                    tools_used=result.tools_used,
+                    error=result.error,
+                    pending_action=result.pending_action,
+                ).model_dump(exclude_none=True)
+            except Exception as error:  # never leave the stream hanging
+                final = {"reply": FAILED_REPLY, "tools_used": [], "error": f"{type(error).__name__}: {error}"[:300]}
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "final", **final})
+
+        task = asyncio.create_task(run())
+
+        async def events():
+            try:
+                yield json.dumps({"type": "start"}) + "\n"
+                while True:
+                    item = await queue.get()
+                    yield json.dumps(item, ensure_ascii=False) + "\n"
+                    if item["type"] == "final":
+                        break
+            finally:
+                await task
+
+        return StreamingResponse(events(), media_type="application/x-ndjson")
 
     @app.post("/reset")
     def reset(request: ResetRequest) -> dict[str, Any]:

@@ -10,7 +10,8 @@ import {
   matchSpokenDecision,
   newConversationId,
   resetAssistantConversation,
-  sendAssistantMessage,
+  sendAssistantMessageStream,
+  liveToolText,
   toolChipText,
   type HandoverNote,
   HANDOVER_TOOLS,
@@ -150,6 +151,8 @@ export function AssistantConsole() {
   // Shift handover notes panel (phase 3 step d).
   const [handover, setHandover] = useState<{ enabled: boolean; notes: HandoverNote[] }>({ enabled: false, notes: [] });
   const [handoverError, setHandoverError] = useState<string | null>(null);
+  // Tools the assistant has started while still thinking (streamed).
+  const [liveTools, setLiveTools] = useState<string[]>([]);
   const liveTranscriptRef = useRef("");
   const [speakReplies, setSpeakReplies] = useState(true);
   const [conversationId, setConversationId] = useState(newConversationId);
@@ -304,7 +307,11 @@ export function AssistantConsole() {
     setNotice(null);
     setMessages((current) => [...current, { id: nextIdRef.current++, role: "user", text }]);
     setStatus("thinking");
-    const result = await sendAssistantMessage(conversationId, text);
+    setLiveTools([]);
+    const result = await sendAssistantMessageStream(conversationId, text, (tool) =>
+      setLiveTools((current) => (current.includes(tool) ? current : [...current, tool]))
+    );
+    setLiveTools([]);
     const messageId = addAssistantMessage({
       action: result.pending_action,
       actionState: result.pending_action ? "pending" : undefined,
@@ -529,6 +536,15 @@ export function AssistantConsole() {
             <span aria-live="polite" className={styles.statusLabel}>
               {STATUS_LABELS[status]}
             </span>
+            {status === "thinking" && liveTools.length > 0 ? (
+              <span className={styles.liveTools}>
+                {liveTools.map((tool) => (
+                  <span className={styles.chip} key={tool}>
+                    {liveToolText(tool)}
+                  </span>
+                ))}
+              </span>
+            ) : null}
             {status === "speaking" ? (
               <button className={styles.linkButton} onClick={stopSpeaking} type="button">
                 Stop

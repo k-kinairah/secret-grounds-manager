@@ -19,6 +19,8 @@ DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 DEFAULT_CORS_ORIGIN = "http://localhost:3000,http://127.0.0.1:3000"
 DEFAULT_MAX_TURNS = 20
 DEFAULT_MAX_SESSIONS = 200
+# Spoken replies are 1-3 sentences (~80 tokens max); tool calls need little more.
+DEFAULT_MAX_TOKENS = 300
 DEFAULT_NOTES_DB = Path(__file__).resolve().parents[1] / "data" / "handover.sqlite3"
 
 PROVIDERS = ("bedrock", "anthropic", "openai", "ollama")
@@ -76,7 +78,7 @@ def get_settings() -> Settings:
         mcp_url=_env("SG_MCP_URL", DEFAULT_MCP_URL),
         provider=provider,
         model_id=_env("SG_AGENT_MODEL_ID"),
-        max_tokens=int(_env("SG_AGENT_MAX_TOKENS", "600")),
+        max_tokens=int(_env("SG_AGENT_MAX_TOKENS", str(DEFAULT_MAX_TOKENS))),
         temperature=float(temperature) if temperature else None,
         bedrock_region=_env("SG_AGENT_BEDROCK_REGION", _env("AWS_REGION", DEFAULT_BEDROCK_REGION)),
         anthropic_api_key=_env("ANTHROPIC_API_KEY"),

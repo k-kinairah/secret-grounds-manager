@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from strands import Agent
 from strands.agent.conversation_manager import NullConversationManager
+from strands.hooks import BeforeToolCallEvent
 from strands.models import Model
 from strands.tools.mcp import MCPClient
 
@@ -134,7 +135,13 @@ class ChatService:
 
     # --- chat -------------------------------------------------------------
 
-    async def chat(self, session_id: str, message: str, operator: dict[str, Any] | None = None) -> ChatResult:
+    async def chat(
+        self,
+        session_id: str,
+        message: str,
+        operator: dict[str, Any] | None = None,
+        on_tool: Callable[[str], None] | None = None,
+    ) -> ChatResult:
         session = self._session(session_id)
         async with session.lock:
             try:
@@ -163,6 +170,13 @@ class ChatService:
                 conversation_manager=NullConversationManager(),
                 callback_handler=None,
             )
+            if on_tool is not None:
+                # Lets the page show "Thinking… · Checking: today's sales" the
+                # moment a tool starts, instead of after the whole answer.
+                agent.hooks.add_callback(
+                    BeforeToolCallEvent,
+                    lambda event: on_tool(str((event.tool_use or {}).get("name") or "")),
+                )
             try:
                 result = await agent.invoke_async(message)
             except Exception as error:
