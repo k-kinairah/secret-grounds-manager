@@ -156,36 +156,55 @@ class ChatService:
             except Exception as error:
                 return ChatResult(MODEL_DOWN_REPLY, error=f"Model is not configured: {_describe(error)}")
 
-            history = _history_messages(session.turns)
-            history_length = len(history)  # the Agent appends to this same list
             author = str(operator.get("display_name")) if operator and operator.get("display_name") else None
-            if self.handover_store is not None:
-                # Bound to the dashboard-verified operator; the model can't choose the author.
-                tools = [*tools, *make_handover_tools(self.handover_store, author)]
-            agent = Agent(
-                model=self._model,
-                tools=tools,
-                system_prompt=self._system_prompt(actions_enabled=_has_propose_tools(tools), operator=operator),
-                messages=history,
-                conversation_manager=NullConversationManager(),
-                callback_handler=None,
-            )
-            if on_tool is not None:
-                # Lets the page show "Thinking… · Checking: today's sales" the
-                # moment a tool starts, instead of after the whole answer.
-                agent.hooks.add_callback(
-                    BeforeToolCallEvent,
-                    lambda event: on_tool(str((event.tool_use or {}).get("name") or "")),
-                )
-            try:
-                result = await agent.invoke_async(message)
-            except Exception as error:
-                if _looks_like_mcp_failure(error):
-                    self._tool_source.reset()
-                    return ChatResult(MCP_DOWN_REPLY, error=f"MCP tool call failed: {_describe(error)}")
-                return ChatResult(MODEL_DOWN_REPLY, error=f"Model call failed: {_describe(error)}")
+            # Built once per message: it also records which handover notes this
+            # operator has now been given, so a retry must not rebuild it.
+            system_prompt = self._system_prompt(actions_enabled=_has_propose_tools(tools), operator=operator)
 
-            new_messages = agent.messages[history_length:]
+            for attempt in (1, 2):
+                history = _history_messages(session.turns)
+                history_length = len(history)  # the Agent appends to this same list
+                agent_tools = list(tools)
+                if self.handover_store is not None:
+                    # Bound to the dashboard-verified operator; the model can't choose the author.
+                    agent_tools += make_handover_tools(self.handover_store, author)
+                agent = Agent(
+                    model=self._model,
+                    tools=agent_tools,
+                    system_prompt=system_prompt,
+                    messages=history,
+                    conversation_manager=NullConversationManager(),
+                    callback_handler=None,
+                )
+                if on_tool is not None:
+                    # Lets the page show "Thinking… · Checking: today's sales" the
+                    # moment a tool starts, instead of after the whole answer.
+                    agent.hooks.add_callback(
+                        BeforeToolCallEvent,
+                        lambda event: on_tool(str((event.tool_use or {}).get("name") or "")),
+                    )
+                try:
+                    result = await agent.invoke_async(message)
+                except Exception as error:
+                    if _looks_like_mcp_failure(error):
+                        self._tool_source.reset()
+                        return ChatResult(MCP_DOWN_REPLY, error=f"MCP tool call failed: {_describe(error)}")
+                    return ChatResult(MODEL_DOWN_REPLY, error=f"Model call failed: {_describe(error)}")
+
+                new_messages = agent.messages[history_length:]
+                # If the MCP server restarted, the cached connection is dead and
+                # every tool call comes back as an error instead of raising.
+                # Reconnect and answer again once (all MCP tools only read or
+                # prepare, so repeating the turn changes nothing).
+                if attempt == 1 and _mcp_session_lost(new_messages):
+                    self._tool_source.reset()
+                    try:
+                        tools = await asyncio.to_thread(self._tool_source.get_tools)
+                    except Exception as error:
+                        self._tool_source.reset()
+                        return ChatResult(MCP_DOWN_REPLY, error=f"Could not reconnect to the MCP server: {_describe(error)}")
+                    continue
+                break
             tools_used = _tool_names(new_messages)
             reply = _spoken(_final_text(result.message)) or FAILED_REPLY
 
@@ -286,6 +305,24 @@ def _history_messages(turns: list[tuple[str, str]]) -> list[dict[str, Any]]:
         messages.append({"role": "user", "content": [{"text": user_text}]})
         messages.append({"role": "assistant", "content": [{"text": assistant_text}]})
     return messages
+
+
+_SESSION_LOST_MARKERS = ("client session is not running", "mcpclientinitializationerror")
+
+
+def _mcp_session_lost(messages: list[dict[str, Any]]) -> bool:
+    """True if a tool result says the MCP client's connection is gone."""
+    for message in messages:
+        for block in message.get("content", []):
+            result = block.get("toolResult") if isinstance(block, dict) else None
+            if not result or result.get("status") != "error":
+                continue
+            text = " ".join(
+                str(item.get("text", "")) for item in result.get("content", []) if isinstance(item, dict)
+            ).lower()
+            if any(marker in text for marker in _SESSION_LOST_MARKERS):
+                return True
+    return False
 
 
 def _has_propose_tools(tools: list[Any]) -> bool:

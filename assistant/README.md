@@ -407,6 +407,14 @@ cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantAc
   `/chat` returns. The page shows "Thinking… · Checking: today's sales" while it waits, and
   falls back to `/chat` if streaming isn't available.
 - **Short replies:** `SG_AGENT_MAX_TOKENS` defaults to 300.
+- **Prompt caching: tried, not kept (2026-10-16).** Bedrock prompt caching works for Haiku 4.5
+  in `ap-southeast-2` (each answer read about 9,600 tokens from cache), but on the same 5
+  questions × 3, interleaved off/on twice, first-chip time was 5.09 s off vs 5.03 s on, and
+  total time 10.33 s vs 10.94 s. The wait is Bedrock's own latency, which swung between 1.7 s
+  and 5.6 s within minutes, not prompt size.
+- **MCP server restarts:** the agent notices a dead MCP connection (tool results saying "client
+  session is not running"), reconnects, and answers that message again once. It's safe to
+  repeat because MCP tools only read or prepare.
 - **Model (tested 2026-10-16, same 23-message round from an identical fresh DB copy):**
 
   | Model (Bedrock, `ap-southeast-2`) | Avg / max total | Avg time to first tool chip | Correctness |
