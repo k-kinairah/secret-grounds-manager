@@ -68,6 +68,7 @@ def test_chat_uses_mcp_tool_and_reports_it(tool_source, mcp_calls):
     assert "read out loud" in system_prompt and "No markdown" in system_prompt
     assert "Asia/Manila" in system_prompt and "2026-10-14" in system_prompt
     assert "coming soon" in system_prompt
+    assert 'by name or as "they"' in system_prompt and "Never guess anyone's gender" in system_prompt
 
 
 def test_chat_passes_tool_arguments_and_note(tool_source, mcp_calls):
