@@ -319,16 +319,18 @@ What it does:
   `server\` folders. It never reads the snapshot or the live database. A fixed random seed
   means the same data each run, relative to the current time.
 - **What's in it:**
-  - **Staff:** Joy and Mark (cashiers) plus Admin.
+  - **Staff:** two demo cashiers, Joy and Mark, next to the default operators the backend
+    always creates.
   - **Members:** 9 fake members with different Standard and VIP balances.
   - **Sales:** a week of walk-in sales and top-ups (roughly ₱1,400–2,000 a day), plus today's.
   - **Shift:** Joy's shift is open with ₱1,000 opening cash.
-  - **Sessions running now:** a walk-in on PC 3, a member (Andrea Santos) on PC 7, and PC 5
-    about to run out.
+  - **Sessions running now:** PC 1 about to run out (about 10 minutes left once the demo is
+    up), plus a walk-in on PC 3 and a member (Andrea Santos) on PC 7 in the background.
   - **Handover note:** one note from Mark, in the agent's notes file.
 
-  PC 1 is kept free for the live client. Seeding in the early morning gives "today" only a
-  few sales, so seed during the day for a fuller picture.
+  PC 1 is the live test client: it picks up its seeded session from the backend when it
+  connects. Seeding in the early morning gives "today" only a few sales, so seed during the
+  day for a fuller picture.
 - **Starts, all on 127.0.0.1:** backend `:8000` on the demo database, MCP server `:8765` with
   actions on, agent `:8781` (model settings from `assistant\agent\.env`), the test client
   as **PC-01** (TEST_MODE: power commands are refused, no lock screen; messages pop up on this
@@ -341,19 +343,15 @@ What it does:
 
 Things to try: "How are we doing today compared to yesterday?", "Which sessions are running
 out?", "Any notes from the last shift?", "Send PC 1 a message: your food is ready", and
-"Close my shift" (the expected cash is shown in the seed output). To demo adding time, start a
-session on PC 1 from the dashboard first, then say "Add one hour to PC 1". Only PC 1 has a real
-client: the seeded sessions on PCs 3, 5 and 7 can be read, but actions on those PCs are refused
-because the PC is offline.
+"Close my shift" (the expected cash is shown in the seed output). "Add one hour to PC one"
+works live on PC 1's session. Only PC 1 has a real client: the sessions on PCs 3 and 7 can be
+read, but actions on those PCs are refused because the PC is offline. If PC 1's session runs out
+before you get to it, start a new one on PC 1 from the dashboard.
 
 Notes:
 - **Admin password:** Admin uses the project's default seeding, so its password is
   `SECRET_GROUNDS_ADMIN_PASSWORD` if that was set when seeding, otherwise the backend's
   built-in default.
-- **Tyrone on the login picker:** the backend re-creates and re-enables the password-based
-  family operator Tyrone on every start, so that tile also shows. The quick-access family
-  operators are switched off and stay off. The default family-named income groups still exist
-  but have no PCs or sales; every PC is in "United" with neutral area labels.
 - **`next dev` rewrites `dashboard\next-env.d.ts`.** Undo it with
   `git checkout -- dashboard/next-env.d.ts` before committing.
 

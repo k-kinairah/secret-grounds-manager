@@ -59,14 +59,11 @@ MEMBERS = [
 # Members who also play during the past week.
 MEMBER_PLAYERS = ["andrea.santos", "carlo.mendoza", "mika.villanueva", "paolo.reyes"]
 
-STANDARD_PCS = [f"PC-{n:02d}" for n in range(2, 15)]  # PC-01 stays free for the live demo client
+# PC-01 (the live test client) gets no history: it only has the session about to run out.
+STANDARD_PCS = [f"PC-{n:02d}" for n in range(2, 15)]
 VIP_PC = "PC-15"
 STANDARD_RATES = [("rate-standard-guest-5", 2), ("rate-standard-guest-10", 4), ("rate-standard-guest-15", 6)]
 VIP_RATES = [("rate-vip-guest-1hr", 3), ("rate-vip-guest-2hr", 2), ("rate-vip-guest-3hr", 1)]
-
-# Neutral area labels instead of the default family names; every PC in the "United" group.
-AREAS = {**{f"PC-{n:02d}": "MAIN FLOOR" for n in range(1, 11)},
-         **{f"PC-{n:02d}": "BACK ROW" for n in range(11, 15)}, VIP_PC: "VIP ROOM"}
 
 HANDOVER_NOTE = ("PC 9's headset mic crackles. I swapped in the spare from the drawer; "
                  "the old one needs replacing.", "Mark")
@@ -133,7 +130,7 @@ def seed_shop(db_path: Path) -> None:
     import server.main as main
     from server.schemas import (
         MemberCreateRequest, MemberPurchaseRequest, OperatorCreateRequest, PaymentCreateRequest,
-        PCLayoutUpdate, PCRecord, ShiftOpenRequest, UserCreateRequest,
+        PCRecord, ShiftOpenRequest, UserCreateRequest,
     )
     from uuid import uuid4
 
@@ -155,25 +152,15 @@ def seed_shop(db_path: Path) -> None:
     members = main.member_repository
     admin = users.get_user(ADMIN_ID)
 
-    # Staff: Admin plus two cashiers. The default operators are switched off; quick-access
-    # ones stay off across restarts.
+    # Staff: two demo cashiers next to the default operators the schema setup creates.
     staff = {}
     for username, name in CASHIERS:
         created = operators.create_operator(
             OperatorCreateRequest(username=username, display_name=name, access_method="quick", role="cashier"), admin)
         staff[username] = users.get_user(created.operator_id)
-    for operator in operators.list_operators():
-        if operator.operator_id != ADMIN_ID and operator.username not in staff and not operator.password_required:
-            operators.set_enabled(operator.operator_id, False, admin)
     # The assistant's service account (not an operator, so not on the login picker).
     users.create_user(UserCreateRequest(username="assistant", display_name="Assistant",
                                         password=str(uuid4()), role="cashier"))
-
-    for layout in main.pc_layout_repository.list_layouts(include_disabled=True):
-        main.pc_layout_repository.upsert_layout(layout.pc_name, PCLayoutUpdate(
-            display_name=layout.display_name, area_label=AREAS.get(layout.pc_name, layout.area_label),
-            layout_order=layout.layout_order, is_vip=layout.is_vip, is_enabled=layout.is_enabled,
-            mac_address=layout.mac_address, income_group_id="united"))
 
     def pay(amount: Decimal, i: int) -> PaymentCreateRequest:
         if rng.random() < 0.2:
@@ -270,7 +257,9 @@ def seed_shop(db_path: Path) -> None:
         clock.at = shift_start
         main.shift_repository.open_shift(ShiftOpenRequest(opening_cash=OPENING_CASH), staff[SHIFT_CASHIER])
 
-    # Live right now: a walk-in, a member, and one about to run out. PC-01 stays free.
+    # Live right now: a walk-in and a member in the background, and PC-01 about to run out.
+    # PC-01 is the live test client: it picks this session up from the backend when it
+    # connects, so "add one hour to PC one" works on camera.
     joy = staff[SHIFT_CASHIER].user_id
     clock.at = now - timedelta(minutes=20)
     asyncio.run(service.start_prepaid_session("PC-03", pay(Decimal("15.00"), 900001),
@@ -278,7 +267,7 @@ def seed_shop(db_path: Path) -> None:
     clock.at = now - timedelta(minutes=35)
     asyncio.run(service.start_member_session("PC-07", "andrea.santos", 2 * 3600, MEMBER_PIN, joy))
     clock.at = now - timedelta(minutes=45)  # about 15 minutes left at seeding, ~10 when the demo is up
-    asyncio.run(service.start_prepaid_session("PC-05", pay(Decimal("15.00"), 900002),
+    asyncio.run(service.start_prepaid_session("PC-01", pay(Decimal("15.00"), 900002),
                                               rate_id="rate-standard-guest-15", actor_user_id=joy))
 
     main.pc_registry.clear()
