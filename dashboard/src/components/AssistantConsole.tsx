@@ -697,6 +697,11 @@ export function AssistantConsole() {
             ) : null}
             {messages.map((message) => (
               <li className={message.role === "user" ? styles.userRow : styles.assistantRow} key={message.id}>
+                {message.role === "assistant" ? (
+                  <span aria-hidden="true" className={styles.replyIcon}>
+                    <Sparkles />
+                  </span>
+                ) : null}
                 <div className={message.role === "user" ? styles.userBubble : styles.assistantBubble}>
                   <span className={styles.speaker}>{message.role === "user" ? "You" : "Assistant"}</span>
                   <p>{message.text}</p>

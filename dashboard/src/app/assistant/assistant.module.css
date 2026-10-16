@@ -369,8 +369,35 @@
   align-items: flex-end;
 }
 
+/* Assistant replies: a small sparkle (as in the header) beside the first line. */
 .assistantRow {
-  align-items: flex-start;
+  align-items: start;
+  column-gap: 12px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  row-gap: 4px;
+}
+
+.assistantRow > .time {
+  grid-column: 2;
+}
+
+.replyIcon {
+  align-items: center;
+  background: rgb(34 211 238 / 0.1);
+  border: 1px solid rgb(56 189 248 / 0.3);
+  border-radius: 7px;
+  color: #a5f3fc;
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  margin-top: 1px;
+  width: 24px;
+}
+
+.replyIcon svg {
+  height: 14px;
+  width: 14px;
 }
 
 .userBubble {
