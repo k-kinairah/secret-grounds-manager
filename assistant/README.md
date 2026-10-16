@@ -310,7 +310,7 @@ powershell -ExecutionPolicy Bypass -File assistant\demo\start-demo.ps1
 ```
 
 It takes a minute or two (`next dev` compiles on first load), then opens
-`http://127.0.0.1:3000/assistant`. **Sign in as Tyrone** (password; Tyrone has the open shift).
+`http://127.0.0.1:3000/assistant`. **Sign in as Tyrone** (password; Tyrone is on duty).
 To stop everything it started:
 
 ```powershell
@@ -330,7 +330,8 @@ What it does:
     shift and uses the same password as Admin; Rogene and the others use quick access.
   - **Members:** 9 fake members with different Standard and VIP balances.
   - **Sales:** a week of walk-in sales and top-ups (roughly ₱1,400–2,000 a day), plus today's.
-  - **Shift:** Tyrone's shift is open with ₱1,000 opening cash.
+  - **On duty:** Tyrone, since the morning (no cashier shift is opened). Signing in as Tyrone
+    keeps that start, so the running totals show from the first minute.
   - **Sessions running now:** PC 1 about to run out (about 10 minutes left once the demo is
     up), plus a walk-in on PC 3 and a member (Andrea Santos) on PC 7 in the background.
   - **Handover note:** one note from Rogene, in the agent's notes file.
@@ -350,7 +351,7 @@ What it does:
 
 Things to try: "How are we doing today compared to yesterday?", "Which sessions are running
 out?", "Any notes from the last shift?", "Send PC 1 a message: your food is ready", and
-"Close my shift" (the expected cash is shown in the seed output). "Add one hour to PC one"
+"Check my drawer" (the seed output shows what the drawer should hold with a ₱200 float). "Add one hour to PC one"
 works live on PC 1's session. Only PC 1 has a real client: the sessions on PCs 3 and 7 can be
 read, but actions on those PCs are refused because the PC is offline. If PC 1's session runs out
 before you get to it, start a new one on PC 1 from the dashboard.

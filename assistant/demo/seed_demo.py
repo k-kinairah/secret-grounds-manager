@@ -9,10 +9,11 @@ Two parts, each run with the venv that has its dependencies:
     assistant\agent\.venv\Scripts\python.exe assistant\demo\seed_demo.py --notes-db $env:TEMP\sg-demo\handover.sqlite3
 
 Members and sales are made up; the staff are the default family operators the
-backend always creates (Tyrone has the open shift, Rogene left the handover
-note). Nothing is read from a real database. The shop data is created through the backend's own code (schema
-setup, repositories and the session service), so it looks exactly like real
-use: a fake PC connection acknowledges commands while seeding, and the clock
+backend always creates (Tyrone is on duty since the morning, Rogene left the
+handover note). No cashier shift is opened; the shop uses on duty.
+Nothing is read from a real database. The shop data is created through the
+backend's own code (schema setup, repositories and the session service), so
+it looks exactly like real use: a fake PC connection acknowledges commands while seeding, and the clock
 is moved back for the past week's sales.
 
 Deterministic: a fixed random seed, with times relative to when it runs (so
@@ -40,9 +41,9 @@ RANDOM_SEED = 20261023
 PROTECTED_DIRS = ("data", "backups", "server")
 
 # Staff are the default family operators the backend always creates.
-SHIFT_OPERATOR = "operator_tyrone"   # has the open shift
+DUTY_OPERATOR = "operator_tyrone"   # on duty since the morning
 NOTE_AUTHOR_OPERATOR = "operator_rogene"   # wrote the handover note, works the evenings
-OPENING_CASH = Decimal("1000.00")
+DEMO_FLOAT = Decimal("200.00")   # only for the hint printed at the end
 MEMBER_PIN = "1234"
 
 # (username, display name, top-ups after the membership fee)
@@ -131,7 +132,7 @@ def seed_shop(db_path: Path) -> None:
     import server.main as main
     from server.schemas import (
         MemberCreateRequest, MemberPurchaseRequest, PaymentCreateRequest,
-        PCRecord, ShiftOpenRequest, UserCreateRequest,
+        PCRecord, UserCreateRequest,
     )
     from uuid import uuid4
 
@@ -151,7 +152,7 @@ def seed_shop(db_path: Path) -> None:
     users = main.user_repository
     members = main.member_repository
 
-    staff = {"shift": users.get_user(SHIFT_OPERATOR), "evening": users.get_user(NOTE_AUTHOR_OPERATOR)}
+    staff = {"duty": users.get_user(DUTY_OPERATOR), "evening": users.get_user(NOTE_AUTHOR_OPERATOR)}
     # The assistant's service account (not an operator, so not on the login picker).
     users.create_user(UserCreateRequest(username="assistant", display_name="Assistant",
                                         password=str(uuid4()), role="cashier"))
@@ -162,7 +163,7 @@ def seed_shop(db_path: Path) -> None:
         return PaymentCreateRequest(payment_method="cash", amount=amount, cash_received=cash_for(amount))
 
     def cashier_at(moment: datetime):
-        return staff["shift"] if moment.astimezone(SHOP_TZ).hour < 16 else staff["evening"]
+        return staff["duty"] if moment.astimezone(SHOP_TZ).hour < 16 else staff["evening"]
 
     rate_price = {r.rate_id: (r.duration_seconds, Decimal(str(r.price))) for r in main.rate_repository.list_rates()}
 
@@ -209,12 +210,12 @@ def seed_shop(db_path: Path) -> None:
     for days_ago in range(7, 0, -1):
         day = today - timedelta(days=days_ago)
         plan_day(day, local(day, 9), local(day, 23), busy=0.35 + 0.05 * (days_ago % 3))
-    # Today: the open shift starts in the morning (or a few hours back when it's early).
-    shift_start = local(today, 8)
-    if shift_start > now - timedelta(hours=3):
-        shift_start = now - timedelta(hours=6)
+    # Today: Tyrone comes on duty in the morning (or a few hours back when it's early).
+    duty_start = local(today, 8)
+    if duty_start > now - timedelta(hours=3):
+        duty_start = now - timedelta(hours=6)
     # Today's sales stay on today's date (yesterday is already planned in full).
-    plan_day(today, max(shift_start, local(today, 0)) + timedelta(minutes=20), now - timedelta(minutes=70), busy=0.3)
+    plan_day(today, max(duty_start, local(today, 0)) + timedelta(minutes=20), now - timedelta(minutes=70), busy=0.3)
     # A few past member sessions (paid from balance).
     for i, username in enumerate(MEMBER_PLAYERS):
         start = local(today - timedelta(days=1 + i), 14 + i, 10)
@@ -222,21 +223,27 @@ def seed_shop(db_path: Path) -> None:
         events.append((start, counter, "member", {"pc": STANDARD_PCS[-1 - i], "username": username,
                                                    "end": start + timedelta(minutes=45 + 15 * i)}))
 
-    shift_opened = False
+    on_duty = False
+
+    def come_on_duty() -> None:
+        # What signing in does: Tyrone is the operator on duty and his running total starts
+        # now. Signing in again at demo time keeps this start (the window stays open).
+        clock.at = duty_start
+        main.operator_state_repository.set_current(staff["duty"].user_id, staff["duty"].user_id)
+        main.operator_state_repository.begin_sale_window(staff["duty"].user_id)
     pending: list[tuple[datetime, int, str, dict]] = sorted(events)
     while pending:
         moment, n, kind, info = pending.pop(0)
-        if not shift_opened and moment >= shift_start:
-            clock.at = shift_start
-            main.shift_repository.open_shift(ShiftOpenRequest(opening_cash=OPENING_CASH), staff["shift"])
-            shift_opened = True
+        if not on_duty and moment >= duty_start:
+            come_on_duty()
+            on_duty = True
         clock.at = moment
         if kind == "end":
             asyncio.run(service.end_session(info["session_id"], info["actor"]))
             continue
         if service.repository.get_active_session_for_pc(info["pc"]) is not None:
             continue  # a member session took this PC; skip this walk-in
-        actor = staff["shift"] if shift_opened and moment >= shift_start else cashier_at(moment)
+        actor = staff["duty"] if on_duty and moment >= duty_start else cashier_at(moment)
         if kind == "member":
             response = asyncio.run(service.start_member_session(
                 info["pc"], info["username"], int((info["end"] - moment).total_seconds()), MEMBER_PIN, actor.user_id))
@@ -247,36 +254,37 @@ def seed_shop(db_path: Path) -> None:
         pending.append((info["end"], n, "end", {"session_id": response.session.session_id, "actor": actor.user_id}))
         pending.sort()
 
-    if not shift_opened:
-        clock.at = shift_start
-        main.shift_repository.open_shift(ShiftOpenRequest(opening_cash=OPENING_CASH), staff["shift"])
+    if not on_duty:
+        come_on_duty()
 
     # Live right now: a walk-in and a member in the background, and PC-01 about to run out.
     # PC-01 is the live test client: it picks this session up from the backend when it
     # connects, so "add one hour to PC one" works on camera.
-    on_shift = staff["shift"].user_id
+    on_duty_id = staff["duty"].user_id
     clock.at = now - timedelta(minutes=20)
     asyncio.run(service.start_prepaid_session("PC-03", pay(Decimal("15.00"), 900001),
-                                              rate_id="rate-standard-guest-15", actor_user_id=on_shift))
+                                              rate_id="rate-standard-guest-15", actor_user_id=on_duty_id))
     clock.at = now - timedelta(minutes=35)
-    asyncio.run(service.start_member_session("PC-07", "andrea.santos", 2 * 3600, MEMBER_PIN, on_shift))
+    asyncio.run(service.start_member_session("PC-07", "andrea.santos", 2 * 3600, MEMBER_PIN, on_duty_id))
     clock.at = now - timedelta(minutes=45)  # about 15 minutes left at seeding, ~10 when the demo is up
     asyncio.run(service.start_prepaid_session("PC-01", pay(Decimal("15.00"), 900002),
-                                              rate_id="rate-standard-guest-15", actor_user_id=on_shift))
+                                              rate_id="rate-standard-guest-15", actor_user_id=on_duty_id))
 
     main.pc_registry.clear()
     clock.at = now
-    summarize(main, staff["shift"])
+    summarize(main, staff["duty"])
 
 
-def summarize(main, cashier) -> None:
-    shift = main.shift_repository.get_open_shift_for_user(cashier.user_id)
-    detail = main.shift_repository.get_shift(shift.shift_id, cashier)
+def summarize(main, operator) -> None:
+    since = main.operator_state_repository.get_sale_window_start(operator.user_id)
+    totals = main.shift_repository.calculate_operator_sale(operator.user_id, since)
     active = main.session_repository.list_active_sessions()
     print("Demo shop ready.")
     print("  Staff on the login picker:", ", ".join(o.display_name for o in main.operator_repository.list_login_operators()))
     print("  Members:", len(main.member_repository.list_members()))
-    print(f"  Open shift: {cashier.display_name}, expected cash ₱{detail.totals.expected_cash}")
+    print(f"  On duty: {operator.display_name} since {since.astimezone(SHOP_TZ):%I:%M %p}, "
+          f"cash collected ₱{totals['cash']} (with a ₱{DEMO_FLOAT} float the drawer should hold "
+          f"₱{totals['cash'] + DEMO_FLOAT}), GCash ₱{totals['gcash']}")
     if active:
         print("  Active sessions:", ", ".join(s.pc_name for s in active))
 

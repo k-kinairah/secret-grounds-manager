@@ -250,7 +250,7 @@ try {
 $url = "$DashboardUrl/assistant"
 Write-Host ""
 Write-Host "Demo is running." -ForegroundColor Green
-Write-Host "  Open $url and sign in as Tyrone (password; has the open shift)."
+Write-Host "  Open $url and sign in as Tyrone (password; Tyrone is on duty)."
 Write-Host "  PC-01 is this laptop's test client; messages pop up here."
 if ($Lan) {
     Write-Host "  LAN mode: backend and dashboard are reachable on $WebHost from the home network." -ForegroundColor Yellow
