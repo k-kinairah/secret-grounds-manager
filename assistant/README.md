@@ -402,8 +402,10 @@ Node.js. So in `-Lan` mode the demo is reachable from the whole home network, no
 other PC. To allow only the other PC while filming:
 
 ```powershell
-# Before filming: switch off the broad python/node rules (remembered in a file), allow only the other PC.
-$apps = "C:\Users\Kin\AppData\Local\Python\pythoncore-3.14-64\python.exe", "C:\Program Files\nodejs\node.exe"
+# Before filming (from the repo root): switch off the broad python/node rules (remembered in a
+# file), allow only the other PC. The demo's Python is the one behind the repo's venv.
+$python = & .\.venv\Scripts\python.exe -c "import sys; print(sys._base_executable)"
+$apps = $python, (Get-Command node).Source
 $rules = Get-NetFirewallApplicationFilter | Where-Object { $apps -contains $_.Program } | Get-NetFirewallRule |
     Where-Object { $_.Direction -eq "Inbound" -and $_.Action -eq "Allow" -and $_.Enabled -eq "True" }
 $rules.Name | Set-Content "$env:TEMP\sg-demo-firewall-rules.txt"
