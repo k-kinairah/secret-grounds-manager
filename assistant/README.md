@@ -304,7 +304,8 @@ powershell -ExecutionPolicy Bypass -File assistant\demo\start-demo.ps1
 ```
 
 It takes a minute or two (`next dev` compiles on first load), then opens
-`http://127.0.0.1:3000/assistant`. **Sign in as Joy.** To stop everything it started:
+`http://127.0.0.1:3000/assistant`. **Sign in as Tyrone** (password; Tyrone has the open shift).
+To stop everything it started:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File assistant\demo\stop-demo.ps1
@@ -319,14 +320,14 @@ What it does:
   `server\` folders. It never reads the snapshot or the live database. A fixed random seed
   means the same data each run, relative to the current time.
 - **What's in it:**
-  - **Staff:** two demo cashiers, Joy and Mark, next to the default operators the backend
-    always creates.
+  - **Staff:** the default family operators the backend always creates. Tyrone has the open
+    shift and uses the same password as Admin; Rogene and the others use quick access.
   - **Members:** 9 fake members with different Standard and VIP balances.
   - **Sales:** a week of walk-in sales and top-ups (roughly ₱1,400–2,000 a day), plus today's.
-  - **Shift:** Joy's shift is open with ₱1,000 opening cash.
+  - **Shift:** Tyrone's shift is open with ₱1,000 opening cash.
   - **Sessions running now:** PC 1 about to run out (about 10 minutes left once the demo is
     up), plus a walk-in on PC 3 and a member (Andrea Santos) on PC 7 in the background.
-  - **Handover note:** one note from Mark, in the agent's notes file.
+  - **Handover note:** one note from Rogene, in the agent's notes file.
 
   PC 1 is the live test client: it picks up its seeded session from the backend when it
   connects. Seeding in the early morning gives "today" only a few sales, so seed during the
@@ -354,6 +355,66 @@ Notes:
   built-in default.
 - **`next dev` rewrites `dashboard\next-env.d.ts`.** Undo it with
   `git checkout -- dashboard/next-env.d.ts` before committing.
+
+### Filming with two PCs (`-Lan`)
+
+To speak on one PC (the "cashier") while the customer PC visibly reacts, keep the whole demo
+on this laptop and open the assistant page from the other PC. `-Lan` is off by default.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File assistant\demo\start-demo.ps1 -Lan
+```
+
+With `-Lan`, the backend (`:8000`) and dashboard (`:3000`) listen on the laptop's home-LAN
+address (found automatically; pass `-LanIp 192.168.0.109` if there is more than one). The MCP
+server and the agent stay on 127.0.0.1. Only private addresses are accepted, and
+`stop-demo.ps1` closes everything again. The demo PC-01 client on the laptop is the PC
+that reacts. The mic doesn't work on the laptop's own page in this mode, because the page
+isn't served from `localhost`.
+
+**On the other PC** (it only runs a browser; nothing is installed and the live system is not
+touched). In PowerShell:
+
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="$env:TEMP\sg-demo-chrome" --unsafely-treat-insecure-origin-as-secure=http://192.168.0.109:3000 http://192.168.0.109:3000/assistant
+```
+
+- Use the address that `start-demo.ps1 -Lan` prints if it differs. If Chrome is installed
+  per user, the path is `$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe`.
+- This opens a separate, throwaway Chrome profile. Your normal Chrome profile and the live
+  dashboard are untouched. The flag lets that profile treat this one address as secure, which
+  the browser needs before it allows the microphone.
+- Chrome shows an "unsupported command-line flag" bar; close it before filming.
+- Sign in as Tyrone, allow the microphone, and hold the mic button. If the mic still isn't
+  offered, type in the text box instead.
+- **Afterwards:** close that Chrome window, then
+  `Remove-Item -Recurse -Force "$env:TEMP\sg-demo-chrome"`.
+
+**Firewall on the laptop (optional, admin PowerShell).** Windows treats this home network as
+**Public**, and existing "Allow" rules already let any device on it reach Python 3.14 and
+Node.js. So in `-Lan` mode the demo is reachable from the whole home network, not just the
+other PC. To allow only the other PC while filming:
+
+```powershell
+# Before filming: switch off the broad python/node rules (remembered in a file), allow only the other PC.
+$apps = "C:\Users\Kin\AppData\Local\Python\pythoncore-3.14-64\python.exe", "C:\Program Files\nodejs\node.exe"
+$rules = Get-NetFirewallApplicationFilter | Where-Object { $apps -contains $_.Program } | Get-NetFirewallRule |
+    Where-Object { $_.Direction -eq "Inbound" -and $_.Action -eq "Allow" -and $_.Enabled -eq "True" }
+$rules.Name | Set-Content "$env:TEMP\sg-demo-firewall-rules.txt"
+$rules | Disable-NetFirewallRule
+New-NetFirewallRule -DisplayName "SG demo (temporary)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3000,8000 -RemoteAddress 192.168.0.112 -Profile Any
+
+# After filming: remove the temporary rule and switch the remembered rules back on.
+Remove-NetFirewallRule -DisplayName "SG demo (temporary)"
+Get-Content "$env:TEMP\sg-demo-firewall-rules.txt" | ForEach-Object { Enable-NetFirewallRule -Name $_ }
+Remove-Item "$env:TEMP\sg-demo-firewall-rules.txt"
+```
+
+If Windows shows an "allow access" prompt for Python or Node while the demo starts, press
+**Cancel**. Pressing Cancel can add a *Block* rule, which also blocks the other PC. If the other
+PC can't connect, or once you've finished, look for new block rules and delete them:
+`Get-NetFirewallRule -Direction Inbound -Action Block | Where-Object DisplayName -match "python|node"`
+(then `| Remove-NetFirewallRule`).
 
 ## Run everything locally (dev)
 

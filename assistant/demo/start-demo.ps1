@@ -19,9 +19,19 @@
 
   Run from anywhere:
     powershell -ExecutionPolicy Bypass -File assistant\demo\start-demo.ps1
+
+  -Lan (off by default, for filming with a second PC): the backend and the
+  dashboard listen on this PC's home-LAN address instead of 127.0.0.1, so
+  another PC on the home network can open the assistant page. The MCP server
+  and the agent stay on 127.0.0.1. Only private addresses (192.168.x.x,
+  10.x.x.x, 172.16-31.x.x) are accepted; pass -LanIp if there is more than one.
+  Everything is closed again by stop-demo.ps1. See "Filming with two PCs" in
+  assistant\README.md for the other PC and the firewall.
 #>
 param(
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [switch]$Lan,
+    [string]$LanIp
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,10 +52,10 @@ function Fail([string]$message) {
     exit 1
 }
 
-function Test-PortInUse([int]$port) {
+function Test-PortInUse([int]$port, [string]$address = "127.0.0.1") {
     $client = New-Object System.Net.Sockets.TcpClient
     try {
-        $client.Connect("127.0.0.1", $port)
+        $client.Connect($address, $port)
         return $true
     } catch {
         return $false
@@ -124,8 +134,35 @@ if (-not (Test-Path (Join-Path $RepoRoot "assistant\agent\.env"))) {
 if (Test-Path $StateFile) {
     Fail "a demo already seems to be running ($StateFile exists). Run stop-demo.ps1 first."
 }
+function Test-PrivateIPv4([string]$address) {
+    $ip = $null
+    if (-not [System.Net.IPAddress]::TryParse($address, [ref]$ip)) { return $false }
+    if ($ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { return $false }
+    $b = $ip.GetAddressBytes()
+    return ($b[0] -eq 10) -or ($b[0] -eq 192 -and $b[1] -eq 168) -or ($b[0] -eq 172 -and $b[1] -ge 16 -and $b[1] -le 31)
+}
+
+# Backend and dashboard listen here: 127.0.0.1 normally, the home-LAN address with -Lan.
+$WebHost = "127.0.0.1"
+if ($Lan) {
+    if (-not $LanIp) {
+        $found = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { (Test-PrivateIPv4 $_.IPAddress) -and $_.PrefixOrigin -ne "WellKnown" } |
+            Select-Object -ExpandProperty IPAddress -Unique)
+        if ($found.Count -ne 1) { Fail "-Lan: found $($found.Count) private addresses ($($found -join ', ')); pass -LanIp <address>" }
+        $LanIp = $found[0]
+    }
+    if (-not (Test-PrivateIPv4 $LanIp)) { Fail "-Lan: $LanIp is not a private home-LAN address" }
+    $WebHost = $LanIp
+} elseif ($LanIp) {
+    Fail "-LanIp only works together with -Lan"
+}
+$BackendUrl = "http://$($WebHost):$($Ports.backend)"
+$DashboardUrl = "http://$($WebHost):$($Ports.dashboard)"
+
 foreach ($name in $Ports.Keys) {
     if (Test-PortInUse $Ports[$name]) { Fail "port $($Ports[$name]) ($name) is already in use on 127.0.0.1" }
+    if ($Lan -and (Test-PortInUse $Ports[$name] $WebHost)) { Fail "port $($Ports[$name]) ($name) is already in use on $WebHost" }
 }
 
 $tokenLine = Select-String -Path (Join-Path $RepoRoot "assistant\mcp_server\.env") -Pattern '^SG_ASSISTANT_TOKEN=(.+)$' |
@@ -161,18 +198,18 @@ Invoke-Seed "seed-notes" $AgentPython @("--notes-db", "`"$NotesDb`"")
 
 Write-Host "Starting services ..."
 try {
-    Start-DemoProcess "backend" $MainPython @("-m", "uvicorn", "server.main:app", "--host", "127.0.0.1", "--port", "$($Ports.backend)") $RepoRoot @{
+    Start-DemoProcess "backend" $MainPython @("-m", "uvicorn", "server.main:app", "--host", $WebHost, "--port", "$($Ports.backend)") $RepoRoot @{
         SECRET_GROUNDS_DB_PATH      = $ShopDb
         SECRET_GROUNDS_BACKUP_DIR   = (Join-Path $RunDir "backups")
         SECRET_GROUNDS_SERVER_LOG   = (Join-Path $RunDir "backend.log")
-        SECRET_GROUNDS_CORS_ORIGINS = "http://127.0.0.1:$($Ports.dashboard)"
+        SECRET_GROUNDS_CORS_ORIGINS = $DashboardUrl
         SG_ASSISTANT_TOKEN          = $AssistantToken
         SG_ASSISTANT_USERNAME       = "assistant"
     } | Out-Null
-    Wait-Http "backend" "http://127.0.0.1:$($Ports.backend)/healthz" 60
+    Wait-Http "backend" "$BackendUrl/healthz" 60
 
     Start-DemoProcess "mcp" $McpPython @("-m", "sg_assistant.server") (Join-Path $RepoRoot "assistant\mcp_server") @{
-        SG_BACKEND_URL       = "http://127.0.0.1:$($Ports.backend)"
+        SG_BACKEND_URL       = $BackendUrl
         SG_MCP_PORT          = "$($Ports.mcp)"
         SG_ASSISTANT_ACTIONS = "true"
     } | Out-Null
@@ -187,7 +224,7 @@ try {
     Wait-Http "agent" "http://127.0.0.1:$($Ports.agent)/health" 90
 
     Start-DemoProcess "client" $MainPython @("-m", "client.client") $RepoRoot @{
-        SECRET_GROUNDS_SERVER_URL               = "http://127.0.0.1:$($Ports.backend)"
+        SECRET_GROUNDS_SERVER_URL               = $BackendUrl
         SECRET_GROUNDS_TEST_MODE                = "true"
         ENABLE_LOCK_SCREEN                      = "false"
         SECRET_GROUNDS_RECOVERY_PATH            = (Join-Path $RunDir "client-recovery.json")
@@ -196,13 +233,13 @@ try {
         SECRET_GROUNDS_EXPIRATION_SOUND_ENABLED = "false"
     } | Out-Null
 
-    Start-DemoProcess "dashboard" "node" @("`"$NextBin`"", "dev", "-H", "127.0.0.1", "-p", "$($Ports.dashboard)") (Join-Path $RepoRoot "dashboard") @{
+    Start-DemoProcess "dashboard" "node" @("`"$NextBin`"", "dev", "-H", $WebHost, "-p", "$($Ports.dashboard)") (Join-Path $RepoRoot "dashboard") @{
         NEXT_PUBLIC_ASSISTANT_ENABLED = "true"
-        NEXT_PUBLIC_FASTAPI_BASE_URL  = "http://127.0.0.1:$($Ports.backend)"
-        ASSISTANT_BACKEND_URL         = "http://127.0.0.1:$($Ports.backend)"
+        NEXT_PUBLIC_FASTAPI_BASE_URL  = $BackendUrl
+        ASSISTANT_BACKEND_URL         = $BackendUrl
         ASSISTANT_AGENT_URL           = "http://127.0.0.1:$($Ports.agent)"
     } | Out-Null
-    Wait-Http "dashboard" "http://127.0.0.1:$($Ports.dashboard)/login" 180
+    Wait-Http "dashboard" "$DashboardUrl/login" 180
 } catch {
     Write-Host "start-demo: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "Stopping what was started ..."
@@ -210,11 +247,16 @@ try {
     exit 1
 }
 
-$url = "http://127.0.0.1:$($Ports.dashboard)/assistant"
+$url = "$DashboardUrl/assistant"
 Write-Host ""
 Write-Host "Demo is running." -ForegroundColor Green
-Write-Host "  Open $url and sign in as Joy (the cashier with the open shift)."
+Write-Host "  Open $url and sign in as Tyrone (password; has the open shift)."
 Write-Host "  PC-01 is this laptop's test client; messages pop up here."
+if ($Lan) {
+    Write-Host "  LAN mode: backend and dashboard are reachable on $WebHost from the home network." -ForegroundColor Yellow
+    Write-Host "  The mic doesn't work on this PC's page in LAN mode; speak on the other PC. In PowerShell there, run:"
+    Write-Host "    & `"C:\Program Files\Google\Chrome\Application\chrome.exe`" --user-data-dir=`"`$env:TEMP\sg-demo-chrome`" --unsafely-treat-insecure-origin-as-secure=$DashboardUrl $url"
+}
 Write-Host "  Logs: $RunDir"
 Write-Host "  Stop: powershell -ExecutionPolicy Bypass -File assistant\demo\stop-demo.ps1"
 if (-not $NoBrowser) { Start-Process $url }

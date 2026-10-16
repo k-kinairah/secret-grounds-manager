@@ -8,8 +8,9 @@ Two parts, each run with the venv that has its dependencies:
     # One handover note (agent venv, it uses the agent's notes store):
     assistant\agent\.venv\Scripts\python.exe assistant\demo\seed_demo.py --notes-db $env:TEMP\sg-demo\handover.sqlite3
 
-Everything is made up: staff, members, sales. Nothing is read from a real
-database. The shop data is created through the backend's own code (schema
+Members and sales are made up; the staff are the default family operators the
+backend always creates (Tyrone has the open shift, Rogene left the handover
+note). Nothing is read from a real database. The shop data is created through the backend's own code (schema
 setup, repositories and the session service), so it looks exactly like real
 use: a fake PC connection acknowledges commands while seeding, and the clock
 is moved back for the past week's sales.
@@ -38,9 +39,9 @@ SHOP_TZ = ZoneInfo("Asia/Manila")
 RANDOM_SEED = 20261023
 PROTECTED_DIRS = ("data", "backups", "server")
 
-ADMIN_ID = "operator_admin"
-CASHIERS = [("joy", "Joy"), ("mark", "Mark")]
-SHIFT_CASHIER = "joy"
+# Staff are the default family operators the backend always creates.
+SHIFT_OPERATOR = "operator_tyrone"   # has the open shift
+NOTE_AUTHOR_OPERATOR = "operator_rogene"   # wrote the handover note, works the evenings
 OPENING_CASH = Decimal("1000.00")
 MEMBER_PIN = "1234"
 
@@ -66,7 +67,7 @@ STANDARD_RATES = [("rate-standard-guest-5", 2), ("rate-standard-guest-10", 4), (
 VIP_RATES = [("rate-vip-guest-1hr", 3), ("rate-vip-guest-2hr", 2), ("rate-vip-guest-3hr", 1)]
 
 HANDOVER_NOTE = ("PC 9's headset mic crackles. I swapped in the spare from the drawer; "
-                 "the old one needs replacing.", "Mark")
+                 "the old one needs replacing.", "Rogene")
 
 
 def refuse_unless_new(raw: str) -> Path:
@@ -129,7 +130,7 @@ def seed_shop(db_path: Path) -> None:
 
     import server.main as main
     from server.schemas import (
-        MemberCreateRequest, MemberPurchaseRequest, OperatorCreateRequest, PaymentCreateRequest,
+        MemberCreateRequest, MemberPurchaseRequest, PaymentCreateRequest,
         PCRecord, ShiftOpenRequest, UserCreateRequest,
     )
     from uuid import uuid4
@@ -148,16 +149,9 @@ def seed_shop(db_path: Path) -> None:
         main.pc_registry[pc] = PCRecord(pc_name=pc, ip_address="127.0.0.1", status="online", last_seen=now)
 
     users = main.user_repository
-    operators = main.operator_repository
     members = main.member_repository
-    admin = users.get_user(ADMIN_ID)
 
-    # Staff: two demo cashiers next to the default operators the schema setup creates.
-    staff = {}
-    for username, name in CASHIERS:
-        created = operators.create_operator(
-            OperatorCreateRequest(username=username, display_name=name, access_method="quick", role="cashier"), admin)
-        staff[username] = users.get_user(created.operator_id)
+    staff = {"shift": users.get_user(SHIFT_OPERATOR), "evening": users.get_user(NOTE_AUTHOR_OPERATOR)}
     # The assistant's service account (not an operator, so not on the login picker).
     users.create_user(UserCreateRequest(username="assistant", display_name="Assistant",
                                         password=str(uuid4()), role="cashier"))
@@ -168,7 +162,7 @@ def seed_shop(db_path: Path) -> None:
         return PaymentCreateRequest(payment_method="cash", amount=amount, cash_received=cash_for(amount))
 
     def cashier_at(moment: datetime):
-        return staff["joy"] if moment.astimezone(SHOP_TZ).hour < 16 else staff["mark"]
+        return staff["shift"] if moment.astimezone(SHOP_TZ).hour < 16 else staff["evening"]
 
     rate_price = {r.rate_id: (r.duration_seconds, Decimal(str(r.price))) for r in main.rate_repository.list_rates()}
 
@@ -234,7 +228,7 @@ def seed_shop(db_path: Path) -> None:
         moment, n, kind, info = pending.pop(0)
         if not shift_opened and moment >= shift_start:
             clock.at = shift_start
-            main.shift_repository.open_shift(ShiftOpenRequest(opening_cash=OPENING_CASH), staff[SHIFT_CASHIER])
+            main.shift_repository.open_shift(ShiftOpenRequest(opening_cash=OPENING_CASH), staff["shift"])
             shift_opened = True
         clock.at = moment
         if kind == "end":
@@ -242,7 +236,7 @@ def seed_shop(db_path: Path) -> None:
             continue
         if service.repository.get_active_session_for_pc(info["pc"]) is not None:
             continue  # a member session took this PC; skip this walk-in
-        actor = staff[SHIFT_CASHIER] if shift_opened and moment >= shift_start else cashier_at(moment)
+        actor = staff["shift"] if shift_opened and moment >= shift_start else cashier_at(moment)
         if kind == "member":
             response = asyncio.run(service.start_member_session(
                 info["pc"], info["username"], int((info["end"] - moment).total_seconds()), MEMBER_PIN, actor.user_id))
@@ -255,24 +249,24 @@ def seed_shop(db_path: Path) -> None:
 
     if not shift_opened:
         clock.at = shift_start
-        main.shift_repository.open_shift(ShiftOpenRequest(opening_cash=OPENING_CASH), staff[SHIFT_CASHIER])
+        main.shift_repository.open_shift(ShiftOpenRequest(opening_cash=OPENING_CASH), staff["shift"])
 
     # Live right now: a walk-in and a member in the background, and PC-01 about to run out.
     # PC-01 is the live test client: it picks this session up from the backend when it
     # connects, so "add one hour to PC one" works on camera.
-    joy = staff[SHIFT_CASHIER].user_id
+    on_shift = staff["shift"].user_id
     clock.at = now - timedelta(minutes=20)
     asyncio.run(service.start_prepaid_session("PC-03", pay(Decimal("15.00"), 900001),
-                                              rate_id="rate-standard-guest-15", actor_user_id=joy))
+                                              rate_id="rate-standard-guest-15", actor_user_id=on_shift))
     clock.at = now - timedelta(minutes=35)
-    asyncio.run(service.start_member_session("PC-07", "andrea.santos", 2 * 3600, MEMBER_PIN, joy))
+    asyncio.run(service.start_member_session("PC-07", "andrea.santos", 2 * 3600, MEMBER_PIN, on_shift))
     clock.at = now - timedelta(minutes=45)  # about 15 minutes left at seeding, ~10 when the demo is up
     asyncio.run(service.start_prepaid_session("PC-01", pay(Decimal("15.00"), 900002),
-                                              rate_id="rate-standard-guest-15", actor_user_id=joy))
+                                              rate_id="rate-standard-guest-15", actor_user_id=on_shift))
 
     main.pc_registry.clear()
     clock.at = now
-    summarize(main, staff[SHIFT_CASHIER])
+    summarize(main, staff["shift"])
 
 
 def summarize(main, cashier) -> None:
