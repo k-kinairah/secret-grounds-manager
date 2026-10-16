@@ -23,7 +23,6 @@ import {
   Sparkles,
   StickyNote,
   TriangleAlert,
-  User,
   Volume2,
   WifiOff,
   Wrench,
@@ -69,6 +68,8 @@ type Recognition = {
 type RecognitionConstructor = new () => Recognition;
 
 type Status = "idle" | "listening" | "thinking" | "speaking" | "error";
+// How the mic button looks: a status, or "unavailable" (no mic in this browser/page).
+type MicLook = Status | "unavailable";
 type ActionState = "pending" | "running" | "done" | "failed" | "cancelled" | "expired";
 type ChatMessage = {
   id: number;
@@ -153,7 +154,7 @@ const ACTION_STATE_LABELS: Record<ActionState, string> = {
   done: "Done",
   expired: "Expired, ask again",
   failed: "Didn't go through",
-  pending: "Waiting for you",
+  pending: "Needs OK",
   running: "Sending…"
 };
 type VoiceSupport = { mic: "ok" | "unsupported" | "insecure"; speech: boolean };
@@ -625,7 +626,7 @@ export function AssistantConsole() {
       : support.mic === "insecure"
         ? "The mic needs https:// or localhost. Type below instead."
         : "Voice input isn't supported in this browser (try Chrome or Edge). Type below instead.";
-  const micState: Status = support.mic === "ok" ? status : "error";
+  const micState: MicLook = support.mic === "ok" ? status : "unavailable";
 
   return (
     <section
@@ -696,19 +697,8 @@ export function AssistantConsole() {
             ) : null}
             {messages.map((message) => (
               <li className={message.role === "user" ? styles.userRow : styles.assistantRow} key={message.id}>
-                <span
-                  aria-hidden="true"
-                  className={message.role === "user" ? styles.userAvatar : styles.assistantAvatar}
-                >
-                  {message.role === "user" ? <User /> : <Bot />}
-                </span>
                 <div className={message.role === "user" ? styles.userBubble : styles.assistantBubble}>
-                  <span className={styles.speaker}>
-                    {message.role === "user" ? "You" : "Assistant"}
-                    <time className={styles.time} dateTime={new Date(message.at).toISOString()}>
-                      {shopTime(message.at)}
-                    </time>
-                  </span>
+                  <span className={styles.speaker}>{message.role === "user" ? "You" : "Assistant"}</span>
                   <p>{message.text}</p>
                   {message.tools && message.tools.length > 0 ? (
                     <div className={styles.chips}>
@@ -732,13 +722,13 @@ export function AssistantConsole() {
                   ) : null}
                   {message.error ? <span className={styles.errorDetail}>{message.error}</span> : null}
                 </div>
+                <time className={styles.time} dateTime={new Date(message.at).toISOString()}>
+                  {shopTime(message.at)}
+                </time>
               </li>
             ))}
             {interim ? (
               <li className={styles.userRow}>
-                <span aria-hidden="true" className={styles.userAvatar}>
-                  <User />
-                </span>
                 <div className={`${styles.userBubble} ${styles.interim}`}>
                   <span className={styles.speaker}>You</span>
                   <p>{interim}</p>
@@ -852,13 +842,14 @@ export function AssistantConsole() {
   );
 }
 
-function MicStateIcon({ state }: { state: Status }) {
+function MicStateIcon({ state }: { state: MicLook }) {
   switch (state) {
     case "thinking":
       return <LoaderCircle aria-hidden="true" className={styles.spin} />;
     case "speaking":
       return <Volume2 aria-hidden="true" />;
     case "error":
+    case "unavailable":
       return <MicOff aria-hidden="true" />;
     default:
       return <Mic aria-hidden="true" />;
@@ -969,7 +960,11 @@ function ActionCard({
   const results = outcome?.targets ?? [];
   const skipped = action.details.skipped_offline ?? [];
   return (
-    <div className={`${styles.actionCard} ${styles[`action_${state}`]}`} role="group" aria-label="Prepared action">
+    <div
+      aria-label="Prepared action"
+      className={`${styles.actionCard} ${action.kind === "shutdown_pcs" ? styles.tone_rose : styles.tone_violet} ${styles[`action_${state}`]}`}
+      role="group"
+    >
       <div className={styles.actionHeader}>
         <span className={styles.actionKind}>
           {ACTION_KIND_ICONS[action.kind] ?? <Sparkles aria-hidden="true" />}
