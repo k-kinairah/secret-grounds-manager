@@ -13,6 +13,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -24,8 +25,8 @@ from strands.tools.mcp import MCPClient
 
 from sg_agent.actions import ActionError, PendingAction, describe_outcome, extract_proposals, new_pending_action
 from sg_agent.handover import HandoverStore, make_handover_tools
-from sg_agent.prompt import ACTIONS_PROMPT, HANDOVER_PROMPT, SHIFT_CHECK_PROMPT, SYSTEM_PROMPT
-from sg_agent.shift_check import make_shift_tools
+from sg_agent.prompt import ACTIONS_PROMPT, DRAWER_CHECK_PROMPT, HANDOVER_PROMPT, SYSTEM_PROMPT
+from sg_agent.drawer_check import make_drawer_tools
 
 SHOP_TZ = ZoneInfo("Asia/Manila")
 
@@ -105,8 +106,11 @@ class ChatService:
         max_sessions: int = 200,
         now: Callable[[], datetime] = lambda: datetime.now(SHOP_TZ),
         handover_store: HandoverStore | None = None,
+        drawer_float: Decimal | None = None,
     ) -> None:
         self.handover_store = handover_store
+        # Fixed starting float for the drawer check (SG_AGENT_DRAWER_FLOAT); None = ask each time.
+        self.drawer_float = drawer_float
         self._model_factory = model_factory
         self._model: Model | None = None
         self._tool_source = tool_source
@@ -142,7 +146,7 @@ class ChatService:
         message: str,
         operator: dict[str, Any] | None = None,
         on_tool: Callable[[str], None] | None = None,
-        shift: dict[str, Any] | None = None,
+        duty: dict[str, Any] | None = None,
     ) -> ChatResult:
         session = self._session(session_id)
         async with session.lock:
@@ -162,8 +166,8 @@ class ChatService:
             # Built once per message: it also records which handover notes this
             # operator has now been given, so a retry must not rebuild it.
             system_prompt = self._system_prompt(actions_enabled=_has_propose_tools(tools), operator=operator)
-            if shift is not None:
-                system_prompt += "\n" + SHIFT_CHECK_PROMPT
+            if duty is not None:
+                system_prompt += "\n" + DRAWER_CHECK_PROMPT
 
             for attempt in (1, 2):
                 history = _history_messages(session.turns)
@@ -172,9 +176,9 @@ class ChatService:
                 if self.handover_store is not None:
                     # Bound to the dashboard-verified operator; the model can't choose the author.
                     agent_tools += make_handover_tools(self.handover_store, author)
-                if shift is not None:
-                    # Bound to the operator's own shift as fetched by the dashboard.
-                    agent_tools += make_shift_tools(shift)
+                if duty is not None:
+                    # Bound to the on-duty summary the dashboard fetched with the operator's login.
+                    agent_tools += make_drawer_tools(duty, self.drawer_float)
                 agent = Agent(
                     model=self._model,
                     tools=agent_tools,

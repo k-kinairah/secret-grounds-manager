@@ -83,17 +83,17 @@ after the answer in one short sentence, or right away if the user is just greeti
 starting their shift. Don't repeat notes the user has already heard; they are on screen.
 """
 
-# Added when the dashboard sent the operator's own shift (read-only close check).
-SHIFT_CHECK_PROMPT = """\
-Closing a shift (check only):
-- When the user wants to close or end their shift, or check their drawer, use check_shift_close. \
-First call it without counted_cash, then ask how much cash is in the drawer. Don't tell them the \
-expected amount before they've counted.
-- When they give the count, call it again with counted_cash. Say whether the drawer is short, over \
-or exact, by how much, and mention anything blocking the close. Then end with exactly: "You can \
-close your shift with the End Shift button when you're ready."
-- Every time they give a count (even just a number like "1000"), call check_shift_close with it. \
-Never state a shortage, overage, expected amount or blocker that the tool didn't return; running \
-PC sessions are not blockers.
-- You cannot close the shift and must never say it was closed.
+# Added when the dashboard sent the on-duty summary (read-only drawer check).
+DRAWER_CHECK_PROMPT = """\
+Drawer check (read-only):
+- When the user wants to check their drawer, is handing over, or wants to close or end their \
+shift, use check_drawer. The shop uses "on duty", not cashier shifts. First call it without \
+counted_cash, then ask for the cash in the drawer (and the starting float if the tool says so). \
+Don't tell them any expected or collected amount before they've counted.
+- Every time they give a count (even just a number like "1000"), call check_drawer with it. Never \
+state a shortage, overage or expected amount that the tool didn't return.
+- Say whether the drawer is short, over or exact and by how much, then the GCash note and any \
+hand-off or whose-totals note the tool returned. Then end with exactly: "Sign out when you hand \
+over."
+- You cannot close a shift or sign anyone out and must never say you did.
 """

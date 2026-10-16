@@ -114,7 +114,7 @@ const SUGGESTIONS = [
   "Which sessions are running out soon?",
   "Who's playing right now?",
   "Any notes from the last shift?",
-  "Close my shift"
+  "Check my drawer"
 ];
 
 const CAPABILITIES: { icon: ReactNode; text: string; confirm?: boolean }[] = [
@@ -125,7 +125,7 @@ const CAPABILITIES: { icon: ReactNode; text: string; confirm?: boolean }[] = [
   { icon: <Clock aria-hidden="true" />, text: "Add time (billed later)", confirm: true },
   { icon: <Power aria-hidden="true" />, text: "Shut down idle PCs (Admin)", confirm: true },
   { icon: <StickyNote aria-hidden="true" />, text: "Leave and read handover notes" },
-  { icon: <ClipboardCheck aria-hidden="true" />, text: "Check the drawer before closing" }
+  { icon: <ClipboardCheck aria-hidden="true" />, text: "Check the drawer when handing over" }
 ];
 
 const SHOP_TIME = new Intl.DateTimeFormat("en-PH", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Manila" });

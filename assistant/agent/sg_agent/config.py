@@ -5,6 +5,7 @@ real environment variables always win.
 """
 
 import os
+from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,6 +67,8 @@ class Settings:
     max_sessions: int
     # Shift handover notes file; None when SG_AGENT_NOTES_DB=off.
     notes_db: Path | None = None
+    # Fixed starting float for the drawer check (SG_AGENT_DRAWER_FLOAT); None = ask each time.
+    drawer_float: Decimal | None = None
 
 
 def get_settings() -> Settings:
@@ -93,7 +96,21 @@ def get_settings() -> Settings:
         max_turns=int(_env("SG_AGENT_MAX_TURNS", str(DEFAULT_MAX_TURNS))),
         max_sessions=int(_env("SG_AGENT_MAX_SESSIONS", str(DEFAULT_MAX_SESSIONS))),
         notes_db=_notes_db(),
+        drawer_float=_drawer_float(),
     )
+
+
+def _drawer_float() -> Decimal | None:
+    configured = _env("SG_AGENT_DRAWER_FLOAT").replace(",", "")
+    if not configured:
+        return None
+    try:
+        value = Decimal(configured).quantize(Decimal("0.01"))
+    except InvalidOperation as error:
+        raise ValueError(f"SG_AGENT_DRAWER_FLOAT must be a peso amount, e.g. 200; got {configured!r}") from error
+    if value < 0:
+        raise ValueError("SG_AGENT_DRAWER_FLOAT can't be negative")
+    return value
 
 
 def _notes_db() -> Path | None:

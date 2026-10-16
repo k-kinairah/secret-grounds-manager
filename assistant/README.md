@@ -178,30 +178,35 @@ The next operator hears about it, in a new conversation, even after the agent re
 | `GET /api/assistant/handover` (dashboard) → agent `GET /handover` | Open notes for the panel (login required) |
 | `POST /api/assistant/handover/resolve` (dashboard) → agent `POST /handover/resolve` | Mark a note done, as the signed-in operator |
 
-## Close-shift check (phase 3, read-only)
+## Drawer check (on duty, read-only)
 
-"Close my shift" starts a short check. The assistant asks how much cash is in the drawer,
-compares it with the expected cash, says whether the drawer is short, over or exact, and
-mentions anything that would block closing. It **never closes the shift**. It ends with
-"You can close your shift with the End Shift button when you're ready."
+The shop uses **on duty**, not cashier shifts: signing in makes you the operator on duty, and
+the backend keeps your running totals until you sign out. Cashier shifts (opening cash / End
+Shift) have been optional since July and the dashboard no longer opens them.
 
-- **Whose shift:** on every message the dashboard server fetches the signed-in operator's
-  own `GET /shifts/current`, using their login cookie, and passes a summary to the agent as
-  `shift`. The `assistant` token account is never used, and it can't read other cashiers'
-  shifts anyway. If the fetch fails, `shift` is left out, and the agent has no close-check
-  tool for that message.
-- **Agent tool:** `check_shift_close(counted_cash?)` is bound to that summary, so the model
-  can't pick a different shift or invent totals. There is no tool that closes a shift.
-- **Blind count:** the first call (without `counted_cash`) returns only whether a shift is
-  open and any blockers. The expected amount comes back only after the operator has given
-  their count, so the count isn't anchored to the expected number.
-- **Blockers:** sessions still waiting to be settled and payments needing review. The
-  backend refuses a cashier close while either is non-zero; an admin or owner can still
-  close (with a reason if it's someone else's shift).
-- **Times:** the shift's opening time is given to the model already in shop time (Manila). In
-  testing, the model read the raw UTC time as local time and said "yesterday at 6:03 PM".
-- **Why "End Shift":** `/shifts` is an admin-only page in the dashboard; cashiers close
-  from the **End Shift** button, so that's where the assistant points.
+"Check my drawer", "I'm handing over" or "close my shift" starts a short, read-only check. The
+assistant asks how much cash is in the drawer (and the starting float, unless it's fixed),
+compares it with the starting float plus the cash collected while the operator has been on
+duty, says whether the drawer is short, over or exact, reports GCash separately, and ends with
+"Sign out when you hand over." **It never changes anything** -- there is no tool for that.
+
+- **Whose totals:** on every message the dashboard server reads `GET /operators/current` and
+  `GET /dashboard/operator-sale` with the signed-in operator's login cookie and passes a summary
+  to the agent as `duty`. The assistant token account gets no extra rights. If it can't be read,
+  `duty` is left out and the agent has no drawer tool for that message. If the person asking
+  isn't the operator on duty, the assistant says whose totals they are.
+- **Agent tool:** `check_drawer(counted_cash?, starting_float?)`, bound to that summary, so the
+  model can't pick other totals or invent them.
+- **Blind count:** the first call returns only who is on duty and what to ask. The expected
+  amount comes back only after the count. The page's "On duty" card shows the payment count and
+  GCash, not cash, for the same reason.
+- **Starting float:** set `SG_AGENT_DRAWER_FLOAT` (e.g. `200`) in `assistant/agent/.env` for a
+  fixed float; leave it unset and the assistant asks each time.
+- **Hand-offs:** the running total covers only this operator's payments since they came on duty.
+  When the drawer is over, or someone else is asking, the assistant mentions that the drawer may
+  also hold another operator's cash if they changed operator without signing out.
+- **"Since":** the time comes from `/operators/current` (the last on-duty selection). After a
+  Change Operator round trip it can be later than when the running total started.
 
 ## Setup
 
@@ -268,6 +273,7 @@ backend.
 | `SG_AGENT_MAX_TURNS` / `SG_AGENT_MAX_SESSIONS` | `20` / `200` | Conversation memory per session, and the number of sessions kept (least recently used are dropped first). |
 | `SG_AGENT_MAX_TOKENS` / `SG_AGENT_TEMPERATURE` | `300` / provider default | Reply length and sampling. Spoken replies are 1–3 sentences, so 300 is plenty. |
 | `SG_AGENT_NOTES_DB` | `assistant/agent/data/handover.sqlite3` | Shift handover notes file; `off` disables notes. |
+| `SG_AGENT_DRAWER_FLOAT` | (unset) | Fixed starting float for the drawer check, e.g. `200`; unset = ask each time. |
 
 ### Model providers
 
@@ -544,7 +550,7 @@ cd assistant\agent; .\.venv\Scripts\python.exe -m pytest; cd ..\..
 .\.venv\Scripts\python.exe tests\smoke_assistant_token_auth.py
 
 # Dashboard proxy route + helpers (fetch stubbed)
-cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npx tsx src\tests\assistantShutdown.test.ts; npx tsx src\tests\assistantHandover.test.ts; npx tsx src\tests\assistantStream.test.ts; npx tsx src\tests\assistantShift.test.ts; npm run typecheck; npm test
+cd dashboard; npx tsx src\tests\assistant.test.ts; npx tsx src\tests\assistantActions.test.ts; npx tsx src\tests\assistantShutdown.test.ts; npx tsx src\tests\assistantHandover.test.ts; npx tsx src\tests\assistantStream.test.ts; npx tsx src\tests\assistantDuty.test.ts; npm run typecheck; npm test
 ```
 
 ## Latency and model choice

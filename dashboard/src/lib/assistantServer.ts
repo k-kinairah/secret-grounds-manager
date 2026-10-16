@@ -131,44 +131,45 @@ async function callAgent(path: string, payload: Record<string, unknown>): Promis
   });
 }
 
-// Step (e): the signed-in operator's OWN open shift, read with their login
-// (GET /shifts/current), so the read-only close check works on exactly their
-// shift without giving the assistant account any extra rights. Omitted if
-// it can't be read; {open: false} if they have no shift open.
-async function operatorShift(request: NextRequest): Promise<Record<string, unknown> | undefined> {
+// Drawer check: who is on duty and their running totals, read with the
+// signed-in operator's own login (GET /operators/current and
+// GET /dashboard/operator-sale), so the read-only check needs no extra rights
+// for the assistant account. Omitted if it can't be read; {on_duty: false} if
+// nobody is on duty.
+async function operatorDuty(request: NextRequest, user: BackendUser): Promise<Record<string, unknown> | undefined> {
   const session = request.cookies.get(AUTH_COOKIE_NAME)?.value;
   if (!session) {
     return undefined;
   }
-  try {
-    const response = await fetch(`${backendBaseUrl()}/shifts/current`, {
+  const read = async (path: string): Promise<unknown> => {
+    const response = await fetch(`${backendBaseUrl()}${path}`, {
       cache: "no-store",
       headers: { Cookie: `${AUTH_COOKIE_NAME}=${session}` },
       signal: AbortSignal.timeout(AUTH_TIMEOUT_MS)
     });
     if (!response.ok) {
+      throw new Error(`${path} ${response.status}`);
+    }
+    return response.json() as Promise<unknown>;
+  };
+  try {
+    const [current, sale] = await Promise.all([read("/operators/current"), read("/dashboard/operator-sale")]);
+    if (!isRecord(current) || !("operator" in current) || !isRecord(sale) || !("payment_count" in sale)) {
       return undefined;
     }
-    const detail = (await response.json()) as unknown;
-    if (detail === null) {
-      return { open: false };
+    const operator = isRecord(current.operator) ? current.operator : null;
+    if (!operator) {
+      return { on_duty: false };
     }
-    if (!isRecord(detail) || !isRecord(detail.shift) || !isRecord(detail.totals)) {
-      return undefined;
-    }
-    const { shift, totals } = detail;
     const text = (value: unknown) => (typeof value === "string" || typeof value === "number" ? String(value) : undefined);
-    const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
     return {
-      cashier_name: text(shift.cashier_name),
-      expected_cash: text(totals.expected_cash),
-      open: shift.status === "open",
-      opened_at: text(shift.opened_at),
-      opening_cash: text(shift.opening_cash),
-      outstanding_unsettled_balance: text(totals.outstanding_unsettled_balance),
-      payment_count: count(totals.payment_count),
-      review_required_payments: count(totals.review_required_payments),
-      settlement_pending_sessions: count(totals.settlement_pending_sessions)
+      asked_by_on_duty_operator: operator.user_id === user.user_id,
+      cash_collected: text(sale.cash_payments),
+      gcash_collected: text(sale.gcash_payments),
+      on_duty: true,
+      operator_name: text(operator.display_name),
+      payment_count: typeof sale.payment_count === "number" ? sale.payment_count : 0,
+      since: text(current.selected_at)
     };
   } catch {
     return undefined;
@@ -181,9 +182,9 @@ async function agentChatPayload(
   conversationId: string,
   message: string
 ): Promise<Record<string, unknown>> {
-  const shift = user.display_name ? await operatorShift(request) : undefined;
+  const duty = user.display_name ? await operatorDuty(request, user) : undefined;
   return {
-    ...(shift ? { shift } : {}),
+    ...(duty ? { duty } : {}),
     message,
     // Who is talking, as verified with the backend -- only used to phrase
     // replies; the backend still enforces every permission.

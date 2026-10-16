@@ -34,26 +34,25 @@ class Operator(BaseModel):
     is_admin_account: bool = False
 
 
-class ShiftSnapshot(BaseModel):
-    """The signed-in operator's OWN open shift, fetched by the dashboard with
-    their login (GET /shifts/current). Used only by the read-only close check."""
+class DutySnapshot(BaseModel):
+    """Who is on duty and their running totals, fetched by the dashboard with the
+    signed-in operator's login (GET /operators/current, GET /dashboard/operator-sale).
+    Used only by the read-only drawer check."""
 
-    open: bool
-    cashier_name: str | None = Field(default=None, max_length=80)
-    opened_at: str | None = Field(default=None, max_length=40)
-    opening_cash: str | None = Field(default=None, max_length=20)
-    expected_cash: str | None = Field(default=None, max_length=20)
+    on_duty: bool
+    operator_name: str | None = Field(default=None, max_length=80)
+    since: str | None = Field(default=None, max_length=40)
+    cash_collected: str | None = Field(default=None, max_length=20)
+    gcash_collected: str | None = Field(default=None, max_length=20)
     payment_count: int = 0
-    settlement_pending_sessions: int = 0
-    review_required_payments: int = 0
-    outstanding_unsettled_balance: str | None = Field(default=None, max_length=20)
+    asked_by_on_duty_operator: bool | None = None
 
 
 class ChatRequest(BaseModel):
     session_id: str = Field(..., min_length=1, max_length=100)
     message: str = Field(..., min_length=1, max_length=2000)
     operator: Operator | None = None
-    shift: ShiftSnapshot | None = None
+    duty: DutySnapshot | None = None
 
 
 class ChatResponse(BaseModel):
@@ -111,7 +110,7 @@ def create_app(service: ChatService, settings: Settings) -> FastAPI:
             request.session_id.strip(),
             request.message.strip(),
             operator=request.operator.model_dump() if request.operator else None,
-            shift=request.shift.model_dump() if request.shift else None,
+            duty=request.duty.model_dump() if request.duty else None,
         )
         return ChatResponse(
             reply=result.reply,
@@ -138,7 +137,7 @@ def create_app(service: ChatService, settings: Settings) -> FastAPI:
                     request.session_id.strip(),
                     request.message.strip(),
                     operator=request.operator.model_dump() if request.operator else None,
-                    shift=request.shift.model_dump() if request.shift else None,
+                    duty=request.duty.model_dump() if request.duty else None,
                     on_tool=on_tool,
                 )
                 final = ChatResponse(
@@ -237,6 +236,7 @@ def build_service(settings: Settings) -> ChatService:
         max_turns=settings.max_turns,
         max_sessions=settings.max_sessions,
         handover_store=HandoverStore(settings.notes_db) if settings.notes_db else None,
+        drawer_float=settings.drawer_float,
     )
 
 
