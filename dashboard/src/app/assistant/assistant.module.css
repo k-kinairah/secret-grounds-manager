@@ -1223,21 +1223,6 @@
   margin: 2px 0 0;
 }
 
-.shiftWarning {
-  align-items: center;
-  color: #fed7aa;
-  display: flex;
-  font-size: 14px;
-  font-weight: 700;
-  gap: 8px;
-  margin: 0;
-}
-
-.shiftWarning svg {
-  height: 16px;
-  width: 16px;
-}
-
 .capabilities {
   display: grid;
   gap: 9px;

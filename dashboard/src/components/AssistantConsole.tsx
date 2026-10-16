@@ -28,8 +28,7 @@ import {
   Wrench,
   X
 } from "lucide-react";
-import { fetchCurrentShift } from "@/lib/api";
-import type { CashierShiftDetail } from "@/lib/types";
+import { fetchCurrentOperator, fetchOperatorSale } from "@/lib/api";
 import {
   type ActionOutcome,
   type PendingAction,
@@ -134,6 +133,43 @@ const SHOP_TIME = new Intl.DateTimeFormat("en-PH", { hour: "numeric", minute: "2
 function shopTime(value: number | string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "" : SHOP_TIME.format(date);
+}
+
+const SHOP_DAY = new Intl.DateTimeFormat("en-PH", { day: "numeric", month: "short", timeZone: "Asia/Manila" });
+
+// "8:00 AM" today, "Oct 16, 8:00 AM" on an earlier day (shop time).
+function shopDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const sameDay = SHOP_DAY.format(date) === SHOP_DAY.format(new Date());
+  return sameDay ? SHOP_TIME.format(date) : `${SHOP_DAY.format(date)}, ${SHOP_TIME.format(date)}`;
+}
+
+function peso(value: string): string {
+  const amount = Number(value);
+  return Number.isFinite(amount)
+    ? `₱${amount.toLocaleString("en-PH", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
+    : value;
+}
+
+// Read-only: who is on duty (GET /operators/current) and their running totals
+// (GET /dashboard/operator-sale). Undefined when either can't be read.
+async function loadDuty(): Promise<DutyInfo | undefined> {
+  try {
+    const [current, sale] = await Promise.all([fetchCurrentOperator(), fetchOperatorSale()]);
+    const selectedAt = (current as { selected_at?: string | null }).selected_at ?? null;
+    if (!current.operator) {
+      return { gcash: null, operator: null, payments: null, since: null };
+    }
+    return {
+      gcash: sale.gcash_payments,
+      operator: current.operator.display_name,
+      payments: sale.payment_count,
+      since: selectedAt
+    };
+  } catch {
+    return undefined;
+  }
 }
 const TARGET_WORDS: Record<string, string> = {
   done: "done",
@@ -240,8 +276,8 @@ export function AssistantConsole() {
   const pendingRef = useRef<Pending | null>(null);
   const expiryTimerRef = useRef<number | null>(null);
   const busy = status === "thinking";
-  // Side panel: the signed-in operator's own shift (read-only; undefined = not available).
-  const [shift, setShift] = useState<CashierShiftDetail | null | undefined>(undefined);
+  // Side panel: who is on duty and what they've taken so far (read-only; undefined = not available).
+  const [duty, setDuty] = useState<DutyInfo | undefined>(undefined);
   // Wide screens: the console fills the window below whatever the shell shows above it.
   const consoleRef = useRef<HTMLElement | null>(null);
   const [fitHeight, setFitHeight] = useState<number | null>(null);
@@ -289,19 +325,15 @@ export function AssistantConsole() {
     };
   }, []);
 
-  function refreshShift() {
-    fetchCurrentShift()
-      .then((detail) => setShift(detail))
-      .catch(() => setShift(undefined));
+  function refreshDuty() {
+    void loadDuty().then(setDuty);
   }
 
   useEffect(() => {
     let active = true;
-    fetchCurrentShift()
-      .then((detail) => {
-        if (active) setShift(detail);
-      })
-      .catch(() => undefined);
+    void loadDuty().then((next) => {
+      if (active) setDuty(next);
+    });
     return () => {
       active = false;
     };
@@ -454,7 +486,7 @@ export function AssistantConsole() {
     if (result.tools_used.some((tool) => HANDOVER_TOOLS.has(tool))) {
       refreshHandover();
     }
-    refreshShift();
+    refreshDuty();
     speak(result.reply);
     if (result.error && !(speakReplies && support.speech)) {
       setStatus("error");
@@ -826,7 +858,7 @@ export function AssistantConsole() {
           {handover.enabled ? (
             <HandoverPanel error={handoverError} notes={handover.notes} onDone={(id) => void markNoteDone(id)} />
           ) : null}
-          {shift !== undefined ? <ShiftCard shift={shift} /> : null}
+          {duty !== undefined ? <DutyCard duty={duty} /> : null}
           <section aria-labelledby="capabilities-title" className={styles.sideCard}>
             <div className={styles.sideHeader}>
               <h2 id="capabilities-title">What I can do</h2>
@@ -861,50 +893,49 @@ function MicStateIcon({ state }: { state: MicLook }) {
   }
 }
 
-function ShiftCard({ shift }: { shift: CashierShiftDetail | null }) {
-  if (!shift || shift.shift.status !== "open") {
+type DutyInfo = {
+  operator: string | null;
+  since: string | null;
+  gcash: string | null;
+  payments: number | null;
+};
+
+function DutyCard({ duty }: { duty: DutyInfo }) {
+  if (!duty.operator) {
     return (
-      <section aria-labelledby="shift-title" className={styles.sideCard}>
+      <section aria-labelledby="duty-title" className={styles.sideCard}>
         <div className={styles.sideHeader}>
-          <h2 id="shift-title">Current shift</h2>
+          <h2 id="duty-title">On duty</h2>
         </div>
-        <p className={styles.sideEmpty}>No shift open.</p>
+        <p className={styles.sideEmpty}>Nobody is on duty.</p>
       </section>
     );
   }
-  const { totals } = shift;
-  const blockers = totals.settlement_pending_sessions + totals.review_required_payments;
-  // The expected drawer amount is deliberately not shown: the close check asks for a blind count.
+  // Cash collected is deliberately not shown: the drawer check asks for a blind count.
   return (
-    <section aria-labelledby="shift-title" className={styles.sideCard}>
+    <section aria-labelledby="duty-title" className={styles.sideCard}>
       <div className={styles.sideHeader}>
-        <h2 id="shift-title">Current shift</h2>
-        <span className={styles.openBadge}>Open</span>
+        <h2 id="duty-title">On duty</h2>
+        <span className={styles.openBadge}>Now</span>
       </div>
       <dl className={styles.shiftFacts}>
         <div>
-          <dt>Cashier</dt>
-          <dd>{shift.shift.cashier_name ?? "—"}</dd>
+          <dt>Operator</dt>
+          <dd>{duty.operator}</dd>
         </div>
         <div>
           <dt>Since</dt>
-          <dd>{shopTime(shift.shift.opened_at)}</dd>
+          <dd>{duty.since ? shopDateTime(duty.since) : "—"}</dd>
         </div>
         <div>
           <dt>Payments</dt>
-          <dd>{totals.payment_count}</dd>
+          <dd>{duty.payments ?? "—"}</dd>
         </div>
         <div>
-          <dt>Sessions</dt>
-          <dd>{totals.sessions_handled}</dd>
+          <dt>GCash</dt>
+          <dd>{duty.gcash !== null ? peso(duty.gcash) : "—"}</dd>
         </div>
       </dl>
-      {blockers > 0 ? (
-        <p className={styles.shiftWarning}>
-          <TriangleAlert aria-hidden="true" />
-          {`${totals.settlement_pending_sessions} to settle · ${totals.review_required_payments} to review`}
-        </p>
-      ) : null}
     </section>
   );
 }
