@@ -742,7 +742,7 @@ export function AssistantConsole() {
             ) : null}
           </ol>
 
-          <div className={styles.controls}>
+          <div className={`${styles.controls} ${status === "listening" ? styles.controlsListening : ""}`}>
             {heard ? (
               <p aria-live="polite" className={`${styles.heard} ${heard.live ? styles.heardLive : ""}`}>
                 <span className={styles.heardLabel}>{heard.live ? "Hearing" : "Heard"}</span>

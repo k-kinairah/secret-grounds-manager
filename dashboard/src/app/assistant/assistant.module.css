@@ -252,17 +252,50 @@
   min-height: 0;
 }
 
+/* The conversation panel: a soft cyan glow from the top fading into navy, the dashboard's
+   faint grid, and a thin glowing line along the top edge (like the nav bar). All low
+   opacity, behind the content, so text contrast is unchanged. */
 .panel {
   background:
-    linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 42%),
-    linear-gradient(180deg, rgb(17 27 45 / 0.96), rgb(8 17 31 / 0.96));
-  border: 1px solid rgb(56 189 248 / 0.18);
+    radial-gradient(ellipse 75% 42% at 50% 0%, rgb(34 211 238 / 0.11), transparent 72%),
+    radial-gradient(ellipse 40% 30% at 85% 0%, rgb(14 165 233 / 0.07), transparent 70%),
+    linear-gradient(180deg, rgb(255 255 255 / 0.03), transparent 42%),
+    linear-gradient(180deg, rgb(15 25 43 / 0.96), rgb(8 17 31 / 0.97));
+  border: 1px solid rgb(56 189 248 / 0.2);
   border-radius: 12px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow), 0 0 40px rgb(14 165 233 / 0.06);
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
+  isolation: isolate;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+}
+
+.panel::before {
+  background:
+    linear-gradient(rgb(56 189 248 / 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(56 189 248 / 0.03) 1px, transparent 1px);
+  background-size: 42px 42px;
+  content: "";
+  inset: 0;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.55) 55%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.55) 55%, transparent 100%);
+  pointer-events: none;
+  position: absolute;
+  z-index: -1;
+}
+
+.panel::after {
+  background: linear-gradient(90deg, transparent, rgb(103 232 249 / 0.75) 30%, rgb(125 211 252 / 0.85) 50%, rgb(103 232 249 / 0.75) 70%, transparent);
+  box-shadow: 0 0 10px rgb(34 211 238 / 0.45), 0 0 22px rgb(34 211 238 / 0.2);
+  content: "";
+  height: 1px;
+  left: 6%;
+  pointer-events: none;
+  position: absolute;
+  right: 6%;
+  top: 0;
 }
 
 /* --- conversation ---------------------------------------------------------------------
@@ -401,8 +434,9 @@
 }
 
 .userBubble {
-  background: rgb(56 189 248 / 0.12);
-  border: 1px solid rgb(56 189 248 / 0.14);
+  background: linear-gradient(180deg, rgb(34 211 238 / 0.16), rgb(14 165 233 / 0.11));
+  border: 1px solid rgb(34 211 238 / 0.24);
+  box-shadow: 0 0 14px rgb(34 211 238 / 0.06);
   border-radius: 18px;
   max-width: 82%;
   padding: 9px 15px;
@@ -756,6 +790,27 @@
   display: grid;
   gap: 10px;
   padding: 12px 20px 16px;
+  position: relative;
+}
+
+/* A soft cyan glow around the mic: barely there when idle, gently pulsing while listening.
+   The mic's centre is 20px padding + half of 64px from the left and bottom. */
+.controls::before {
+  background:
+    radial-gradient(circle at 52px calc(100% - 48px), rgb(34 211 238 / 0.12), transparent 170px),
+    linear-gradient(0deg, rgb(34 211 238 / 0.025), transparent 70%);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: -1;
+}
+
+.controlsListening::before {
+  animation: glowPulse 1.8s ease-in-out infinite;
+  background:
+    radial-gradient(circle at 52px calc(100% - 48px), rgb(34 211 238 / 0.26), transparent 230px),
+    linear-gradient(0deg, rgb(34 211 238 / 0.06), transparent 75%);
 }
 
 /* Live caption of what the mic hears. */
@@ -1260,6 +1315,16 @@
   }
 }
 
+@keyframes glowPulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .status_listening,
   .status_thinking,
@@ -1267,6 +1332,7 @@
   .mic_listening::before,
   .mic_thinking::before,
   .mic_speaking::before,
+  .controlsListening::before,
   .spin {
     animation: none;
   }
