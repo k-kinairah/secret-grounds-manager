@@ -46,7 +46,8 @@ NOTE_AUTHOR_OPERATOR = "operator_rogene"   # wrote the handover note, works the 
 DEMO_FLOAT = Decimal("200.00")   # only for the hint printed at the end
 MEMBER_PIN = "1234"
 
-# (username, display name, top-ups after the membership fee)
+# (username, display name, top-ups after the membership fee). The first nine keep their
+# fixed top-ups; the rest get a deterministic mix (see MORE_MEMBERS).
 MEMBERS = [
     ("andrea.santos", "Andrea Santos", ["member-topup-100", "member-topup-100"]),
     ("paolo.reyes", "Paolo Reyes", ["member-promo"]),
@@ -58,8 +59,37 @@ MEMBERS = [
     ("nico.ramos", "Nico Ramos", []),
     ("lyka.aquino", "Lyka Aquino", ["member-topup-100"]),
 ]
+MORE_MEMBERS = [
+    ("joshua.navarro", "Joshua Navarro"), ("angelica.torres", "Angelica Torres"),
+    ("renz.castillo", "Renz Castillo"), ("kyla.fernandez", "Kyla Fernandez"),
+    ("ivan.morales", "Ivan Morales"), ("trisha.domingo", "Trisha Domingo"),
+    ("gab.salazar", "Gab Salazar"), ("janelle.cruz", "Janelle Cruz"),
+    ("ken.aguilar", "Ken Aguilar"), ("rhea.pascual", "Rhea Pascual"),
+    ("marvin.ocampo", "Marvin Ocampo"), ("cheska.valdez", "Cheska Valdez"),
+    ("jm.rivera", "JM Rivera"), ("patricia.soriano", "Patricia Soriano"),
+    ("enzo.manalo", "Enzo Manalo"),
+]
+TOPUP_MIXES = [[], ["member-promo"], ["member-topup-100"], ["member-topup-100", "member-topup-100"],
+               ["vip-promo-250"], ["member-promo", "member-promo"], ["member-topup-100", "member-promo"]]
 # Members who also play during the past week.
-MEMBER_PLAYERS = ["andrea.santos", "carlo.mendoza", "mika.villanueva", "paolo.reyes"]
+MEMBER_PLAYERS = ["andrea.santos", "carlo.mendoza", "mika.villanueva", "paolo.reyes",
+                  "joshua.navarro", "kyla.fernandez", "ken.aguilar", "cheska.valdez"]
+
+# Running right now: (pc, kind, package or member, minutes ago started, minutes long).
+# About 10 of the 15 PCs busy, a few nearly done, one VIP. PC-01 is the live test client
+# (the add-time scene) and PC-07 is Andrea Santos.
+LIVE_SESSIONS = [
+    ("PC-01", "walkin", "rate-standard-guest-15", 45, 60),
+    ("PC-02", "member", "carlo.mendoza", 50, 120),
+    ("PC-03", "walkin", "rate-standard-guest-15", 20, 60),
+    ("PC-04", "walkin", "rate-standard-guest-10", 22, 40),
+    ("PC-05", "walkin", "rate-standard-guest-15", 48, 60),
+    ("PC-07", "member", "andrea.santos", 35, 120),
+    ("PC-09", "walkin", "rate-standard-guest-15", 5, 60),
+    ("PC-11", "member", "mika.villanueva", 30, 90),
+    ("PC-13", "walkin", "rate-standard-guest-15", 10, 60),
+    ("PC-15", "walkin", "rate-vip-guest-2hr", 40, 120),
+]
 
 # PC-01 (the live test client) gets no history: it only has the session about to run out.
 STANDARD_PCS = [f"PC-{n:02d}" for n in range(2, 15)]
@@ -170,8 +200,9 @@ def seed_shop(db_path: Path) -> None:
     # Members join over the past week (each pays the Membership Fee), then top up.
     member_ids = {}
     today = now.astimezone(SHOP_TZ).date()
-    for index, (username, name, topups) in enumerate(MEMBERS):
-        clock.at = local(today - timedelta(days=7 - index % 7), 10 + index) + timedelta(minutes=rng.randrange(50))
+    all_members = MEMBERS + [(u, n, rng.choice(TOPUP_MIXES)) for u, n in MORE_MEMBERS]
+    for index, (username, name, topups) in enumerate(all_members):
+        clock.at = local(today - timedelta(days=7 - index % 7), 10 + index % 12) + timedelta(minutes=rng.randrange(50))
         actor = cashier_at(clock.at)
         member = members.create_member(MemberCreateRequest(
             username=username, display_name=name, pin=MEMBER_PIN, confirm_pin=MEMBER_PIN,
@@ -209,16 +240,16 @@ def seed_shop(db_path: Path) -> None:
 
     for days_ago in range(7, 0, -1):
         day = today - timedelta(days=days_ago)
-        plan_day(day, local(day, 9), local(day, 23), busy=0.35 + 0.05 * (days_ago % 3))
-    # Today: Tyrone comes on duty in the morning (or a few hours back when it's early).
-    duty_start = local(today, 8)
-    if duty_start > now - timedelta(hours=3):
-        duty_start = now - timedelta(hours=6)
-    # Today's sales stay on today's date (yesterday is already planned in full).
-    plan_day(today, max(duty_start, local(today, 0)) + timedelta(minutes=20), now - timedelta(minutes=70), busy=0.3)
+        plan_day(day, local(day, 9), local(day, 23), busy=0.6 + 0.05 * (days_ago % 3))
+    # Today: the shop opens at 9 AM; when the demo starts before 10 AM, "today" runs from
+    # midnight (a late-night crowd) so today's figures are never empty. Sales spread from
+    # opening up to shortly before now; the live sessions below fill the last hour.
+    opening = local(today, 9) if now >= local(today, 10) else local(today, 0)
+    duty_start = opening - timedelta(minutes=30)  # Tyrone comes on duty just before opening
+    plan_day(today, opening + timedelta(minutes=5), now - timedelta(minutes=55), busy=0.6)
     # A few past member sessions (paid from balance).
     for i, username in enumerate(MEMBER_PLAYERS):
-        start = local(today - timedelta(days=1 + i), 14 + i, 10)
+        start = local(today - timedelta(days=1 + i % 6), 13 + i, 10)
         counter += 1
         events.append((start, counter, "member", {"pc": STANDARD_PCS[-1 - i], "username": username,
                                                    "end": start + timedelta(minutes=45 + 15 * i)}))
@@ -257,18 +288,19 @@ def seed_shop(db_path: Path) -> None:
     if not on_duty:
         come_on_duty()
 
-    # Live right now: a walk-in and a member in the background, and PC-01 about to run out.
-    # PC-01 is the live test client: it picks this session up from the backend when it
-    # connects, so "add one hour to PC one" works on camera.
+    # Live right now (see LIVE_SESSIONS). PC-01 is the live test client: it picks its session
+    # up from the backend when it connects, so "add one hour to PC one" works on camera; the
+    # others are shown by the simulated PCs (fake_pcs.py).
     on_duty_id = staff["duty"].user_id
-    clock.at = now - timedelta(minutes=20)
-    asyncio.run(service.start_prepaid_session("PC-03", pay(Decimal("15.00"), 900001),
-                                              rate_id="rate-standard-guest-15", actor_user_id=on_duty_id))
-    clock.at = now - timedelta(minutes=35)
-    asyncio.run(service.start_member_session("PC-07", "andrea.santos", 2 * 3600, MEMBER_PIN, on_duty_id))
-    clock.at = now - timedelta(minutes=45)  # about 15 minutes left at seeding, ~10 when the demo is up
-    asyncio.run(service.start_prepaid_session("PC-01", pay(Decimal("15.00"), 900002),
-                                              rate_id="rate-standard-guest-15", actor_user_id=on_duty_id))
+    for index, (pc, kind, what, minutes_ago, minutes_long) in enumerate(sorted(LIVE_SESSIONS, key=lambda s: -s[3])):
+        clock.at = now - timedelta(minutes=minutes_ago)
+        if service.repository.get_active_session_for_pc(pc) is not None:
+            continue
+        if kind == "member":
+            asyncio.run(service.start_member_session(pc, what, minutes_long * 60, MEMBER_PIN, on_duty_id))
+        else:
+            price = rate_price[what][1]
+            asyncio.run(service.start_prepaid_session(pc, pay(price, 900001 + index), rate_id=what, actor_user_id=on_duty_id))
 
     main.pc_registry.clear()
     clock.at = now

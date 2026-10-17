@@ -309,9 +309,9 @@ For a demo you don't need the snapshot or five windows. Once the [Setup](#setup)
 powershell -ExecutionPolicy Bypass -File assistant\demo\start-demo.ps1
 ```
 
-It takes a minute or two (`next dev` compiles on first load), then opens
-`http://127.0.0.1:3000/assistant`. **Sign in as Tyrone** (password; Tyrone is on duty).
-To stop everything it started:
+It takes two to four minutes (seeding a busy week, then `next dev` compiles on first load),
+then opens `http://127.0.0.1:3000/assistant`. **Sign in as Tyrone** (password; Tyrone is on
+duty). To stop everything it started:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File assistant\demo\stop-demo.ps1
@@ -320,41 +320,52 @@ powershell -ExecutionPolicy Bypass -File assistant\demo\stop-demo.ps1
 What it does:
 
 - **Fresh fake data every time.** `assistant\demo\seed_demo.py` builds a new database under
-  `%TEMP%\sg-demo\run-<time>\` through the backend's own code: schema setup, repositories, and
+  `%TEMP%\sg-demo
+un-<time>\` through the backend's own code: schema setup, repositories, and
   the session service, with a fake PC connection and a shifted clock for the past week.
   It refuses any path that already exists, and anything in the repo's `data\`, `backups\` or
   `server\` folders. It never reads the snapshot or the live database. A fixed random seed
   means the same data each run, relative to the current time.
 - **What's in it:**
-  - **Staff:** the default family operators the backend always creates. Tyrone has the open
-    shift and uses the same password as Admin; Rogene and the others use quick access.
-  - **Members:** 9 fake members with different Standard and VIP balances.
-  - **Sales:** a week of walk-in sales and top-ups (roughly ₱1,400–2,000 a day), plus today's.
-  - **On duty:** Tyrone, since the morning (no cashier shift is opened). Signing in as Tyrone
-    keeps that start, so the running totals show from the first minute.
-  - **Sessions running now:** PC 1 about to run out (about 10 minutes left once the demo is
-    up), plus a walk-in on PC 3 and a member (Andrea Santos) on PC 7 in the background.
+  - **Staff:** the default family operators the backend always creates. Tyrone uses the same
+    password as Admin; Rogene and the others use quick access.
+  - **On duty:** Tyrone, since just before opening (no cashier shift is opened). Signing in
+    as Tyrone keeps that start, so the running totals show from the first minute.
+  - **Members:** 24 fake members with varied Standard and VIP balances.
+  - **Sales:** a busy week (roughly 125-140 payments, ₱2,000-2,900 a day) plus today's,
+    spread from opening (9 AM; or midnight when the demo starts before 10 AM) to shortly
+    before now, so today's figures always look sensible.
+  - **Sessions running now (10 of 15 PCs):** PC 1 about to run out (the add-time scene, about
+    10 minutes left once the demo is up), members Carlo Mendoza on PC 2, Andrea Santos on PC 7
+    and Mika Villanueva on PC 11, walk-ins on PCs 3, 4, 5, 9 and 13 (PCs 4 and 5 nearly done),
+    and a 2-hour VIP session on PC 15. PCs 6, 8, 10, 12 and 14 are free.
   - **Handover note:** one note from Rogene, in the agent's notes file.
-
-  PC 1 is the live test client: it picks up its seeded session from the backend when it
-  connects. Seeding in the early morning gives "today" only a few sales, so seed during the
-  day for a fuller picture.
 - **Starts, all on 127.0.0.1:** backend `:8000` on the demo database, MCP server `:8765` with
   actions on, agent `:8781` (model settings from `assistant\agent\.env`), the test client
   as **PC-01** (TEST_MODE: power commands are refused, no lock screen; messages pop up on this
-  laptop), and the dashboard `:3000` with the assistant page on. It refuses to start if any
-  of those ports is busy, and it never uses 18001/3001.
+  laptop), the simulated PCs, and the dashboard `:3000` with the assistant page on. It
+  refuses to start if any of those ports is busy, and it never uses 18001/3001.
+- **Simulated PCs (on by default; `-NoFakePcs` to skip).** `assistant\demo\fake_pcs.py`
+  connects PC-02 to PC-15 to the demo backend exactly like a real client (register,
+  heartbeat every 5 seconds, the command WebSocket), so the whole grid shows online. They
+  acknowledge every command honestly -- a message as "displayed (simulated PC)", a shutdown as
+  "received (simulated PC, test mode: nothing powered off)", so the assistant's result card
+  says "test mode: not powered off" -- and report a session finished when its time runs out,
+  like a real PC. They never touch this machine (no windows, no power commands) and refuse
+  the live port 18001 and PC-01.
 - **Stops only what it started.** Process ids and start times are kept in
   `%TEMP%\sg-demo\demo-state.json`. `stop-demo.ps1` stops those processes (with their child
   processes) only if the id still has the same start time. Logs and data stay in the run
   folder; delete `%TEMP%\sg-demo` when you no longer need them.
 
 Things to try: "How are we doing today compared to yesterday?", "Which sessions are running
-out?", "Any notes from the last shift?", "Send PC 1 a message: your food is ready", and
-"Check my drawer" (the seed output shows what the drawer should hold with a ₱200 float). "Add one hour to PC one"
-works live on PC 1's session. Only PC 1 has a real client: the sessions on PCs 3 and 7 can be
-read, but actions on those PCs are refused because the PC is offline. If PC 1's session runs out
-before you get to it, start a new one on PC 1 from the dashboard.
+out?", "Who's on PC 7?", "Any notes from the last shift?", "Send PC 1 a message: your food is
+ready", "Add one hour to PC one", "Tell everyone the shop closes at 10 tonight" (goes to all
+15 PCs), "Shut down the idle PCs" (Admin only; the simulated PCs only acknowledge it) and
+"Check my drawer" (the seed output shows what the drawer should hold with a ₱200 float).
+Only PC 1 shows a real pop-up; the simulated PCs log what they received in
+`fake-pcs.out.log` in the run folder. If PC 1's session runs out before the add-time scene,
+start a new one on PC 1 from the dashboard.
 
 Notes:
 - **Admin password:** Admin uses the project's default seeding, so its password is

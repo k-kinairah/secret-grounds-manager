@@ -10,6 +10,7 @@
        MCP server   :8765  (actions on)
        agent        :8781  (model settings from assistant\agent\.env)
        test client  PC-01  (TEST_MODE: power commands refused, no lock screen)
+       simulated PCs PC-02..PC-15 (assistant\demo\fake_pcs.py; skip with -NoFakePcs)
        dashboard    :3000  (next dev, assistant page on)
   3. Records what it started in %TEMP%\sg-demo\demo-state.json, so
      stop-demo.ps1 stops exactly those processes and nothing else.
@@ -30,6 +31,7 @@
 #>
 param(
     [switch]$NoBrowser,
+    [switch]$NoFakePcs,
     [switch]$Lan,
     [string]$LanIp
 )
@@ -45,6 +47,7 @@ $MainPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $McpPython = Join-Path $RepoRoot "assistant\mcp_server\.venv\Scripts\python.exe"
 $AgentPython = Join-Path $RepoRoot "assistant\agent\.venv\Scripts\python.exe"
 $Seed = Join-Path $RepoRoot "assistant\demo\seed_demo.py"
+$FakePcs = Join-Path $RepoRoot "assistant\demo\fake_pcs.py"
 $NextBin = Join-Path $RepoRoot "dashboard\node_modules\next\dist\bin\next"
 
 function Fail([string]$message) {
@@ -122,7 +125,7 @@ function Save-State {
 
 # --- checks before anything starts --------------------------------------------------------
 
-foreach ($path in @($MainPython, $McpPython, $AgentPython, $Seed, $NextBin)) {
+foreach ($path in @($MainPython, $McpPython, $AgentPython, $Seed, $FakePcs, $NextBin)) {
     if (-not (Test-Path $path)) { Fail "missing $path (see the Setup section in assistant\README.md)" }
 }
 if (-not (Test-Path (Join-Path $RepoRoot "assistant\mcp_server\.env"))) {
@@ -233,6 +236,13 @@ try {
         SECRET_GROUNDS_EXPIRATION_SOUND_ENABLED = "false"
     } | Out-Null
 
+    if (-not $NoFakePcs) {
+        # PC-02..PC-15 as simulated PCs: online on the grid, honest "(simulated PC)" replies.
+        Start-DemoProcess "fake-pcs" $MainPython @("`"$FakePcs`"", "--server", $BackendUrl) $RepoRoot @{
+            PYTHONIOENCODING = "utf-8"
+        } | Out-Null
+    }
+
     Start-DemoProcess "dashboard" "node" @("`"$NextBin`"", "dev", "-H", $WebHost, "-p", "$($Ports.dashboard)") (Join-Path $RepoRoot "dashboard") @{
         NEXT_PUBLIC_ASSISTANT_ENABLED = "true"
         NEXT_PUBLIC_FASTAPI_BASE_URL  = $BackendUrl
@@ -252,6 +262,7 @@ Write-Host ""
 Write-Host "Demo is running." -ForegroundColor Green
 Write-Host "  Open $url and sign in as Tyrone (password; Tyrone is on duty)."
 Write-Host "  PC-01 is this laptop's test client; messages pop up here."
+if (-not $NoFakePcs) { Write-Host "  PC-02..PC-15 are simulated PCs (they reply honestly; nothing real happens)." }
 if ($Lan) {
     Write-Host "  LAN mode: backend and dashboard are reachable on $WebHost from the home network." -ForegroundColor Yellow
     Write-Host "  The mic doesn't work on this PC's page in LAN mode; speak on the other PC. In PowerShell there, run:"
