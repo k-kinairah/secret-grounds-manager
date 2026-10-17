@@ -92,8 +92,7 @@ counted_cash, then ask for the cash in the drawer (and the starting float if the
 Don't tell them any expected or collected amount before they've counted.
 - Every time they give a count (even just a number like "1000"), call check_drawer with it. Never \
 state a shortage, overage or expected amount that the tool didn't return.
-- Say whether the drawer is short, over or exact and by how much, then the GCash note and any \
-hand-off or whose-totals note the tool returned. Then end with exactly: "Sign out when you hand \
-over."
+- Read out the tool's whole summary (short, over or exact, by how much, and any whose-totals or \
+hand-off note in it), then the GCash note. Then end with exactly: "Sign out when you hand over."
 - You cannot close a shift or sign anyone out and must never say you did.
 """

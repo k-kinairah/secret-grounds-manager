@@ -15,12 +15,15 @@ Starting float: SG_AGENT_DRAWER_FLOAT (e.g. 200) when the shop uses a fixed
 float; otherwise the operator is asked each time.
 """
 
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from strands import tool
 
 HANDOVER_HINT = "Sign out when you hand over."
+SHOP_TZ = ZoneInfo("Asia/Manila")
 MAX_AMOUNT = Decimal("1000000")
 HANDOFF_NOTE = (
     "If someone else used this drawer before this operator came on duty and changed operator "
@@ -37,6 +40,20 @@ def _money(value: Any) -> Decimal | None:
 
 def _peso(value: Decimal) -> str:
     return f"₱{value:,.2f}"
+
+
+def _since_local(value: Any) -> str | None:
+    """The backend sends UTC; give the model shop time so it never converts it itself
+    (a real run said "yesterday at 5:58 PM" for 1:58 AM today)."""
+    try:
+        since = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if since.tzinfo is None:
+        return None
+    local = since.astimezone(SHOP_TZ)
+    hour = local.hour % 12 or 12
+    return f"{local:%B} {local.day} at {hour}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'} (shop time)"
 
 
 def _amount(value: Any) -> Decimal | None:
@@ -59,7 +76,7 @@ def evaluate_drawer(
     if not duty.get("on_duty") or not operator:
         return {"on_duty": False, "message": "Nobody is on duty right now, so there's nothing to check against."}
 
-    base: dict[str, Any] = {"on_duty": True, "operator": operator, "on_duty_since": duty.get("since")}
+    base: dict[str, Any] = {"on_duty": True, "operator": operator, "on_duty_since": _since_local(duty.get("since"))}
     if duty.get("asked_by_on_duty_operator") is False:
         base["whose_totals"] = (
             f"These are {operator}'s totals (the operator on duty), not the totals of the person asking."
@@ -137,8 +154,16 @@ def evaluate_drawer(
         "handover_hint": HANDOVER_HINT,
         "note": "This is a check only. Nothing was changed.",
     }
+    # Notes go into the summary itself: in a real run the model read out the summary but
+    # dropped separate note fields.
+    notes = []
+    if duty.get("asked_by_on_duty_operator") is False:
+        notes.append(f"These are {operator}'s totals, the operator on duty.")
     if result == "over" or duty.get("asked_by_on_duty_operator") is False:
         response["handoff_note"] = HANDOFF_NOTE
+        notes.append(HANDOFF_NOTE)
+    if notes:
+        response["summary"] = " ".join([summary, *notes])
     return response
 
 
@@ -151,9 +176,9 @@ def make_drawer_tools(duty: dict[str, Any] | None, configured_float: Decimal | N
         First call it WITHOUT counted_cash: it says who is on duty and what to ask. Ask for the cash
         in the drawer (and the starting float if it says so) without saying any expected amount.
         When they answer, call it again WITH counted_cash (and starting_float if asked). It returns
-        the expected cash, the difference (short / over / exact), a GCash note and sometimes a
-        hand-off note. Report the summary and those notes in one to three sentences, then end with
-        exactly the handover_hint. Never say anything was closed or signed out.
+        the expected cash, the difference (short / over / exact) and a GCash note. Read out the
+        whole summary (it can include whose totals these are and a hand-off note), then the GCash
+        note, then end with exactly the handover_hint. Never say anything was closed or signed out.
 
         Args:
             counted_cash: The cash counted in the drawer now, in pesos (e.g. 1250).

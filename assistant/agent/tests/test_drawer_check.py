@@ -65,6 +65,21 @@ def test_someone_else_asking_gets_whose_totals_and_handoff_notes():
     result = evaluate_drawer(dict(DUTY, asked_by_on_duty_operator=False), 1250, 200)
     assert "Tyrone's totals" in result["whose_totals"]
     assert "handoff_note" in result
+    # In the summary itself: a real run dropped the separate note fields.
+    assert "These are Tyrone's totals" in result["summary"] and "without signing out" in result["summary"]
+
+
+def test_over_summary_carries_the_handoff_note():
+    over = evaluate_drawer(DUTY, 1300, 200)
+    assert over["summary"].startswith("The drawer is over by ₱50.00") and "without signing out" in over["summary"]
+    assert "without signing out" not in evaluate_drawer(DUTY, 1100, 200)["summary"]
+
+
+def test_on_duty_since_is_given_in_shop_time():
+    # 17:58 UTC on Oct 16 is 1:58 AM on Oct 17 in Manila (a real run said "yesterday at 5:58 PM").
+    result = evaluate_drawer(dict(DUTY, since="2026-10-16T17:58:00+00:00"))
+    assert result["on_duty_since"] == "October 17 at 1:58 AM (shop time)"
+    assert evaluate_drawer(dict(DUTY, since="soon"))["on_duty_since"] is None
 
 
 def test_nobody_on_duty_and_bad_input():
