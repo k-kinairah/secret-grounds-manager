@@ -169,60 +169,88 @@ class ChatService:
             if duty is not None:
                 system_prompt += "\n" + DRAWER_CHECK_PROMPT
 
-            for attempt in (1, 2):
-                history = _history_messages(session.turns)
-                history_length = len(history)  # the Agent appends to this same list
-                agent_tools = list(tools)
-                if self.handover_store is not None:
-                    # Bound to the dashboard-verified operator; the model can't choose the author.
-                    agent_tools += make_handover_tools(self.handover_store, author)
-                if duty is not None:
-                    # Bound to the on-duty summary the dashboard fetched with the operator's login.
-                    agent_tools += make_drawer_tools(duty, self.drawer_float)
-                agent = Agent(
-                    model=self._model,
-                    tools=agent_tools,
-                    system_prompt=system_prompt,
-                    messages=history,
-                    conversation_manager=NullConversationManager(),
-                    callback_handler=None,
-                )
-                if on_tool is not None:
-                    # Lets the page show "Thinking… · Checking: today's sales" the
-                    # moment a tool starts, instead of after the whole answer.
-                    agent.hooks.add_callback(
-                        BeforeToolCallEvent,
-                        lambda event: on_tool(str((event.tool_use or {}).get("name") or "")),
+            async def run_turn(prompt: str, with_history: bool = True) -> tuple[Any, list[dict[str, Any]]] | ChatResult:
+                nonlocal tools
+                for attempt in (1, 2):
+                    history = _history_messages(session.turns) if with_history else []
+                    history_length = len(history)  # the Agent appends to this same list
+                    agent_tools = list(tools)
+                    if self.handover_store is not None:
+                        # Bound to the dashboard-verified operator; the model can't choose the author.
+                        agent_tools += make_handover_tools(self.handover_store, author)
+                    if duty is not None:
+                        # Bound to the on-duty summary the dashboard fetched with the operator's login.
+                        agent_tools += make_drawer_tools(duty, self.drawer_float)
+                    agent = Agent(
+                        model=self._model,
+                        tools=agent_tools,
+                        system_prompt=prompt,
+                        messages=history,
+                        conversation_manager=NullConversationManager(),
+                        callback_handler=None,
                     )
-                try:
-                    result = await agent.invoke_async(message)
-                except Exception as error:
-                    if _looks_like_mcp_failure(error):
-                        self._tool_source.reset()
-                        return ChatResult(MCP_DOWN_REPLY, error=f"MCP tool call failed: {_describe(error)}")
-                    return ChatResult(MODEL_DOWN_REPLY, error=f"Model call failed: {_describe(error)}")
-
-                new_messages = agent.messages[history_length:]
-                # If the MCP server restarted, the cached connection is dead and
-                # every tool call comes back as an error instead of raising.
-                # Reconnect and answer again once (all MCP tools only read or
-                # prepare, so repeating the turn changes nothing).
-                if attempt == 1 and _mcp_session_lost(new_messages):
-                    self._tool_source.reset()
+                    if on_tool is not None:
+                        # Lets the page show "Thinking… · Checking: today's sales" the
+                        # moment a tool starts, instead of after the whole answer.
+                        agent.hooks.add_callback(
+                            BeforeToolCallEvent,
+                            lambda event: on_tool(str((event.tool_use or {}).get("name") or "")),
+                        )
                     try:
-                        tools = await asyncio.to_thread(self._tool_source.get_tools)
+                        result = await agent.invoke_async(message)
                     except Exception as error:
+                        if _looks_like_mcp_failure(error):
+                            self._tool_source.reset()
+                            return ChatResult(MCP_DOWN_REPLY, error=f"MCP tool call failed: {_describe(error)}")
+                        return ChatResult(MODEL_DOWN_REPLY, error=f"Model call failed: {_describe(error)}")
+
+                    new_messages = agent.messages[history_length:]
+                    # If the MCP server restarted, the cached connection is dead and
+                    # every tool call comes back as an error instead of raising.
+                    # Reconnect and answer again once (all MCP tools only read or
+                    # prepare, so repeating the turn changes nothing).
+                    if attempt == 1 and _mcp_session_lost(new_messages):
                         self._tool_source.reset()
-                        return ChatResult(MCP_DOWN_REPLY, error=f"Could not reconnect to the MCP server: {_describe(error)}")
-                    continue
-                break
+                        try:
+                            tools = await asyncio.to_thread(self._tool_source.get_tools)
+                        except Exception as error:
+                            self._tool_source.reset()
+                            return ChatResult(MCP_DOWN_REPLY, error=f"Could not reconnect to the MCP server: {_describe(error)}")
+                        continue
+                    return result, new_messages
+                return ChatResult(FAILED_REPLY)  # not reached: the loop always returns
+
+            outcome = await run_turn(system_prompt)
+            if isinstance(outcome, ChatResult):
+                return outcome
+            result, new_messages = outcome
             tools_used = _tool_names(new_messages)
             reply = _spoken(_final_text(result.message)) or FAILED_REPLY
+            proposals = extract_proposals(new_messages)
+
+            # In long conversations the model sometimes copies an earlier reply ("I've got
+            # that message ready ... Confirm to send it.") without calling a propose_ tool, so
+            # no card appears. Answer again once with a reminder and without the earlier turns
+            # (the copying comes from them; in a fresh conversation the model calls the tool).
+            # If it still claims something is ready with nothing prepared, say so honestly
+            # instead. Not while an earlier card is still open: then "it's ready, confirm on
+            # screen" can be true.
+            card_still_open = session.pending is not None and not session.pending.expired()
+            if not proposals and not card_still_open and _has_propose_tools(tools) and _claims_ready(reply):
+                retry = await run_turn(system_prompt + "\n" + READY_WITHOUT_TOOL_REMINDER, with_history=False)
+                if isinstance(retry, ChatResult):
+                    reply = NOT_PREPARED_REPLY
+                else:
+                    result, new_messages = retry
+                    tools_used = _tool_names(new_messages)
+                    reply = _spoken(_final_text(result.message)) or FAILED_REPLY
+                    proposals = extract_proposals(new_messages)
+                    if not proposals and _claims_ready(reply):
+                        reply = NOT_PREPARED_REPLY
 
             # Only proposals that came back from propose_* tool results count;
             # if the model prepared several, the last one is the one shown.
             pending = None
-            proposals = extract_proposals(new_messages)
             if proposals:
                 session.pending = new_pending_action(proposals[-1])
                 pending = session.pending.public()
@@ -308,6 +336,22 @@ class ChatService:
 
 
 # --- helpers -------------------------------------------------------------
+
+
+NOT_PREPARED_REPLY = "I couldn't prepare that, please ask again."
+READY_WITHOUT_TOOL_REMINDER = (
+    "Important: your first answer to this message said an action was ready to confirm, but you "
+    "did not call a propose_ tool, so nothing was prepared and no confirmation card appeared. If "
+    "the user is asking for an action, call the matching propose_ tool now and only then say it is "
+    "ready. If they are not asking for an action, answer without saying anything is ready to confirm."
+)
+_READY_WORDS = re.compile(r"\b(ready|prepared|set up|lined up)\b", re.IGNORECASE)
+_CONFIRM_WORD = re.compile(r"\bconfirm", re.IGNORECASE)
+
+
+def _claims_ready(reply: str) -> bool:
+    """True for replies like "I've got that message ready for PC 8. Confirm to send it." """
+    return bool(_READY_WORDS.search(reply) and _CONFIRM_WORD.search(reply))
 
 
 def _history_messages(turns: list[tuple[str, str]]) -> list[dict[str, Any]]:
