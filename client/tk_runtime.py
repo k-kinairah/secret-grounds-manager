@@ -13,6 +13,7 @@ from typing import Iterable
 TCL_LIBRARY_ENV = "TCL_LIBRARY"
 TK_LIBRARY_ENV = "TK_LIBRARY"
 CLIENT_LOG_ENV = "SECRET_GROUNDS_CLIENT_LOG"
+BUILTIN_LIBRARY = "(built into the Tcl/Tk 9 DLL)"
 _TCL_DLL_HANDLE: ctypes.WinDLL | None = None
 _TK_STARTUP_LOCK = Lock()
 
@@ -35,14 +36,26 @@ class TkRuntimeInfo:
     frozen: bool
 
 
-def configure_tk_runtime() -> tuple[Path, Path]:
-    """Point Tkinter at bundled Tcl/Tk data before importing tkinter."""
+def configure_tk_runtime() -> tuple[Path | None, Path | None]:
+    """Point Tkinter at bundled Tcl/Tk data before importing tkinter.
+
+    Tcl/Tk 8.6 (the packaged/installed client, and older Pythons) keeps its
+    script library in tcl8.6/_tcl_data folders, which we find and point at.
+    Tcl/Tk 9 (e.g. Python 3.14.8 from the Python install manager) keeps it
+    inside its own DLL instead; when there is no 8.6-style folder but a
+    Tcl 9 DLL is present, both paths are None and Tk finds its own files --
+    any leftover TCL_LIBRARY/TK_LIBRARY would only point it somewhere wrong.
+    """
     tcl_library = _find_tcl_library()
     tk_library = _find_tk_library()
 
     _initialize_tcl_executable()
-    os.environ[TCL_LIBRARY_ENV] = str(tcl_library)
-    os.environ[TK_LIBRARY_ENV] = str(tk_library)
+    if tcl_library is not None and tk_library is not None:
+        os.environ[TCL_LIBRARY_ENV] = str(tcl_library)
+        os.environ[TK_LIBRARY_ENV] = str(tk_library)
+    else:
+        os.environ.pop(TCL_LIBRARY_ENV, None)
+        os.environ.pop(TK_LIBRARY_ENV, None)
     _add_packaged_tkinter_to_path()
     return tcl_library, tk_library
 
@@ -84,10 +97,10 @@ def verify_tk_runtime(*, create_root: bool = True) -> TkRuntimeInfo:
         python_version=sys.version.replace("\n", " "),
         tcl_version=tcl_patchlevel or getattr(_tkinter, "TCL_VERSION", None),
         tk_version=tk_patchlevel or getattr(_tkinter, "TK_VERSION", None),
-        tcl_library=str(tcl_library),
-        tk_library=str(tk_library),
-        tcl_init=str(tcl_library / "init.tcl"),
-        tk_init=str(tk_library / "tk.tcl"),
+        tcl_library=str(tcl_library) if tcl_library is not None else BUILTIN_LIBRARY,
+        tk_library=str(tk_library) if tk_library is not None else BUILTIN_LIBRARY,
+        tcl_init=str(tcl_library / "init.tcl") if tcl_library is not None else BUILTIN_LIBRARY,
+        tk_init=str(tk_library / "tk.tcl") if tk_library is not None else BUILTIN_LIBRARY,
         packaged_root=str(_packaged_root()) if _packaged_root() else None,
         frozen=bool(getattr(sys, "frozen", False)),
     )
@@ -185,7 +198,7 @@ def _initialize_tcl_executable() -> None:
             os.environ[TK_LIBRARY_ENV] = previous_tk_library
 
 
-def _find_tcl_library() -> Path:
+def _find_tcl_library() -> Path | None:
     return _first_existing_library(
         env_name=TCL_LIBRARY_ENV,
         init_file="init.tcl",
@@ -194,7 +207,7 @@ def _find_tcl_library() -> Path:
     )
 
 
-def _find_tk_library() -> Path:
+def _find_tk_library() -> Path | None:
     return _first_existing_library(
         env_name=TK_LIBRARY_ENV,
         init_file="tk.tcl",
@@ -203,13 +216,23 @@ def _find_tk_library() -> Path:
     )
 
 
+def _find_builtin_tcl9_dll() -> Path | None:
+    """A Tcl 9 DLL (tcl90.dll), which carries its own script library inside."""
+    for root in _runtime_roots():
+        for folder in (root, root / "DLLs", root / "_internal"):
+            for candidate in sorted(folder.glob("tcl9*.dll")) if folder.is_dir() else ():
+                if candidate.is_file() and "tk" not in candidate.name.lower():
+                    return candidate
+    return None
+
+
 def _first_existing_library(
     *,
     env_name: str,
     init_file: str,
     names: tuple[str, ...],
     nested_names: tuple[tuple[str, ...], ...],
-) -> Path:
+) -> Path | None:
     candidates: list[Path] = []
     env_value = os.getenv(env_name)
     if env_value:
@@ -222,6 +245,10 @@ def _first_existing_library(
     for candidate in candidates:
         if (candidate / init_file).is_file():
             return candidate
+
+    # No Tcl/Tk 8.6 folder anywhere: fine for Tcl/Tk 9, whose library is inside its DLL.
+    if _find_builtin_tcl9_dll() is not None:
+        return None
 
     expected = "\n".join(f" - {candidate / init_file}" for candidate in candidates)
     raise TkRuntimeError(
