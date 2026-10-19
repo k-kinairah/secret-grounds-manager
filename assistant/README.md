@@ -353,6 +353,12 @@ un-<time>\` through the backend's own code: schema setup, repositories, and
   says "test mode: not powered off" -- and report a session finished when its time runs out,
   like a real PC. They never touch this machine (no windows, no power commands) and refuse
   the live port 18001 and PC-01.
+- **Pop-ups are only "done" once they're on screen.** A message or announcement is
+  acknowledged as "message displayed" only after its pop-up window really exists; if it can't
+  open, or doesn't appear within 3 seconds, the PC acknowledges "failed" with the reason and
+  the assistant says which PC got it but couldn't show it (the card shows "couldn't show it").
+  To see that on purpose, start with `-ForcePopupFailure`: PC-01's pop-ups fail (test mode
+  only) and so do simulated PC-05's.
 - **Stops only what it started.** Process ids and start times are kept in
   `%TEMP%\sg-demo\demo-state.json`. `stop-demo.ps1` stops those processes (with their child
   processes) only if the id still has the same start time. Logs and data stay in the run

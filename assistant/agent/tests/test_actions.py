@@ -259,6 +259,61 @@ def test_broadcast_outcome_counts_each_pc():
     assert {t["pc"]: t["status"] for t in outcome["targets"]} == {"PC-01": "done", "PC-03": "offline", "PC-02": "failed"}
 
 
+def test_broadcast_names_the_pc_that_could_not_show_it():
+    # PC-01 got it but its pop-up couldn't open (the PC's own "failed" acknowledgement).
+    action = actions.new_pending_action(BROADCAST_PROPOSAL)
+    outcome = actions.describe_outcome(
+        action,
+        200,
+        {
+            "commands": [
+                {"pc_name": "PC-01", "status": "failed",
+                 "failure_reason": "the pop-up couldn't open (test mode: forced failure)"},
+                {"pc_name": "PC-02", "status": "completed"},
+                {"pc_name": "PC-03", "status": "completed"},
+            ],
+            "offline_targets": [],
+            "failed_targets": {},
+        },
+    )
+    assert outcome["ok"] is True
+    assert outcome["reply"] == (
+        "Done. The announcement went out to 2 PCs. "
+        "PC-01 got it but couldn't show it: the pop-up couldn't open (test mode: forced failure)."
+    )
+    by_pc = {t["pc"]: (t["status"], t["detail"]) for t in outcome["targets"]}
+    assert by_pc["PC-01"] == ("not_shown", "the pop-up couldn't open (test mode: forced failure)")
+    assert by_pc["PC-02"] == ("done", None)
+
+
+def test_broadcast_shown_nowhere_is_not_ok():
+    action = actions.new_pending_action(BROADCAST_PROPOSAL)
+    outcome = actions.describe_outcome(
+        action, 200,
+        {"commands": [{"pc_name": "PC-01", "status": "failed", "failure_reason": "the pop-up didn't appear within 3 seconds"}],
+         "offline_targets": ["PC-04"], "failed_targets": {}},
+    )
+    assert outcome["ok"] is False
+    assert outcome["reply"] == (
+        "The announcement didn't show on any PC. PC-01 got it but couldn't show it: "
+        "the pop-up didn't appear within 3 seconds. It didn't reach PC-04."
+    )
+
+
+def test_message_not_shown_says_so_plainly():
+    action = actions.new_pending_action(MESSAGE_PROPOSAL)
+    outcome = actions.describe_outcome(
+        action, 200,
+        {"command": {"status": "failed", "failure_reason": "the pop-up couldn't open: no display"}},
+    )
+    assert outcome["ok"] is False
+    assert outcome["reply"] == "PC-03 got the message but couldn't show it: the pop-up couldn't open: no display."
+    assert outcome["targets"] == [{"pc": "PC-03", "status": "not_shown", "detail": "the pop-up couldn't open: no display"}]
+    # A command the PC never answered is still "didn't reach".
+    timed_out = actions.describe_outcome(action, 200, {"command": {"status": "timed_out", "failure_reason": "Client command timed out"}})
+    assert timed_out["reply"] == "The message didn't reach PC-03: client command timed out."
+
+
 def test_permission_error_outcome():
     action = actions.new_pending_action(MESSAGE_PROPOSAL)
     outcome = actions.describe_outcome(action, 403, {"detail": "You cannot send remote messages"})

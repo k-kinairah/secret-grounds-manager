@@ -686,12 +686,15 @@
   color: var(--muted);
 }
 
-.target_failed {
+.target_failed,
+.target_not_shown {
   border-color: rgb(244 63 94 / 0.45);
 }
 
 .target_failed svg,
-.target_failed .targetWord {
+.target_failed .targetWord,
+.target_not_shown svg,
+.target_not_shown .targetWord {
   color: #fda4af;
 }
 

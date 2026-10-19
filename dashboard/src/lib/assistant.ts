@@ -25,7 +25,8 @@ export type PendingAction = {
 // "received": the PC got a power command -- not proof it powered off.
 export type ActionTargetResult = {
   pc: string;
-  status: "done" | "received" | "skipped" | "offline" | "failed";
+  // "not_shown": the PC got it but couldn't show it (e.g. its pop-up couldn't open).
+  status: "done" | "received" | "skipped" | "offline" | "failed" | "not_shown";
   detail: string | null;
 };
 

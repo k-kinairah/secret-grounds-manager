@@ -40,6 +40,8 @@ REQUEST_TIMEOUT = 5
 LIVE_PORTS = {18001}
 REAL_TEST_CLIENT = "PC-01"
 
+POPUP_COMMANDS = {"show_message", "show_announcement"}
+
 ACK_MESSAGES = {
     "ping": "pong (simulated PC)",
     "start_session": "Session started (simulated PC)",
@@ -61,7 +63,7 @@ def log(pc: str, text: str) -> None:
 
 
 class FakePc:
-    def __init__(self, server: str, pc_name: str, number: int, stop: threading.Event) -> None:
+    def __init__(self, server: str, pc_name: str, number: int, stop: threading.Event, fail_popups: bool = False) -> None:
         self.server = server.rstrip("/")
         self.pc_name = pc_name
         self.stop = stop
@@ -71,6 +73,9 @@ class FakePc:
         self.websocket: SimpleWebSocketClient | None = None
         self.send_lock = threading.Lock()
         self.reported_finished: set[str] = set()
+        # Demo option: this PC's pop-ups "fail", acknowledged the way a real client
+        # does when its pop-up can't open.
+        self.fail_popups = fail_popups
 
     # --- like the real client: register + heartbeat -----------------------------------------
     def payload(self, include_mac: bool = False) -> dict[str, str]:
@@ -159,6 +164,11 @@ class FakePc:
         command_id = str(message.get("command_id", ""))
         command_type = str(message.get("type", ""))
         self.send({"command_id": command_id, "status": "received", "message": "Command received"})
+        if self.fail_popups and command_type in POPUP_COMMANDS:
+            reason = "the pop-up couldn't open (simulated failure)"
+            self.send({"command_id": command_id, "status": "failed", "message": reason})
+            log(self.pc_name, f"{command_type}: failed -- {reason}")
+            return
         text = ACK_MESSAGES.get(command_type)
         if text is None:
             self.send({"command_id": command_id, "status": "failed", "message": f"Unsupported command type: {command_type}"})
@@ -186,6 +196,7 @@ def main() -> None:
     parser.add_argument("--server", required=True, help="demo backend, e.g. http://127.0.0.1:8000")
     parser.add_argument("--first", type=int, default=2)
     parser.add_argument("--last", type=int, default=15)
+    parser.add_argument("--fail-popups", default="", help="comma-separated PCs whose pop-ups fail, e.g. PC-05")
     args = parser.parse_args()
 
     parsed = urlparse(args.server)
@@ -194,6 +205,7 @@ def main() -> None:
     if (parsed.port or 80) in LIVE_PORTS:
         sys.exit("fake_pcs: refusing to connect to the live shop backend port.")
     names = pc_names(args.first, args.last)
+    fail_popups = {pc.strip().upper() for pc in args.fail_popups.split(",") if pc.strip()}
     if REAL_TEST_CLIENT in names:
         sys.exit(f"fake_pcs: {REAL_TEST_CLIENT} is the real test client; start from PC-02.")
 
@@ -201,7 +213,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     for index, name in enumerate(names):
-        FakePc(args.server, name, args.first + index, stop).start()
+        FakePc(args.server, name, args.first + index, stop, fail_popups=name in fail_popups).start()
     print(f"Simulated PCs {names[0]}..{names[-1]} running against {args.server}", flush=True)
     while not stop.wait(1):
         pass

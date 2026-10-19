@@ -28,12 +28,18 @@
   10.x.x.x, 172.16-31.x.x) are accepted; pass -LanIp if there is more than one.
   Everything is closed again by stop-demo.ps1. See "Filming with two PCs" in
   assistant\README.md for the other PC and the firewall.
+
+  -ForcePopupFailure (off by default, to show an honest failure): PC-01's
+  message/announcement pop-ups fail on purpose (the test client is in test
+  mode, which this needs) and simulated PC-05's do too, so the assistant
+  reports which PCs couldn't show it.
 #>
 param(
     [switch]$NoBrowser,
     [switch]$NoFakePcs,
     [switch]$Lan,
-    [string]$LanIp
+    [string]$LanIp,
+    [switch]$ForcePopupFailure
 )
 
 $ErrorActionPreference = "Stop"
@@ -234,11 +240,14 @@ try {
         SECRET_GROUNDS_CLIENT_LOG               = (Join-Path $RunDir "client.log")
         SECRET_GROUNDS_REMINDER_VOICE_ENABLED   = "false"
         SECRET_GROUNDS_EXPIRATION_SOUND_ENABLED = "false"
+        SECRET_GROUNDS_TEST_POPUP_FAILURE       = $(if ($ForcePopupFailure) { "true" } else { "false" })
     } | Out-Null
 
     if (-not $NoFakePcs) {
         # PC-02..PC-15 as simulated PCs: online on the grid, honest "(simulated PC)" replies.
-        Start-DemoProcess "fake-pcs" $MainPython @("`"$FakePcs`"", "--server", $BackendUrl) $RepoRoot @{
+        $fakeArgs = @("`"$FakePcs`"", "--server", $BackendUrl)
+        if ($ForcePopupFailure) { $fakeArgs += @("--fail-popups", "PC-05") }
+        Start-DemoProcess "fake-pcs" $MainPython $fakeArgs $RepoRoot @{
             PYTHONIOENCODING = "utf-8"
         } | Out-Null
     }
@@ -263,6 +272,7 @@ Write-Host "Demo is running." -ForegroundColor Green
 Write-Host "  Open $url and sign in as Tyrone (password; Tyrone is on duty)."
 Write-Host "  PC-01 is this laptop's test client; messages pop up here."
 if (-not $NoFakePcs) { Write-Host "  PC-02..PC-15 are simulated PCs (they reply honestly; nothing real happens)." }
+if ($ForcePopupFailure) { Write-Host "  -ForcePopupFailure: pop-ups on PC-01 and PC-05 fail on purpose." -ForegroundColor Yellow }
 if ($Lan) {
     Write-Host "  LAN mode: backend and dashboard are reachable on $WebHost from the home network." -ForegroundColor Yellow
     Write-Host "  The mic doesn't work on this PC's page in LAN mode; speak on the other PC. In PowerShell there, run:"

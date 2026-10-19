@@ -24,6 +24,8 @@ SHOP_TZ = ZoneInfo("Asia/Manila")
 ACTION_TTL_SECONDS = 120
 PROPOSE_TOOL_PREFIX = "propose_"
 _FAILED_STATUSES = ("failed", "timed_out", "rejected")
+# A PC's own "failed" acknowledgement: it got the command but couldn't do it (e.g. show a pop-up).
+_CLIENT_FAILED = "failed"
 
 
 @dataclass
@@ -135,6 +137,14 @@ def describe_outcome(action: PendingAction, status_code: int, body: Any) -> dict
     if action.kind == "message_pc":
         command = body.get("command", {}) if isinstance(body, dict) else {}
         pc = action.targets[0] if action.targets else "the PC"
+        if command.get("status") == _CLIENT_FAILED:
+            # The PC got it and said it couldn't show it (e.g. the pop-up couldn't open).
+            reason = command.get("failure_reason") or "it couldn't show it"
+            return {
+                "ok": False,
+                "reply": f"{pc} got the message but couldn't show it: {_sentence(str(reason))}",
+                "targets": [{"pc": pc, "status": "not_shown", "detail": str(reason)}],
+            }
         if command.get("status") in _FAILED_STATUSES:
             reason = command.get("failure_reason") or command.get("status")
             return {
@@ -154,21 +164,32 @@ def describe_outcome(action: PendingAction, status_code: int, body: Any) -> dict
         sent = [str(c.get("pc_name")) for c in commands if c.get("status") not in _FAILED_STATUSES]
         offline = [str(pc) for pc in data.get("offline_targets", [])]
         failed = {str(pc): str(reason) for pc, reason in (data.get("failed_targets") or {}).items()}
+        # Got it but said it couldn't show it (the PC's own "failed" acknowledgement).
+        not_shown: dict[str, str] = {}
         for command in commands:
-            if command.get("status") in _FAILED_STATUSES:
-                failed[str(command.get("pc_name"))] = str(command.get("failure_reason") or command.get("status"))
+            pc = str(command.get("pc_name"))
+            if command.get("status") == _CLIENT_FAILED:
+                not_shown[pc] = str(command.get("failure_reason") or "it couldn't show it")
+            elif command.get("status") in _FAILED_STATUSES:
+                failed[pc] = str(command.get("failure_reason") or command.get("status"))
         targets = (
             [{"pc": pc, "status": "done", "detail": None} for pc in sent]
+            + [{"pc": pc, "status": "not_shown", "detail": reason} for pc, reason in not_shown.items()]
             + [{"pc": pc, "status": "offline", "detail": "went offline"} for pc in offline]
             + [{"pc": pc, "status": "failed", "detail": reason} for pc, reason in failed.items()]
         )
-        if not sent:
+        if sent:
+            reply = f"Done. The announcement went out to {len(sent)} PC{'s' if len(sent) != 1 else ''}."
+        elif not_shown:
+            reply = "The announcement didn't show on any PC."
+        else:
             return {"ok": False, "reply": "The announcement didn't reach any PC.", "targets": targets}
-        reply = f"Done. The announcement went out to {len(sent)} PC{'s' if len(sent) != 1 else ''}."
+        for pc, reason in not_shown.items():
+            reply += f" {pc} got it but couldn't show it: {_sentence(reason)}"
         missed = offline + list(failed)
         if missed:
             reply += f" It didn't reach {_join(missed)}."
-        return {"ok": True, "reply": reply, "targets": targets}
+        return {"ok": bool(sent), "reply": reply, "targets": targets}
 
     if action.kind == "add_time":
         session = body.get("session", {}) if isinstance(body, dict) else {}

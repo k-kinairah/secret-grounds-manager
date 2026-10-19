@@ -102,6 +102,7 @@ const ACTION_KIND_ICONS: Record<string, ReactNode> = {
 const TARGET_ICONS: Record<string, ReactNode> = {
   done: <CircleCheck aria-hidden="true" />,
   failed: <CircleX aria-hidden="true" />,
+  not_shown: <CircleX aria-hidden="true" />,
   offline: <WifiOff aria-hidden="true" />,
   received: <Radio aria-hidden="true" />,
   skipped: <CircleMinus aria-hidden="true" />
@@ -174,6 +175,8 @@ async function loadDuty(): Promise<DutyInfo | undefined> {
 const TARGET_WORDS: Record<string, string> = {
   done: "done",
   failed: "didn't get it",
+  // Got it, but said it couldn't show it (e.g. the pop-up couldn't open).
+  not_shown: "couldn't show it",
   offline: "offline",
   received: "received the shutdown command",
   skipped: "skipped, in use"
@@ -1043,6 +1046,17 @@ function ActionCard({
               {`${result.pc}: ${TARGET_WORDS[result.status] ?? result.status}${result.detail ? ` (${result.detail})` : ""}`}
             </li>
           ))}
+        </ul>
+      ) : null}
+      {action.kind !== "shutdown_pcs" && results.some((result) => result.status === "not_shown" || result.status === "failed") ? (
+        <ul className={styles.targetDetails}>
+          {results
+            .filter((result) => result.status === "not_shown" || result.status === "failed")
+            .map((result) => (
+              <li key={result.pc}>
+                {`${result.pc}: ${TARGET_WORDS[result.status] ?? result.status}${result.detail ? ` (${result.detail})` : ""}`}
+              </li>
+            ))}
         </ul>
       ) : null}
       {action.details.admin_only && state === "pending" ? (
