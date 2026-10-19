@@ -178,7 +178,10 @@ def describe_outcome(action: PendingAction, status_code: int, body: Any) -> dict
             + [{"pc": pc, "status": "offline", "detail": "went offline"} for pc in offline]
             + [{"pc": pc, "status": "failed", "detail": reason} for pc, reason in failed.items()]
         )
-        if sent:
+        if sent and not_shown:
+            # Not "Done": some PCs got it but couldn't show it.
+            reply = f"Shown on {len(sent)} of {len(targets)} PCs."
+        elif sent:
             reply = f"Done. The announcement went out to {len(sent)} PC{'s' if len(sent) != 1 else ''}."
         elif not_shown:
             reply = "The announcement didn't show on any PC."

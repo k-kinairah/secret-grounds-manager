@@ -278,12 +278,34 @@ def test_broadcast_names_the_pc_that_could_not_show_it():
     )
     assert outcome["ok"] is True
     assert outcome["reply"] == (
-        "Done. The announcement went out to 2 PCs. "
+        "Shown on 2 of 3 PCs. "
         "PC-01 got it but couldn't show it: the pop-up couldn't open (test mode: forced failure)."
     )
+    assert not outcome["reply"].startswith("Done")
     by_pc = {t["pc"]: (t["status"], t["detail"]) for t in outcome["targets"]}
     assert by_pc["PC-01"] == ("not_shown", "the pop-up couldn't open (test mode: forced failure)")
     assert by_pc["PC-02"] == ("done", None)
+
+
+def test_broadcast_all_shown_still_says_done():
+    action = actions.new_pending_action(BROADCAST_PROPOSAL)
+    commands = [{"pc_name": f"PC-{n:02d}", "status": "completed"} for n in range(1, 16)]
+    outcome = actions.describe_outcome(action, 200, {"commands": commands, "offline_targets": [], "failed_targets": {}})
+    assert outcome["reply"] == "Done. The announcement went out to 15 PCs."
+
+
+def test_broadcast_mixed_not_shown_and_offline():
+    action = actions.new_pending_action(BROADCAST_PROPOSAL)
+    commands = [{"pc_name": f"PC-{n:02d}", "status": "completed"} for n in range(2, 15) if n != 5]
+    commands += [{"pc_name": "PC-01", "status": "failed", "failure_reason": "the pop-up couldn't open: no display"},
+                 {"pc_name": "PC-05", "status": "failed", "failure_reason": "the pop-up couldn't open (simulated failure)"}]
+    outcome = actions.describe_outcome(action, 200, {"commands": commands, "offline_targets": ["PC-15"], "failed_targets": {}})
+    assert outcome["reply"] == (
+        "Shown on 12 of 15 PCs. "
+        "PC-01 got it but couldn't show it: the pop-up couldn't open: no display. "
+        "PC-05 got it but couldn't show it: the pop-up couldn't open (simulated failure). "
+        "It didn't reach PC-15."
+    )
 
 
 def test_broadcast_shown_nowhere_is_not_ok():
