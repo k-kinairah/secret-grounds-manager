@@ -310,8 +310,8 @@ powershell -ExecutionPolicy Bypass -File assistant\demo\start-demo.ps1
 ```
 
 It takes two to four minutes (seeding a busy week, then `next dev` compiles on first load),
-then opens `http://127.0.0.1:3000/assistant`. **Sign in as Tyrone** (password; Tyrone is on
-duty). To stop everything it started:
+then opens `http://127.0.0.1:3000/assistant`. **Sign in as Tyrone** (demo password `sg-demo-2026`;
+Tyrone is on duty). To stop everything it started:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File assistant\demo\stop-demo.ps1
@@ -320,8 +320,7 @@ powershell -ExecutionPolicy Bypass -File assistant\demo\stop-demo.ps1
 What it does:
 
 - **Fresh fake data every time.** `assistant\demo\seed_demo.py` builds a new database under
-  `%TEMP%\sg-demo
-un-<time>\` through the backend's own code: schema setup, repositories, and
+  `%TEMP%\sg-demo\run-<time>\` through the backend's own code: schema setup, repositories, and
   the session service, with a fake PC connection and a shifted clock for the past week.
   It refuses any path that already exists, and anything in the repo's `data\`, `backups\` or
   `server\` folders. It never reads the snapshot or the live database. A fixed random seed
@@ -374,9 +373,9 @@ Only PC 1 shows a real pop-up; the simulated PCs log what they received in
 start a new one on PC 1 from the dashboard.
 
 Notes:
-- **Admin password:** Admin uses the project's default seeding, so its password is
-  `SECRET_GROUNDS_ADMIN_PASSWORD` if that was set when seeding, otherwise the backend's
-  built-in default.
+- **Demo password:** `start-demo.ps1` seeds Tyrone and Admin with the demo-only password
+  `sg-demo-2026` (change it with `-DemoPassword`). It exists only in the throwaway demo
+  database, never in the shop's.
 - **`next dev` rewrites `dashboard\next-env.d.ts`.** Undo it with
   `git checkout -- dashboard/next-env.d.ts` before committing.
 

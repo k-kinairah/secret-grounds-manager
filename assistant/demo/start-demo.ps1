@@ -39,7 +39,9 @@ param(
     [switch]$NoFakePcs,
     [switch]$Lan,
     [string]$LanIp,
-    [switch]$ForcePopupFailure
+    [switch]$ForcePopupFailure,
+    # Password for Tyrone and Admin in the throwaway demo database only (never the shop's).
+    [string]$DemoPassword = "sg-demo-2026"
 )
 
 $ErrorActionPreference = "Stop"
@@ -200,7 +202,15 @@ function Invoke-Seed([string]$name, [string]$python, [string[]]$arguments) {
 }
 
 Write-Host "Seeding demo data in $RunDir ..."
-Invoke-Seed "seed-shop" $MainPython @("--db", "`"$ShopDb`"")
+# The password operators (Tyrone, Admin) get a demo-only password in the new demo
+# database, instead of the backend's well-known built-in default.
+$savedAdminPassword = $env:SECRET_GROUNDS_ADMIN_PASSWORD
+$env:SECRET_GROUNDS_ADMIN_PASSWORD = $DemoPassword
+try {
+    Invoke-Seed "seed-shop" $MainPython @("--db", "`"$ShopDb`"")
+} finally {
+    $env:SECRET_GROUNDS_ADMIN_PASSWORD = $savedAdminPassword
+}
 Invoke-Seed "seed-notes" $AgentPython @("--notes-db", "`"$NotesDb`"")
 
 # --- start everything -------------------------------------------------------------------------
@@ -269,7 +279,7 @@ try {
 $url = "$DashboardUrl/assistant"
 Write-Host ""
 Write-Host "Demo is running." -ForegroundColor Green
-Write-Host "  Open $url and sign in as Tyrone (password; Tyrone is on duty)."
+Write-Host "  Open $url and sign in as Tyrone (demo password: $DemoPassword; Tyrone is on duty)."
 Write-Host "  PC-01 is this laptop's test client; messages pop up here."
 if (-not $NoFakePcs) { Write-Host "  PC-02..PC-15 are simulated PCs (they reply honestly; nothing real happens)." }
 if ($ForcePopupFailure) { Write-Host "  -ForcePopupFailure: pop-ups on PC-01 and PC-05 fail on purpose." -ForegroundColor Yellow }
