@@ -1,0 +1,8 @@
+# Secret Grounds agent service -- its OWN venv, separate from the backend and
+# from assistant/mcp_server. Strands ships the Bedrock provider (boto3) by
+# default; the extras add the Anthropic, OpenAI and Ollama provider SDKs.
+strands-agents[anthropic,openai,ollama]==1.60.0
+fastapi==0.143.1
+uvicorn==0.54.0
+# Windows has no IANA timezone database; zoneinfo needs this for Asia/Manila.
+tzdata==2026.3

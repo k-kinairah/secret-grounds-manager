@@ -1,0 +1,318 @@
+"""Pending actions (phase 3): propose -> confirm -> run.
+
+The model can only call propose_* MCP tools, which return a proposal (the
+exact backend request plus a summary) and change nothing. The agent takes
+proposals ONLY from those tools' results -- never from the model's own text --
+and parks one per session as a pending action: single-use, expiring.
+
+Running it is not the agent's job. The dashboard server takes the pending
+action (after the operator confirms on screen), re-checks it against its own
+allow-list, sends it with the operator's own login, and reports the backend's
+response back here so the conversation can continue. The spoken outcome is
+built from that real response, not by the model, so "done" is never invented.
+"""
+
+import json
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+from zoneinfo import ZoneInfo
+
+SHOP_TZ = ZoneInfo("Asia/Manila")
+ACTION_TTL_SECONDS = 120
+PROPOSE_TOOL_PREFIX = "propose_"
+_FAILED_STATUSES = ("failed", "timed_out", "rejected")
+# A PC's own "failed" acknowledgement: it got the command but couldn't do it (e.g. show a pop-up).
+_CLIENT_FAILED = "failed"
+
+
+@dataclass
+class PendingAction:
+    action_id: str
+    kind: str
+    summary: str
+    targets: list[str]
+    details: dict[str, Any]
+    request: dict[str, Any]
+    created_at: float = field(default_factory=time.monotonic)
+
+    def expired(self, now: float | None = None) -> bool:
+        return (now if now is not None else time.monotonic()) - self.created_at > ACTION_TTL_SECONDS
+
+    def public(self) -> dict[str, Any]:
+        """What the browser sees: enough to render the confirm card, not the raw request."""
+        remaining = max(0, int(ACTION_TTL_SECONDS - (time.monotonic() - self.created_at)))
+        return {
+            "id": self.action_id,
+            "kind": self.kind,
+            "summary": self.summary,
+            "targets": list(self.targets),
+            "details": dict(self.details),
+            "expires_in_seconds": remaining,
+        }
+
+
+class ActionError(Exception):
+    """Unknown, expired or already-used action. Safe to show."""
+
+
+def new_pending_action(proposal: dict[str, Any]) -> PendingAction:
+    return PendingAction(
+        action_id=uuid.uuid4().hex,
+        kind=str(proposal["kind"]),
+        summary=str(proposal["summary"]),
+        targets=[str(t) for t in proposal.get("targets") or []],
+        details=dict(proposal.get("details") or {}),
+        request=dict(proposal["request"]),
+    )
+
+
+def extract_proposals(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Proposals returned by propose_* tool calls in these messages, in order."""
+    propose_ids: set[str] = set()
+    for message in messages:
+        for block in message.get("content", []):
+            tool_use = block.get("toolUse") if isinstance(block, dict) else None
+            if tool_use and str(tool_use.get("name", "")).startswith(PROPOSE_TOOL_PREFIX):
+                propose_ids.add(tool_use.get("toolUseId"))
+
+    found: list[dict[str, Any]] = []
+    for message in messages:
+        for block in message.get("content", []):
+            result = block.get("toolResult") if isinstance(block, dict) else None
+            if not result or result.get("toolUseId") not in propose_ids or result.get("status") == "error":
+                continue
+            payload = _result_payload(result)
+            proposal = payload.get("proposal") if isinstance(payload, dict) else None
+            if _valid_proposal(proposal):
+                found.append(proposal)  # type: ignore[arg-type]
+    return found
+
+
+def _result_payload(result: dict[str, Any]) -> Any:
+    for item in result.get("content", []):
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("json"), dict):
+            return item["json"]
+        if isinstance(item.get("text"), str):
+            try:
+                return json.loads(item["text"])
+            except ValueError:
+                continue
+    return None
+
+
+def _valid_proposal(proposal: Any) -> bool:
+    if not isinstance(proposal, dict):
+        return False
+    request = proposal.get("request")
+    return (
+        isinstance(proposal.get("kind"), str)
+        and isinstance(proposal.get("summary"), str)
+        and isinstance(request, dict)
+        and isinstance(request.get("method"), str)
+        and isinstance(request.get("path"), str)
+        and isinstance(request.get("body"), dict)
+    )
+
+
+# --- outcomes -------------------------------------------------------------
+
+
+def describe_outcome(action: PendingAction, status_code: int, body: Any) -> dict[str, Any]:
+    """Turn the backend's real response into a spoken reply + per-PC results."""
+    if action.kind == "shutdown_pcs" and isinstance(body, dict) and isinstance(body.get("results"), list):
+        return _describe_shutdown(action, body["results"])
+    if not 200 <= status_code < 300:
+        detail = body.get("detail") if isinstance(body, dict) else None
+        reason = detail if isinstance(detail, str) and detail else f"the shop system returned an error ({status_code})"
+        if status_code in (401, 403):
+            reason = detail or "you don't have permission to do that"
+        targets = [{"pc": pc, "status": "failed", "detail": reason} for pc in action.targets]
+        return {"ok": False, "reply": f"That didn't go through: {_sentence(reason)}", "targets": targets}
+
+    if action.kind == "message_pc":
+        command = body.get("command", {}) if isinstance(body, dict) else {}
+        pc = action.targets[0] if action.targets else "the PC"
+        if command.get("status") == _CLIENT_FAILED:
+            # The PC got it and said it couldn't show it (e.g. the pop-up couldn't open).
+            reason = command.get("failure_reason") or "it couldn't show it"
+            return {
+                "ok": False,
+                "reply": f"{pc} got the message but couldn't show it: {_sentence(str(reason))}",
+                "targets": [{"pc": pc, "status": "not_shown", "detail": str(reason)}],
+            }
+        if command.get("status") in _FAILED_STATUSES:
+            reason = command.get("failure_reason") or command.get("status")
+            return {
+                "ok": False,
+                "reply": f"The message didn't reach {pc}: {_sentence(str(reason))}",
+                "targets": [{"pc": pc, "status": "failed", "detail": str(reason)}],
+            }
+        return {
+            "ok": True,
+            "reply": f"Done. The message is showing on {pc}.",
+            "targets": [{"pc": pc, "status": "done", "detail": None}],
+        }
+
+    if action.kind == "broadcast":
+        data = body if isinstance(body, dict) else {}
+        commands = [c for c in data.get("commands", []) if isinstance(c, dict)]
+        sent = [str(c.get("pc_name")) for c in commands if c.get("status") not in _FAILED_STATUSES]
+        offline = [str(pc) for pc in data.get("offline_targets", [])]
+        failed = {str(pc): str(reason) for pc, reason in (data.get("failed_targets") or {}).items()}
+        # Got it but said it couldn't show it (the PC's own "failed" acknowledgement).
+        not_shown: dict[str, str] = {}
+        for command in commands:
+            pc = str(command.get("pc_name"))
+            if command.get("status") == _CLIENT_FAILED:
+                not_shown[pc] = str(command.get("failure_reason") or "it couldn't show it")
+            elif command.get("status") in _FAILED_STATUSES:
+                failed[pc] = str(command.get("failure_reason") or command.get("status"))
+        targets = (
+            [{"pc": pc, "status": "done", "detail": None} for pc in sent]
+            + [{"pc": pc, "status": "not_shown", "detail": reason} for pc, reason in not_shown.items()]
+            + [{"pc": pc, "status": "offline", "detail": "went offline"} for pc in offline]
+            + [{"pc": pc, "status": "failed", "detail": reason} for pc, reason in failed.items()]
+        )
+        if sent and not_shown:
+            # Not "Done": some PCs got it but couldn't show it.
+            reply = f"Shown on {len(sent)} of {len(targets)} PCs."
+        elif sent:
+            reply = f"Done. The announcement went out to {len(sent)} PC{'s' if len(sent) != 1 else ''}."
+        elif not_shown:
+            reply = "The announcement didn't show on any PC."
+        else:
+            return {"ok": False, "reply": "The announcement didn't reach any PC.", "targets": targets}
+        for pc, reason in not_shown.items():
+            reply += f" {pc} got it but couldn't show it: {_sentence(reason)}"
+        missed = offline + list(failed)
+        if missed:
+            reply += f" It didn't reach {_join(missed)}."
+        return {"ok": bool(sent), "reply": reply, "targets": targets}
+
+    if action.kind == "add_time":
+        session = body.get("session", {}) if isinstance(body, dict) else {}
+        pc = action.targets[0] if action.targets else "the PC"
+        added = action.details.get("added") or "the time"
+        price = action.details.get("price")
+        reply = f"Done. Added {added} to {pc}."
+        ends = _clock(session.get("scheduled_end_at"))
+        if ends:
+            reply += f" It now ends at {ends}."
+        if price:
+            reply += f" ₱{price} was added to their bill."
+        return {"ok": True, "reply": reply, "targets": [{"pc": pc, "status": "done", "detail": ends}]}
+
+    return {
+        "ok": True,
+        "reply": "Done.",
+        "targets": [{"pc": pc, "status": "done", "detail": None} for pc in action.targets],
+    }
+
+
+TEST_MODE_NOTE = "test mode: not powered off"
+
+
+def _ack_message(body: Any) -> str:
+    """The client's own words for a power command, e.g. 'accepted (test mode: not powered off)'."""
+    if not isinstance(body, dict):
+        return ""
+    for ack in body.get("acknowledgements") or []:
+        if isinstance(ack, dict) and ack.get("status") == "completed" and ack.get("message"):
+            return str(ack["message"])
+    command = body.get("command") or {}
+    return str(command.get("client_response") or "") if isinstance(command, dict) else ""
+
+
+def _describe_shutdown(action: PendingAction, results: list[Any]) -> dict[str, Any]:
+    """One backend call per PC. Honest wording: a shutdown command being
+    *received* is not the PC being off -- and a test-mode client never powers off."""
+    targets: list[dict[str, Any]] = []
+    test_mode: list[str] = []
+    real: list[str] = []
+    skipped: list[str] = []
+    failed: list[tuple[str, str]] = []
+    forbidden = 0
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        pc = str(item.get("pc") or "?")
+        code = int(item.get("status_code") or 0)
+        body = item.get("body")
+        detail = body.get("detail") if isinstance(body, dict) and isinstance(body.get("detail"), str) else None
+        command = body.get("command") if isinstance(body, dict) and isinstance(body.get("command"), dict) else {}
+        if 200 <= code < 300 and command.get("status") not in _FAILED_STATUSES:
+            if "test mode" in _ack_message(body).lower():
+                test_mode.append(pc)
+                targets.append({"pc": pc, "status": "received", "detail": TEST_MODE_NOTE})
+            else:
+                real.append(pc)
+                targets.append({"pc": pc, "status": "received", "detail": "should power off in a few seconds"})
+        elif 200 <= code < 300:
+            reason = str(command.get("failure_reason") or command.get("status"))
+            failed.append((pc, reason))
+            targets.append({"pc": pc, "status": "failed", "detail": reason})
+        elif code == 409:
+            skipped.append(pc)
+            targets.append({"pc": pc, "status": "skipped", "detail": detail or "in use now"})
+        elif code in (401, 403):
+            forbidden += 1
+            targets.append({"pc": pc, "status": "failed", "detail": "needs the Admin account"})
+        else:
+            reason = (detail or f"error {code}") if code else "could not reach the shop system"
+            failed.append((pc, reason))
+            targets.append({"pc": pc, "status": "failed", "detail": reason})
+
+    if forbidden and forbidden == len(targets):
+        return {
+            "ok": False,
+            "reply": "That didn't go through: only the Admin account can shut down PCs. Sign in as Admin and try again.",
+            "targets": targets,
+        }
+
+    parts: list[str] = []
+    if test_mode:
+        parts.append(f"{_join(test_mode)} received the shutdown command ({TEST_MODE_NOTE}).")
+    if real:
+        parts.append(
+            f"{_join(real)} received the shutdown command and should power off in a few seconds."
+        )
+    if skipped:
+        parts.append(f"{_join(skipped)} {'was' if len(skipped) == 1 else 'were'} skipped because "
+                     f"{'it is' if len(skipped) == 1 else 'they are'} in use now.")
+    if failed:
+        parts.append("; ".join(f"{pc} didn't get it: {_sentence(reason)}" for pc, reason in failed))
+    if forbidden:
+        parts.append(f"{forbidden} PC{'s' if forbidden != 1 else ''} needed the Admin account.")
+    ok = bool(test_mode or real)
+    return {"ok": ok, "reply": " ".join(parts) or "Nothing was sent.", "targets": targets}
+
+
+def _clock(value: Any) -> str | None:
+    """'2026-10-15T13:45:00+00:00' -> '9:45 PM' in shop time."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local = parsed.astimezone(SHOP_TZ)
+    hour = local.hour % 12 or 12
+    return f"{hour}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
+
+
+def _sentence(text: str) -> str:
+    text = text.strip().rstrip(".")
+    return f"{text[:1].lower()}{text[1:]}." if text else "unknown error."
+
+
+def _join(items: list[str]) -> str:
+    if len(items) <= 1:
+        return "".join(items)
+    return f"{', '.join(items[:-1])} and {items[-1]}"

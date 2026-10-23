@@ -1,0 +1,6 @@
+# Local secrets and per-machine environment.
+.env
+# Tooling caches (the venv is already covered by the root .gitignore's .venv/).
+.pytest_cache/
+# Agent-local data (shift handover notes SQLite).
+agent/data/

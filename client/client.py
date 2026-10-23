@@ -439,7 +439,7 @@ class SecretGroundsClient:
         self,
         command: dict[str, Any],
         websocket: SimpleWebSocketClient,
-    ) -> dict[str, str | None]:
+    ) -> dict[str, str | None] | None:
         command_id = str(command.get("command_id", ""))
         command_type = command.get("type")
 
@@ -475,7 +475,7 @@ class SecretGroundsClient:
             return self.handle_remote_power_command(command)
 
         if command_type in {"show_message", "show_announcement"}:
-            return self.handle_remote_message_command(command)
+            return self.handle_remote_message_command(command, websocket)
 
         return self.build_acknowledgement(
             command_id=command_id,
@@ -520,21 +520,46 @@ class SecretGroundsClient:
             print(f"Remote {command_type} rejected: {error}")
             return self.build_acknowledgement(command_id, "failed", str(error))
 
-    def handle_remote_message_command(self, command: dict[str, Any]) -> dict[str, str | None]:
+    def handle_remote_message_command(
+        self,
+        command: dict[str, Any],
+        websocket: SimpleWebSocketClient | None = None,
+    ) -> dict[str, str | None] | None:
+        """A bad payload is refused at once. Otherwise the final
+        acknowledgement waits for the pop-up itself: "completed / message
+        displayed" only once it is on screen, "failed" with the reason if it
+        couldn't open or didn't appear in time. That wait happens on the
+        pop-up's own threads -- this returns None straight away (the
+        acknowledgement is sent later) so the command loop keeps going."""
         command_id = str(command.get("command_id", ""))
         command_type = str(command.get("type", ""))
         payload = command.get("payload")
         if not isinstance(payload, dict):
             return self.build_acknowledgement(command_id, "failed", "invalid_payload")
+
+        def send_result(shown: bool, text: str) -> None:
+            acknowledgement = self.build_acknowledgement(command_id, "completed" if shown else "failed", text)
+            try:
+                if websocket is None:
+                    raise ConnectionError("no command connection")
+                websocket.send_json(acknowledgement)
+                print(
+                    "Acknowledgement sent: "
+                    f"command_id={command_id}, status={acknowledgement['status']}, message={text}"
+                )
+            except (ConnectionError, OSError) as error:
+                print(f"Could not send pop-up acknowledgement for {command_id}: {error}")
+
         try:
-            message = self.remote_controls.show_message(
+            self.remote_controls.show_message_async(
                 payload,
                 announcement=command_type == "show_announcement",
+                on_result=send_result,
             )
-            return self.build_acknowledgement(command_id, "completed", message)
         except Exception as error:
             print(f"Remote message rejected: {error}")
             return self.build_acknowledgement(command_id, "failed", str(error))
+        return None
 
     def initialize_local_session(
         self,
@@ -1288,6 +1313,10 @@ class SecretGroundsClient:
                 message=f"Client error: {error}",
             )
 
+        if result is None:
+            # Message pop-ups send their own final acknowledgement once
+            # they're on screen (or failed) -- see handle_remote_message_command.
+            return
         websocket.send_json(result)
         print(
             "Acknowledgement sent: "

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { closeShift, fetchClientSettings, fetchCurrentShift, fetchCurrentUser, fetchOperatorSale, logout, openShift } from "@/lib/api";
+import { isAssistantEnabled } from "@/lib/assistant";
 import { formatDateTime, formatMoney } from "@/lib/time";
 import type { CashierShiftDetail, CurrentUser, UserRole } from "@/lib/types";
 import { ConfirmActionDialog } from "./ConfirmActionDialog";
@@ -314,6 +315,12 @@ export function AuthShell({ children }: { children: ReactNode }) {
             <SalesNavIcon />
             Sales
           </Link>
+          {isAssistantEnabled() ? (
+            <Link className={pathname === "/assistant" ? "appShell__linkActive" : ""} href="/assistant">
+              <AssistantNavIcon />
+              Assistant
+            </Link>
+          ) : null}
           {isAdminOperator ? (
             <div
               className="appShell__adminMenu"
@@ -501,6 +508,16 @@ function SalesNavIcon() {
       <path d="M9 7h6" />
       <path d="M9 11h6" />
       <path d="M9 15h3" />
+    </svg>
+  );
+}
+
+function AssistantNavIcon() {
+  return (
+    <svg aria-hidden="true" className="appShell__navIcon" fill="none" viewBox="0 0 24 24">
+      <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <path d="M12 18v3" />
     </svg>
   );
 }

@@ -1,9 +1,10 @@
+import hmac
 import os
 import time
 from collections import defaultdict
 from typing import Callable
 
-from fastapi import Cookie, Depends, HTTPException, Response
+from fastapi import Cookie, Depends, HTTPException, Request, Response
 
 from server.auth_repository import AuthSessionRepository
 from server.operator_repository import OperatorRepository
@@ -150,10 +151,42 @@ def authenticate_admin_operator(password: str, client_key: str = "admin") -> Use
     return user
 
 
+def authenticate_assistant_token(request: Request | None) -> UserRecord | None:
+    """Opt-in bearer-token auth for the read-only AI assistant (assistant/).
+
+    Completely inert unless SG_ASSISTANT_TOKEN is set: returns None and the
+    caller falls through to the normal 401. When set, a matching
+    `Authorization: Bearer <token>` authenticates as the active staff user
+    named by SG_ASSISTANT_USERNAME, whose normal role checks still apply.
+    Phase 1 is read-only: any non-GET request with the token gets 403."""
+    configured_token = os.getenv("SG_ASSISTANT_TOKEN", "").strip()
+    if not configured_token or request is None:
+        return None
+
+    scheme, _, presented_token = request.headers.get("authorization", "").partition(" ")
+    presented_token = presented_token.strip()
+    if scheme.lower() != "bearer" or not presented_token:
+        return None
+    if not hmac.compare_digest(presented_token.encode("utf-8"), configured_token.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if request.method != "GET":
+        raise HTTPException(status_code=403, detail="The assistant token is read-only")
+
+    username = os.getenv("SG_ASSISTANT_USERNAME", "").strip()
+    user = user_repository.get_by_username(username) if username else None
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
+
+
 def get_current_user(
     sg_session: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+    request: Request = None,  # type: ignore[assignment]  # injected by FastAPI; None for direct calls
 ) -> UserRecord:
     if not sg_session:
+        assistant_user = authenticate_assistant_token(request)
+        if assistant_user is not None:
+            return assistant_user
         raise HTTPException(status_code=401, detail="Authentication required")
 
     user_id = auth_session_repository.get_user_id_for_token(sg_session)

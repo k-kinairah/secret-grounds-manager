@@ -4,7 +4,7 @@ import platform
 import os
 import subprocess
 import time
-from threading import Event, Lock, Thread
+from threading import Event, Lock, Thread, Timer
 from typing import Any, Callable
 
 from client import theme
@@ -27,8 +27,60 @@ _SEVERITY_STYLES: dict[str, dict[str, str]] = {
 }
 
 
+def _test_mode_enabled() -> bool:
+    return os.getenv("SECRET_GROUNDS_TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# A message/announcement is only acknowledged as "message displayed" once its
+# pop-up window is really on screen. The server waits 5 seconds for the final
+# acknowledgement (COMMAND_ACK_TIMEOUT_SECONDS), so give up a bit before that
+# and say plainly that it didn't appear.
+POPUP_CONFIRM_TIMEOUT_SECONDS = 3.0
+POPUP_TIMEOUT_REASON = "the pop-up didn't appear within 3 seconds"
+
+
+def _test_popup_failure_enabled() -> bool:
+    """Test mode only (SECRET_GROUNDS_TEST_POPUP_FAILURE=true): every pop-up
+    fails, so a demo can show what an honest failure looks like."""
+    return _test_mode_enabled() and os.getenv("SECRET_GROUNDS_TEST_POPUP_FAILURE", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _popup_failure_reason(error: BaseException) -> str:
+    """A short, readable reason (Tcl errors can be long multi-line lists)."""
+    first_line = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
+    return f"the pop-up couldn't open: {first_line[:160]}"
+
+
+class _PopupOutcome:
+    """First result wins (shown, failed or timed out); later ones are ignored."""
+
+    def __init__(self, on_result: Callable[[bool, str], None]) -> None:
+        self._on_result = on_result
+        self._lock = Lock()
+        self._done = False
+        self._cleanups: list[Callable[[], None]] = []
+
+    def on_finish(self, cleanup: Callable[[], None]) -> None:
+        self._cleanups.append(cleanup)
+
+    def finish(self, shown: bool, text: str) -> bool:
+        with self._lock:
+            if self._done:
+                return False
+            self._done = True
+        for cleanup in self._cleanups:
+            try:
+                cleanup()
+            except Exception:
+                pass
+        self._on_result(shown, text)
+        return True
+
+
 def default_power_executor(command: list[str]) -> None:
-    if os.getenv("SECRET_GROUNDS_TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if _test_mode_enabled():
         raise RuntimeError("real_power_executor_blocked_in_test_mode")
     if os.getenv("PYTEST_CURRENT_TEST"):
         raise RuntimeError("real_power_executor_blocked_in_pytest")
@@ -77,6 +129,10 @@ class RemoteControlHandler:
 
         print(f"Remote {command_type} command accepted for {self.pc_name}.")
         Thread(target=self._execute_after_ack, args=(command_type, command), daemon=True).start()
+        if self.power_executor is default_power_executor and _test_mode_enabled():
+            # default_power_executor refuses to run in test mode, so say so in
+            # the acknowledgement instead of implying the PC will power off.
+            return "accepted (test mode: not powered off)"
         if command_type in {"shutdown", "restart"}:
             return "accepted; expected disconnect may follow"
         return "accepted"
@@ -90,6 +146,34 @@ class RemoteControlHandler:
             print(f"Remote {command_type} execution failed: {error}")
 
     def show_message(self, payload: dict[str, Any], announcement: bool = False) -> str:
+        """Show the pop-up and wait (briefly) until it is really on screen.
+        Returns "message displayed", or raises RuntimeError with the reason.
+        The client's command loop uses show_message_async() instead, so it
+        never waits."""
+        done = Event()
+        outcome: dict[str, Any] = {}
+
+        def on_result(shown: bool, text: str) -> None:
+            outcome.update(shown=shown, text=text)
+            done.set()
+
+        self.show_message_async(payload, announcement, on_result)
+        done.wait(POPUP_CONFIRM_TIMEOUT_SECONDS + 1)
+        if not outcome.get("shown"):
+            raise RuntimeError(outcome.get("text") or POPUP_TIMEOUT_REASON)
+        return str(outcome["text"])
+
+    def show_message_async(
+        self,
+        payload: dict[str, Any],
+        announcement: bool,
+        on_result: Callable[[bool, str], None],
+    ) -> None:
+        """Validate now (raises on a bad payload), then show the pop-up and
+        call on_result(True, "message displayed") once it is on screen, or
+        on_result(False, reason) if it failed or didn't appear within
+        POPUP_CONFIRM_TIMEOUT_SECONDS -- exactly once, from another thread,
+        without blocking the caller."""
         # title is intentionally ignored here -- the server already
         # overrides it to the canonical "SECRET GROUNDS" brand regardless
         # of what the dashboard sent (see MessageCommandRequest), and the
@@ -106,9 +190,26 @@ class RemoteControlHandler:
         ):
             raise RuntimeError("invalid_duration")
 
-        self._present_message_window(message, severity, duration_seconds, require_acknowledgement, announcement)
-        print(f"Displayed remote {'announcement' if announcement else 'message'} from SECRET GROUNDS.")
-        return "message displayed"
+        kind = "announcement" if announcement else "message"
+        outcome = _PopupOutcome(on_result)
+
+        def on_shown(error: str | None) -> None:
+            if error is None:
+                if outcome.finish(True, "message displayed"):
+                    print(f"Displayed remote {kind} from SECRET GROUNDS.")
+            elif outcome.finish(False, error):
+                print(f"Remote {kind} was not shown: {error}")
+
+        timer = Timer(POPUP_CONFIRM_TIMEOUT_SECONDS, lambda: on_shown(POPUP_TIMEOUT_REASON))
+        timer.daemon = True
+        timer.start()
+        outcome.on_finish(timer.cancel)
+        try:
+            self._present_message_window(
+                message, severity, duration_seconds, require_acknowledgement, announcement, on_shown=on_shown
+            )
+        except Exception as error:
+            on_shown(_popup_failure_reason(error))
 
     def _get_active_gui_root(self):
         """The Tk root of whichever of lock_screen/customer_overlay is
@@ -167,7 +268,10 @@ class RemoteControlHandler:
         duration_seconds: int | None,
         require_acknowledgement: bool,
         announcement: bool,
+        on_shown: Callable[[str | None], None] | None = None,
     ) -> None:
+        # on_shown(None) once the window is on screen, on_shown(reason) if it
+        # could not be shown (see _show_message_window_reporting).
         # The popup is built as a Toplevel of some already-running Tk
         # interpreter, scheduled via that root's own after(0, ...) -- the
         # same cross-thread-safe pattern customer_overlay already uses for
@@ -193,8 +297,9 @@ class RemoteControlHandler:
             try:
                 parent_root.after(
                     0,
-                    lambda: self._show_message_window(
-                        message, severity, duration_seconds, require_acknowledgement, announcement, parent=parent_root
+                    lambda: self._show_message_window_reporting(
+                        on_shown, message, severity, duration_seconds, require_acknowledgement, announcement,
+                        parent=parent_root,
                     ),
                 )
                 return
@@ -204,10 +309,38 @@ class RemoteControlHandler:
         # Last-resort fallback if even the dedicated popup root couldn't be
         # started -- better to show it standalone than drop it.
         Thread(
-            target=self._show_message_window,
-            args=(message, severity, duration_seconds, require_acknowledgement, announcement),
+            target=self._show_message_window_reporting,
+            args=(on_shown, message, severity, duration_seconds, require_acknowledgement, announcement),
             daemon=True,
         ).start()
+
+    def _show_message_window_reporting(self, on_shown, *args, **kwargs) -> None:
+        """Run _show_message_window and make sure on_shown hears how it went:
+        the window reports itself once it is on screen, and every failure
+        path (including an exception) reports the reason."""
+        reported: list[str | None] = []
+
+        def report(error: str | None) -> None:
+            if reported:
+                return
+            reported.append(error)
+            if on_shown is not None:
+                on_shown(error)
+
+        if _test_popup_failure_enabled():
+            # Test mode only: lets a demo show what an honest failure looks like.
+            report("the pop-up couldn't open (test mode: forced failure)")
+            print("Remote message pop-up skipped: test-mode forced failure.")
+            return
+        try:
+            self._show_message_window(*args, on_shown=report, **kwargs)
+        except Exception as error:
+            log_tk_startup_error("Remote message pop-up failed", error)
+            report(_popup_failure_reason(error))
+            return
+        # Every real path reports before returning (or before its own
+        # mainloop); this only covers a window builder that returned quietly.
+        report(None)
 
     def _build_brand_mark(self, tk, container, bg: str = theme.PANEL):
         """A small vector diamond mark, drawn on a Canvas -- deliberately
@@ -339,11 +472,14 @@ class RemoteControlHandler:
         require_acknowledgement: bool,
         announcement: bool,
         parent=None,
+        on_shown: Callable[[str | None], None] | None = None,
     ) -> None:
         # `parent` is an existing, already-running Tk root (see
         # _present_message_window) -- build this window as a Toplevel of it
         # instead of a whole new interpreter. The standalone create_tk_root()
         # path only runs in the rare fallback case (see call site).
+        # on_shown(None) is called once the window is on screen, on_shown(reason)
+        # if it never will be -- so the acknowledgement can say which.
         if parent is not None:
             try:
                 import tkinter as tk
@@ -352,6 +488,8 @@ class RemoteControlHandler:
             except Exception as error:
                 log_tk_startup_error("Remote message Toplevel creation failed", error)
                 print(f"Message fallback: SECRET GROUNDS - {message}")
+                if on_shown is not None:
+                    on_shown(_popup_failure_reason(error))
                 return
         else:
             try:
@@ -359,6 +497,8 @@ class RemoteControlHandler:
             except Exception as error:
                 log_tk_startup_error("Remote message GUI unavailable", error)
                 print(f"Message fallback: SECRET GROUNDS - {message}")
+                if on_shown is not None:
+                    on_shown(_popup_failure_reason(error))
                 return
 
         style = _SEVERITY_STYLES[severity]
@@ -548,6 +688,8 @@ class RemoteControlHandler:
         # has no per-pixel/backdrop-blur alpha to fake it with instead.
         theme.fade_in(root, target_alpha=0.96)
         theme.slide_in(root, x, y_start, y_end, width, height)
+        if on_shown is not None:
+            on_shown(None)  # the window exists and is on its way in
         # Only the standalone fallback path owns its own interpreter and
         # needs to pump it; a Toplevel is already serviced by its parent's
         # mainloop, which is running on this exact thread right now (we got
